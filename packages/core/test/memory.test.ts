@@ -471,6 +471,84 @@ describe("etapa 6.1 — tools y definiciones", () => {
   });
 });
 
+describe("etapa 6.3 — coordinador de recuperación", () => {
+  test("recoveryStatus en vacío es cero; reconcileRecovery converge sin nada pendiente", async () => {
+    const t = await makeTestCore();
+    try {
+      expect(await t.core.recoveryStatus()).toEqual({ pendingOps: 0, startedPromotions: 0, livePreviews: 0, staleMemories: 0, pendingContradictions: 0 });
+      const rec = await t.core.reconcileRecovery();
+      expect(rec.previews).toEqual({ orphaned: 0 });
+      expect(rec.memory).toEqual({ checked: 0, markedStale: [] });
+      expect(rec.orphanedPlans).toBe(0);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("previews huérfanos se marcan al arrancar (settle incluye previews.reconcile)", async () => {
+    const t = await makeTestCore();
+    try {
+      const s = await setup(t, "R1");
+      const now = Date.now();
+      await t.core.db.exec("INSERT INTO repositories (id, project_id, root_path, worktrees_root, created_at, updated_at) VALUES ('repo_r1', ?, ?, ?, ?, ?)", [s.projectId, s.dir, `${s.dir}/wt`, now, now]);
+      await t.core.db.exec(
+        "INSERT INTO integrations (id, project_id, repository_id, run_id, target_branch, target_base_commit, integration_branch, canonical_path, attempt, supersedes, status, created_at, updated_at) VALUES ('int_r1', ?, 'repo_r1', ?, 'main', ?, 'harness/integration/seed', ?, 0, NULL, 'building', ?, ?)",
+        [s.projectId, s.runId, "0".repeat(40), `${s.dir}/int`, now, now],
+      );
+      await t.core.db.exec(
+        "INSERT INTO previews (id, integration_id, sha, canonical_path, argv, port, url, status, log_path, created_at, updated_at) VALUES ('prv_r1', 'int_r1', ?, ?, '[]', 54111, 'http://127.0.0.1:54111', 'running', ?, ?, ?)",
+        ["1".repeat(40), `${s.dir}/pv`, `${s.dir}/pv.log`, now, now],
+      );
+      expect((await t.core.previews.getPreview("prv_r1")).status).toBe("running");
+      await t.core.close();
+      const { OctusCore } = await import("../src/sessions/octus-core.js");
+      const { MemorySecretStore } = await import("../src/secrets/secret-store.js");
+      const core2 = await OctusCore.create({ dataDir: path.join(t.dir, "data"), primarySecrets: new MemorySecretStore(), providers: [t.fakeMeta, t.fakeGo] });
+      try {
+        // El run con integración abierta sobrevive; el preview sin proceso se marca huérfano.
+        expect((await core2.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [s.runId]))!.status).toBe("executing");
+        expect((await core2.previews.getPreview("prv_r1")).status).toBe("orphaned");
+      } finally {
+        await core2.close().catch(() => undefined);
+      }
+    } finally {
+      await t.cleanup().catch(() => undefined);
+    }
+  });
+
+  test("memory sweep al arrancar marca stale sin tocar contenido", async () => {
+    const t = await makeTestCore();
+    try {
+      const s = await setup(t, "R2");
+      const file = path.join(s.dir, "notas.md");
+      writeFileSync(file, "v1\n");
+      const { createHash } = await import("node:crypto");
+      const hash = createHash("sha256").update("v1\n").digest("hex");
+      const entry = await t.core.memoryWriter.propose(
+        { scope: "session", scopeId: s.sessionId, category: "fact", topic: "notas", content: "resumen v1", source: "doc", originRef: { path: "notas.md", contentHash: hash } },
+        agentCtx(s, s.coordId),
+      );
+      await t.core.memoryWriter.validate(entry.id, s.coordId);
+      writeFileSync(file, "v2 cambió\n");
+      expect((await t.core.recoveryStatus()).staleMemories).toBe(0);
+      await t.core.close();
+      const { OctusCore } = await import("../src/sessions/octus-core.js");
+      const { MemorySecretStore } = await import("../src/secrets/secret-store.js");
+      const core2 = await OctusCore.create({ dataDir: path.join(t.dir, "data"), primarySecrets: new MemorySecretStore(), providers: [t.fakeMeta, t.fakeGo] });
+      try {
+        const after = await core2.memory.get(entry.id);
+        expect(after.status).toBe("stale");
+        expect(after.content).toBe("resumen v1");
+        expect((await core2.recoveryStatus()).staleMemories).toBe(1);
+      } finally {
+        await core2.close().catch(() => undefined);
+      }
+    } finally {
+      await t.cleanup().catch(() => undefined);
+    }
+  });
+});
+
 describe("etapa 6.2 — selección de memoria (FINAL-1/FINAL-3)", () => {
   let n = 0;
   const item = (over: Partial<import("@octus/shared").MemoryItem>): import("@octus/shared").MemoryItem => {

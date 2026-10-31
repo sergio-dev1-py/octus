@@ -1058,6 +1058,57 @@ export class OctusCore {
     }));
   }
 
+  // ------------------------------------------------- recuperación (Etapa 6)
+  /**
+   * Estado pendiente de recuperación (solo lectura): journals abiertos,
+   * promociones a medio camino, previews vivos, memorias stale o en
+   * contradicción. No ejecuta nada.
+   */
+  async recoveryStatus(): Promise<{ pendingOps: number; startedPromotions: number; livePreviews: number; staleMemories: number; pendingContradictions: number }> {
+    const count = async (sql: string, params: unknown[] = []): Promise<number> => {
+      const row = await this.db.queryOne<{ n: number }>(sql, params as import("../persistence/protocol.js").SqlParam[]).catch(() => null);
+      return row ? Number(row.n ?? 0) : 0;
+    };
+    const [attempts, iops, pops, wops] = await Promise.all([
+      count("SELECT COUNT(*) AS n FROM task_attempts WHERE status IN ('pending','running')"),
+      count("SELECT COUNT(*) AS n FROM integration_ops WHERE status = 'started'"),
+      count("SELECT COUNT(*) AS n FROM promotion_ops WHERE status = 'started'"),
+      count("SELECT COUNT(*) AS n FROM worktree_ops WHERE status IN ('provisioning','cleanup_pending')"),
+    ]);
+    const [startedPromotions, livePreviews, staleMemories, pendingContradictions] = await Promise.all([
+      count("SELECT COUNT(*) AS n FROM promotions WHERE status = 'started'"),
+      count("SELECT COUNT(*) AS n FROM previews WHERE status IN ('running','reachable')"),
+      count("SELECT COUNT(*) AS n FROM memory_entries WHERE status = 'stale'"),
+      count("SELECT COUNT(*) AS n FROM memory_entries WHERE review_note LIKE '%contradiction pending%'"),
+    ]);
+    return { pendingOps: attempts + iops + pops + wops, startedPromotions, livePreviews, staleMemories, pendingContradictions };
+  }
+
+  /**
+   * Coordinador delgado de reconciliación (Etapa 6): ordena los reconciles
+   * existentes (tasks → worktrees → integrations → previews → promotions →
+   * planes → memoria). Nunca ejecuta el settle cancelador ni reanuda
+   * generaciones; las reglas H se cumplen por construcción.
+   */
+  async reconcileRecovery(): Promise<{
+    tasks: { interrupted: number; released: number };
+    worktrees: { suspended: number; orphaned: number; resumed: number };
+    integrations: { resolved: number; interrupted: number; stale: number };
+    previews: { orphaned: number };
+    promotions: { resolved: number; diverged: number };
+    orphanedPlans: number;
+    memory: { checked: number; markedStale: string[] };
+  }> {
+    const tasks = await this.tasks.reconcile().catch(() => ({ interrupted: 0, released: 0 }));
+    const worktrees = await this.worktrees.reconcile().catch(() => ({ suspended: 0, orphaned: 0, resumed: 0 }));
+    const integrations = await this.integrations.reconcile().catch(() => ({ resolved: 0, interrupted: 0, stale: 0 }));
+    const previews = await this.previews.reconcile().catch(() => ({ orphaned: 0 }));
+    const promotions = await this.promotions.reconcile().catch(() => ({ resolved: 0, diverged: 0 }));
+    const orphanedPlans = await this.plans.orphanSweep().catch(() => 0);
+    const memory = await this.memory.startupSweep(200).catch(() => ({ checked: 0, markedStale: [] as string[] }));
+    return { tasks, worktrees, integrations, previews, promotions, orphanedPlans, memory };
+  }
+
   private async cancelSessionTasks(sessionId: string): Promise<void> {
     const tasks = await this.tasks.listTasks({ sessionId });
     for (const task of tasks) {
@@ -1346,8 +1397,10 @@ export class OctusCore {
     await this.tasks.reconcile().catch(() => undefined);
     await this.worktrees.reconcile().catch(() => undefined);
     await this.integrations.reconcile().catch(() => undefined);
+    await this.previews.reconcile().catch(() => undefined);
     await this.promotions.reconcile().catch(() => undefined);
     await this.plans.orphanSweep().catch(() => 0);
+    await this.memory.startupSweep(200).catch(() => ({ checked: 0, markedStale: [] as string[] }));
   }
 }
 

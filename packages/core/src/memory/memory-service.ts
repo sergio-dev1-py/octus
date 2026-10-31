@@ -255,6 +255,26 @@ export class MemoryService {
     return { applied: true, changed: false, reason: "origin verified", entry };
   }
 
+  /** Barrido de arranque: revalida memorias con origen; solo añade notas/marca stale. */
+  async startupSweep(limit = 200): Promise<{ checked: number; markedStale: string[] }> {
+    const rows = await this.db.query<{ id: string }>(
+      "SELECT id FROM memory_entries WHERE status IN ('verified','approved') AND origin_ref <> '{}' ORDER BY updated_at ASC LIMIT ?",
+      [Math.min(Math.max(limit, 1), 1000)],
+    ).catch(() => [] as Array<{ id: string }>);
+    let checked = 0;
+    const markedStale: string[] = [];
+    for (const r of rows) {
+      try {
+        const res = await this.revalidate(String(r.id));
+        checked++;
+        if (res.changed) markedStale.push(String(r.id));
+      } catch {
+        // best effort por entrada: un origen ilegible no tumba el arranque
+      }
+    }
+    return { checked, markedStale };
+  }
+
   // ---------------------------------------------------------------- internas
   private validateFields(input: ProposeInput): void {
     if (!SCOPES.includes(input.scope)) throw new OctusError("invalid_tool_args", `Invalid memory scope: ${input.scope}`);
