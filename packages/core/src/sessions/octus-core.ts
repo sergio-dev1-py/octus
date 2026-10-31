@@ -48,6 +48,7 @@ import { TaskPlanner } from "../tasks/task-planner.js";
 import { TaskScheduler } from "../tasks/task-scheduler.js";
 import { RepositoryManager } from "../repositories/repository-manager.js";
 import { WorktreeManager } from "../worktrees/worktree-manager.js";
+import { IntegrationManager } from "../integration/integration-manager.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
 import { MetaAdapter } from "../providers/meta-adapter.js";
@@ -108,6 +109,7 @@ export class OctusCore {
   readonly scheduler: TaskScheduler;
   readonly repositories: RepositoryManager;
   readonly worktrees: WorktreeManager;
+  readonly integrations: IntegrationManager;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -184,6 +186,7 @@ export class OctusCore {
     this.directories = new DirectoryRegistry(db);
     this.repositories = new RepositoryManager(db);
     this.worktrees = new WorktreeManager(db, this.events, this.bus, this.repositories, options.dataDir);
+    this.integrations = new IntegrationManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir);
     this.tests = new TestRunner(db);
     this.runtime = new AgentRuntime(db, this.events, this.bus, this.router, this.gateway, this.context, {
       ...(options.runtimeOptions ?? {}),
