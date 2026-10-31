@@ -20,9 +20,9 @@ describe("persistence worker", () => {
       for (const expected of ["projects", "sessions", "runs", "agent_instances", "messages", "tool_invocations", "events", "artifacts", "provider_configs", "permission_rules", "usage_records", "budgets", "kv", "schema_migrations"]) {
         expect(names).toContain(expected);
       }
-      // Sin tablas de etapas futuras (Etapa 5+: integrations/memory). En Etapa 4,
-      // repositories/worktrees/managed_branches/worktree_ops ya existen legítimamente.
-      for (const future of ["integrations", "approvals", "memory_entries"]) {
+      // Sin tablas de etapas futuras (Etapa 6: memory). En Etapa 5,
+      // integrations/approvals/promotions y auxiliares ya existen legítimamente.
+      for (const future of ["memory_entries"]) {
         expect(names).not.toContain(future);
       }
       // Tablas de la Etapa 3 presentes tras migrar a latest.
@@ -32,6 +32,10 @@ describe("persistence worker", () => {
       // Tablas de la Etapa 4 presentes tras migrar a latest.
       for (const stage4 of ["repositories", "worktrees", "managed_branches", "worktree_ops"]) {
         expect(names).toContain(stage4);
+      }
+      // Tablas de la Etapa 5 presentes tras migrar a latest.
+      for (const stage5 of ["integrations", "integration_commits", "integration_ops", "work_bases", "integration_conflicts", "conflict_resolutions", "validations", "integration_reviews", "previews", "integration_approvals", "promotions", "promotion_ops"]) {
+        expect(names).toContain(stage5);
       }
       const journal = await db.queryOne<{ journal_mode: string }>("PRAGMA journal_mode");
       expect(journal?.journal_mode.toLowerCase()).toBe("wal");

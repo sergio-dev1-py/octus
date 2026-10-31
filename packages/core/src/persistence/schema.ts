@@ -523,9 +523,229 @@ BEGIN
 END;
 `;
 
+const MIGRATION_0005 = `
+CREATE TABLE integrations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  target_branch TEXT NOT NULL,
+  target_base_commit TEXT NOT NULL,
+  integration_branch TEXT NOT NULL,
+  canonical_path TEXT NOT NULL UNIQUE,
+  head TEXT,
+  attempt INTEGER NOT NULL DEFAULT 0,
+  supersedes TEXT REFERENCES integrations(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'building',
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (repository_id, integration_branch)
+);
+CREATE INDEX idx_integrations_run ON integrations(run_id, attempt);
+CREATE INDEX idx_integrations_project ON integrations(project_id, status);
+
+CREATE TABLE integration_commits (
+  id TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  attempt INTEGER NOT NULL,
+  instance_id TEXT REFERENCES agent_instances(id) ON DELETE SET NULL,
+  worktree_id TEXT REFERENCES worktrees(id) ON DELETE SET NULL,
+  original_sha TEXT NOT NULL,
+  integrated_sha TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'original',
+  created_at INTEGER NOT NULL,
+  UNIQUE (integration_id, task_id, attempt)
+);
+CREATE INDEX idx_icommit_integration ON integration_commits(integration_id);
+
+CREATE TABLE integration_ops (
+  id TEXT PRIMARY KEY,
+  integration_id TEXT REFERENCES integrations(id) ON DELETE CASCADE,
+  op TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'started',
+  step TEXT,
+  detail TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_iops_integration ON integration_ops(integration_id, created_at);
+
+CREATE TABLE work_bases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+  predecessor_shas TEXT NOT NULL DEFAULT '[]',
+  tip_sha TEXT NOT NULL DEFAULT '',
+  branch_name TEXT NOT NULL,
+  canonical_path TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'building',
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (repository_id, branch_name)
+);
+CREATE INDEX idx_workbases_task ON work_bases(task_id);
+
+CREATE TABLE integration_conflicts (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  scope_ref TEXT NOT NULL,
+  files TEXT NOT NULL DEFAULT '[]',
+  ours_sha TEXT NOT NULL,
+  theirs_sha TEXT NOT NULL,
+  base_sha TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  resolution_sha TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_conflicts_scope ON integration_conflicts(scope, scope_ref, status);
+
+CREATE TABLE conflict_resolutions (
+  id TEXT PRIMARY KEY,
+  conflict_id TEXT NOT NULL REFERENCES integration_conflicts(id) ON DELETE CASCADE,
+  instance_id TEXT REFERENCES agent_instances(id) ON DELETE SET NULL,
+  resolution_sha TEXT NOT NULL,
+  reused INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_resolutions_conflict ON conflict_resolutions(conflict_id);
+
+CREATE TABLE validations (
+  id TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+  sha TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  entry_id TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  detail TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_validations_integration ON validations(integration_id, sha);
+
+CREATE TABLE integration_reviews (
+  id TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+  sha TEXT NOT NULL,
+  instance_id TEXT REFERENCES agent_instances(id) ON DELETE SET NULL,
+  verdict TEXT NOT NULL,
+  summary TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_ireviews_integration ON integration_reviews(integration_id, sha);
+
+CREATE TABLE previews (
+  id TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+  sha TEXT NOT NULL,
+  canonical_path TEXT NOT NULL UNIQUE,
+  argv TEXT NOT NULL DEFAULT '[]',
+  port INTEGER NOT NULL,
+  url TEXT NOT NULL,
+  pid INTEGER,
+  status TEXT NOT NULL DEFAULT 'starting',
+  log_path TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_previews_integration ON previews(integration_id);
+
+CREATE TABLE integration_approvals (
+  id TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+  candidate_sha TEXT NOT NULL,
+  preview_id TEXT REFERENCES previews(id) ON DELETE SET NULL,
+  waiver_reason TEXT,
+  target_branch TEXT NOT NULL,
+  target_sha_observed TEXT NOT NULL,
+  validations_hash TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT 'user',
+  granted_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE (integration_id, candidate_sha)
+);
+CREATE INDEX idx_approvals_integration ON integration_approvals(integration_id);
+
+CREATE TABLE promotions (
+  id TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+  approval_id TEXT NOT NULL REFERENCES integration_approvals(id) ON DELETE CASCADE,
+  target_branch TEXT NOT NULL,
+  expected_old_sha TEXT NOT NULL,
+  new_sha TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'started',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_promotions_integration ON promotions(integration_id);
+
+CREATE TABLE promotion_ops (
+  id TEXT PRIMARY KEY,
+  promotion_id TEXT NOT NULL REFERENCES promotions(id) ON DELETE CASCADE,
+  op TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'started',
+  step TEXT,
+  detail TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_pops_promotion ON promotion_ops(promotion_id, created_at);
+
+-- Anclaje de integración: INSERT y UPDATE por separado (estilo Etapas 3–4).
+CREATE TRIGGER trg_integrations_anchor_ins BEFORE INSERT ON integrations
+BEGIN
+  SELECT CASE
+    WHEN NEW.project_id IS NULL OR NEW.project_id = '' THEN RAISE(ABORT, 'integrations.project_id is required')
+    WHEN NEW.repository_id IS NULL OR NEW.repository_id = '' THEN RAISE(ABORT, 'integrations.repository_id is required')
+    WHEN NEW.run_id IS NULL OR NEW.run_id = '' THEN RAISE(ABORT, 'integrations.run_id is required')
+    WHEN NEW.target_branch IS NULL OR NEW.target_branch = '' THEN RAISE(ABORT, 'integrations.target_branch is required')
+    WHEN NEW.target_base_commit IS NULL OR NEW.target_base_commit = '' THEN RAISE(ABORT, 'integrations.target_base_commit is required')
+    WHEN NEW.integration_branch IS NULL OR NEW.integration_branch = '' THEN RAISE(ABORT, 'integrations.integration_branch is required')
+    WHEN NEW.canonical_path IS NULL OR NEW.canonical_path = '' THEN RAISE(ABORT, 'integrations.canonical_path is required')
+  END;
+END;
+CREATE TRIGGER trg_integrations_anchor_upd BEFORE UPDATE OF project_id, repository_id, run_id, target_branch, target_base_commit, integration_branch, canonical_path ON integrations
+BEGIN
+  SELECT CASE
+    WHEN NEW.project_id IS NOT OLD.project_id THEN RAISE(ABORT, 'integrations.project_id is immutable')
+    WHEN NEW.repository_id IS NOT OLD.repository_id THEN RAISE(ABORT, 'integrations.repository_id is immutable')
+    WHEN NEW.run_id IS NOT OLD.run_id THEN RAISE(ABORT, 'integrations.run_id is immutable')
+    WHEN NEW.target_branch IS NOT OLD.target_branch THEN RAISE(ABORT, 'integrations.target_branch is immutable')
+    WHEN NEW.target_base_commit IS NOT OLD.target_base_commit THEN RAISE(ABORT, 'integrations.target_base_commit is immutable')
+    WHEN NEW.integration_branch IS NOT OLD.integration_branch THEN RAISE(ABORT, 'integrations.integration_branch is immutable')
+    WHEN NEW.canonical_path IS NOT OLD.canonical_path THEN RAISE(ABORT, 'integrations.canonical_path is immutable')
+  END;
+END;
+
+-- Aprobaciones: filas inmutables (re-decidir = rebuild con fila nueva).
+CREATE TRIGGER trg_approvals_immutable_upd BEFORE UPDATE ON integration_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'integration_approvals are immutable; rebuild for a new decision');
+END;
+
+-- Promociones: intento inmutable (reintentar = fila nueva).
+CREATE TRIGGER trg_promotions_immutable_upd BEFORE UPDATE OF integration_id, approval_id, target_branch, expected_old_sha, new_sha ON promotions
+BEGIN
+  SELECT RAISE(ABORT, 'promotions intent is immutable');
+END;
+
+-- Conflictos: scope inmutable.
+CREATE TRIGGER trg_conflicts_scope_upd BEFORE UPDATE OF scope, scope_ref ON integration_conflicts
+BEGIN
+  SELECT RAISE(ABORT, 'integration_conflicts scope is immutable');
+END;
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "core-etapa1", sql: MIGRATION_0001 },
   { version: 2, name: "agents-plans-etapa2", sql: MIGRATION_0002 },
   { version: 3, name: "tasks-dag-etapa3", sql: MIGRATION_0003 },
   { version: 4, name: "repositories-worktrees-etapa4", sql: MIGRATION_0004 },
+  { version: 5, name: "integration-promotion-etapa5", sql: MIGRATION_0005 },
 ];
