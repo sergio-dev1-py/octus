@@ -77,6 +77,11 @@ const CHANNELS: IpcChannel[] = [
   "tasks.retry",
   "tasks.review",
   "tasks.scheduler",
+  "worktrees.list",
+  "worktrees.get",
+  "worktrees.cleanup",
+  "repos.inspect",
+  "repos.setWorktreesRoot",
 ];
 
 let mainWindow: BrowserWindow | undefined;
@@ -427,6 +432,41 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     "tasks.scheduler": async (payload) => {
       if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
       return need().schedulerStatus(payload.sessionId);
+    },
+    "worktrees.list": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      return { worktrees: await need().listProjectWorktrees(payload.projectId) };
+    },
+    "worktrees.get": async (payload) => {
+      if (!isNonEmptyString(payload.worktreeId)) throw new Error("invalid payload");
+      try {
+        const { worktree, operations } = await need().getWorktree(payload.worktreeId);
+        return { ok: true, worktree, operations };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "worktrees.cleanup": async (payload) => {
+      if (!isNonEmptyString(payload.worktreeId)) throw new Error("invalid payload");
+      try {
+        await need().cleanupWorktree(payload.worktreeId, { deleteBranch: payload.deleteBranch });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "repos.inspect": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      return { summary: await need().inspectRepository(payload.projectId) };
+    },
+    "repos.setWorktreesRoot": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || typeof payload.path !== "string") throw new Error("invalid payload");
+      try {
+        await need().setWorktreesRoot(payload.projectId, payload.path);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
     },
   };
 }

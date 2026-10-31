@@ -55,6 +55,7 @@ const gitDiffSchema = z.object({
   paths: z.array(z.string()).optional().describe("Paths inside the scope to diff"),
   staged: z.boolean().optional().describe("Diff staged changes instead of worktree"),
   stat: z.boolean().optional().describe("Only show stat summary"),
+  base: z.string().min(4).max(40).optional().describe("Base commit SHA to diff against (HEAD when omitted)"),
 });
 
 export const gitDiffTool: ToolDefinition = {
@@ -66,11 +67,15 @@ export const gitDiffTool: ToolDefinition = {
   },
   schema: gitDiffSchema,
   async run(args, ctx) {
-    const parsed = args as { paths?: string[]; staged?: boolean; stat?: boolean };
+    const parsed = args as { paths?: string[]; staged?: boolean; stat?: boolean; base?: string };
+    if (parsed.base !== undefined && !/^[0-9a-fA-F]{4,40}$/.test(parsed.base)) {
+      throw new OctusError("invalid_tool_args", "base must be a commit SHA (4-40 hex chars)");
+    }
     const scoped = (parsed.paths ?? []).map((p) => resolveInScope(ctx.directory, p, { protectedRoots: ctx.protectedRoots }));
     const argv = ["diff", "--no-color", "--no-ext-diff"];
     if (parsed.stat) argv.push("--stat");
     if (parsed.staged) argv.push("--cached");
+    if (parsed.base) argv.push(`${parsed.base}...HEAD`);
     if (scoped.length > 0) argv.push("--", ...scoped);
     const { stdout } = await runGit(ctx.directory, argv, ctx.signal);
     const text = stdout.slice(0, MAX_DIFF_CHARS);

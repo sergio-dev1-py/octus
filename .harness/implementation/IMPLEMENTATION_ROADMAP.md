@@ -74,6 +74,7 @@
 - **Fuera:** integración entre worktrees (Etapa 5).
 - **Pruebas:** repos temporales (creación desde base, ramas, scopes, repos sucios, worktrees preexistentes ajenos intactos), dos implementers en paralelo sin interferencia.
 - **Puerta de salida:** dos tasks escritoras paralelas producen commits aislados y trazables (base→producido) sin tocar el workspace original.
+- **Estado (2026-10-31):** implementado y verificado + live ejecutado: typecheck verde (shared+core+desktop node/web), 162 tests core + shared en verde (incl. suite nueva `worktrees.test.ts` 21/21: RepositoryManager solo-lectura, ensure idempotente, colisión `-r2`, legacy no-git, roots validadas, 2 implementers en paralelo en worktrees distintos, cadena writer→writer por `produced_commit`, multi-writer→`deps-unavailable`, retry que reutiliza, reviewer en worktree del target, UNC/`.git`/scopes denegados, cleanup con guardas, reconcile y restart sin auto-run, `git_diff base`, triggers inmutables), build + smoke + arranque GUI (`--octus-autoquit`, quit 0) en verde, regresión Etapas 1–3 intacta. Live Etapa 4 (`--octus-acceptance-3 --user-data-dir=@octus/desktop`, claves del SO): **matriz A PASS 35/35** (worktree auto-aprovisionado `harness/run-…/task-…`, `produced_commit` registrado, reviewer dentro del worktree del target, 0 directorios aislados). Matriz B no re-ejecutada (limitación del modelo documentada en Etapa 3). Informe: `.harness/implementation/STAGE4_ACCEPTANCE_REPORT.md`. **Etapa 4 terminada.**
 
 ## Etapa 5 — Integración, validación, preview y aprobación
 

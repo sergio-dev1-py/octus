@@ -438,8 +438,94 @@ BEGIN
 END;
 `;
 
+const MIGRATION_0004 = `
+ALTER TABLE agent_instances ADD COLUMN worktree_id TEXT REFERENCES worktrees(id) ON DELETE SET NULL;
+
+CREATE TABLE repositories (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+  root_path TEXT NOT NULL,
+  worktrees_root TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_repositories_project ON repositories(project_id);
+
+CREATE TABLE worktrees (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  run_id TEXT,
+  task_id TEXT UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+  branch_name TEXT NOT NULL,
+  base_commit TEXT NOT NULL,
+  base_source TEXT NOT NULL DEFAULT 'head',
+  produced_commit TEXT,
+  canonical_path TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'provisioning',
+  attempt INTEGER NOT NULL DEFAULT 0,
+  instance_id TEXT REFERENCES agent_instances(id) ON DELETE SET NULL,
+  dirty_excluded INTEGER NOT NULL DEFAULT 0,
+  dirty_summary TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (repository_id, branch_name)
+);
+CREATE INDEX idx_worktrees_project ON worktrees(project_id, status);
+CREATE INDEX idx_worktrees_task ON worktrees(task_id);
+
+CREATE TABLE managed_branches (
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  branch_name TEXT NOT NULL,
+  worktree_id TEXT REFERENCES worktrees(id) ON DELETE SET NULL,
+  base_commit TEXT NOT NULL,
+  produced_commit TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (repository_id, branch_name)
+);
+CREATE INDEX idx_branches_worktree ON managed_branches(worktree_id);
+
+CREATE TABLE worktree_ops (
+  id TEXT PRIMARY KEY,
+  worktree_id TEXT REFERENCES worktrees(id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+  op TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'started',
+  step TEXT,
+  detail TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_wops_worktree ON worktree_ops(worktree_id, created_at);
+CREATE INDEX idx_wops_task ON worktree_ops(task_id, created_at);
+
+-- Inmutabilidad de anclaje: INSERT y UPDATE por separado (estilo Etapa 3).
+CREATE TRIGGER trg_worktrees_anchor_ins BEFORE INSERT ON worktrees
+BEGIN
+  SELECT CASE
+    WHEN NEW.task_id IS NULL AND NEW.status <> 'orphaned' THEN RAISE(ABORT, 'worktrees.task_id is required (NULL only for reconciled orphans)')
+    WHEN NEW.canonical_path IS NULL OR NEW.canonical_path = '' THEN RAISE(ABORT, 'worktrees.canonical_path is required')
+    WHEN NEW.branch_name IS NULL OR NEW.branch_name = '' THEN RAISE(ABORT, 'worktrees.branch_name is required')
+    WHEN NEW.base_commit IS NULL OR NEW.base_commit = '' THEN RAISE(ABORT, 'worktrees.base_commit is required')
+  END;
+END;
+CREATE TRIGGER trg_worktrees_anchor_upd BEFORE UPDATE OF task_id, base_commit, canonical_path, branch_name ON worktrees
+BEGIN
+  SELECT CASE
+    WHEN NEW.task_id IS NOT OLD.task_id THEN RAISE(ABORT, 'worktrees.task_id is immutable')
+    WHEN NEW.base_commit IS NOT OLD.base_commit THEN RAISE(ABORT, 'worktrees.base_commit is immutable')
+    WHEN NEW.canonical_path IS NOT OLD.canonical_path THEN RAISE(ABORT, 'worktrees.canonical_path is immutable')
+    WHEN NEW.branch_name IS NOT OLD.branch_name THEN RAISE(ABORT, 'worktrees.branch_name is immutable')
+  END;
+END;
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "core-etapa1", sql: MIGRATION_0001 },
   { version: 2, name: "agents-plans-etapa2", sql: MIGRATION_0002 },
   { version: 3, name: "tasks-dag-etapa3", sql: MIGRATION_0003 },
+  { version: 4, name: "repositories-worktrees-etapa4", sql: MIGRATION_0004 },
 ];

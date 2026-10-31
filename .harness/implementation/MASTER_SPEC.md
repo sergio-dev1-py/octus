@@ -52,6 +52,8 @@ Una sesión admite varios runs sin reiniciarse; un run, varias tareas; cada mens
 
 Todo trabajador que modifica código recibe worktree independiente, rama propia, commit base identificado, scope de escritura, tarea concreta, dependencias y criterios de aceptación. El Worktree Manager es el único que crea, inspecciona y elimina worktrees. Cada tarea registra commit base y commit producido. Los cambios se integran en una rama intermedia controlada, con integración serializada por repositorio. Si el repositorio tiene cambios locales sin commit, nunca se destruyen ni se ignoran en silencio: se preservan con garantía o se bloquean las operaciones de escritura/promoción comunicándolo.
 
+Etapa 4 (implementado): base HEAD o `produced_commit` del único writer-predecesor (≥2 writers → `blocked/deps-unavailable`, sin merges); repo sucio → worktree desde HEAD con `dirty_excluded` visible; commit harness con identidad fija al completar; reintento sobre el mismo worktree; reviewer lee el worktree del target sin tomarlo; limpieza solo explícita del usuario con árbol limpio y sin agentes activos (ramas conservadas); raíz por defecto `<dataDir>/../octus-worktrees/<projectId>`, configurable por proyecto.
+
 ## 7. Integración y aprobación
 
 Flujo normativo: workers completan y entregan commits → el Integration Manager los integra secuencialmente en la rama intermedia → resuelve o informa conflictos → Validation Service ejecuta pruebas → Reviewer revisa → Preview presenta la aplicación integrada → el usuario aprueba un **SHA concreto** → se verifica que el SHA y la rama destino no cambiaron → promoción segura y registro. Si cambia el commit o la destino, la aprobación queda invalidada y se reconstruye/revalida. Sin push automático.

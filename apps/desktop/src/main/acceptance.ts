@@ -1026,14 +1026,15 @@ export async function runAcceptancePhase2(): Promise<number> {
 }
 
 /**
- * Corredor de aceptación Etapa 3 (solo harness de pruebas).
+ * Corredor de aceptación Etapa 4 (solo harness de pruebas; reutiliza el flujo live).
  * Dos matrices independientes (A: meta/contributor/xhigh, B: go/deepseek-v4.1-flash/max),
  * cada una con sesión y proyecto temporales propios. Flujo por matriz:
  * plan → revisión aprobada (decisión simulada del usuario) → DAG vía TaskPlanner
- * REAL → persistencia → 2 lectoras en paralelo → implementer en work-impl/
- * pre-asignado → reviewer vinculado → veredicto accept → run done.
- * Sin worktrees, sin ramas, sin cambiar defaults de producción (solo override de
- * sesión + DB temporal). Presupuestos acotados como en fase 2.
+ * REAL → worktrees auto-aprovisionados → 2 lectoras en paralelo → implementer en su
+ * worktree con commit harness → reviewer vinculado que lee el worktree del target →
+ * veredicto accept → run done.
+ * Sin directorios pre-registrados, sin ramas manuales, sin cambiar defaults de
+ * producción (solo override de sesión + DB temporal). Presupuestos acotados como en fase 2.
  */
 export async function runAcceptancePhase3(): Promise<number> {
   const started = Date.now();
@@ -1066,12 +1067,11 @@ export async function runAcceptancePhase3(): Promise<number> {
   const goPresent = await present("opencode-go");
   log(`[fase3] credentials: meta=${metaPresent} go=${goPresent} (values never displayed)`);
 
-  // Fixture mínima: repo git (para git_diff del reviewer) SIN worktrees.
+  // Fixture mínima: repo git real (Etapa 4: los implementers trabajan en worktrees
+  // automáticos derivados de este repo; NADA se pre-registra como directorio aislado).
   const root = mkdtempSync(path.join(tmpdir(), "octus-accept3-"));
   writeFileSync(path.join(root, "fixture-a.txt"), "marker alpha-42\n");
   writeFileSync(path.join(root, "fixture-b.txt"), "marker beta-84\n");
-  const implDir = path.join(root, "work-impl");
-  mkdirSync(implDir, { recursive: true });
   try {
     git(root, ["init", "-b", "main"]);
     git(root, ["config", "user.email", "accept@octus.local"]);
@@ -1099,7 +1099,7 @@ export async function runAcceptancePhase3(): Promise<number> {
   const BRIEF = `Produce EXACTLY 4 tasks with this shape (tempIds are suggestions; roles and links are mandatory):
 1. explorer, priority 10, no dependencies. Read fixture-a.txt using only requiredTools ["read","glob","grep"]. Acceptance: ["delivery quotes marker alpha-42 from fixture-a.txt"]. needsReview false. No writeScope. No validationCommands.
 2. explorer, priority 9, no dependencies. Read fixture-b.txt using only requiredTools ["read","glob","grep"]. Acceptance: ["delivery quotes marker beta-84 from fixture-b.txt"]. needsReview false. No writeScope. No validationCommands.
-3. implementer, priority 5, dependencies on BOTH explorer tasks. Write file result.txt directly inside your assigned directory (your cwd IS the work-impl directory: do NOT create another work-impl/ inside it, the final path must be work-impl/result.txt from the workspace root) containing exactly the line "combined:alpha-42+beta-84" using requiredTools ["read","write"]. writeScope ["work-impl"]. Acceptance: ["work-impl/result.txt exists containing combined:alpha-42+beta-84"]. needsReview true. No validationCommands. Your ONLY file write must be that exact single line in that exact path (no extra text, no other files). Never use shell, question, commit, branches or worktrees.
+3. implementer, priority 5, dependencies on BOTH explorer tasks. Your assigned directory is an isolated git worktree (a copy of the repo at the base commit; uncommitted local changes are NOT included). Write file work-impl/result.txt inside it containing exactly the line "combined:alpha-42+beta-84" using requiredTools ["read","write"]. writeScope ["work-impl"]. Acceptance: ["work-impl/result.txt exists containing combined:alpha-42+beta-84"]. needsReview true. No validationCommands. Your ONLY file write must be that exact single line in that exact relative path (no extra text, no other files). Never use shell, question, commit, branches or worktrees (the harness commits for you).
 4. reviewer, priority 1, NO dependencies, reviewTargetTempId pointing at the implementer task. Read and report on work-impl/result.txt using requiredTools ["read","git_diff"]. Acceptance: ["review delivery quotes combined:alpha-42+beta-84"]. needsReview false. Never use write, shell, question or test_run.
 Titles must be >=8 chars with a concrete deliverable; descriptions >=20 chars.
 RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and nothing else: no markdown fences, no preamble, no trailing text, and no invented keys such as dag_id/version/description. An empty tasks array is a hard failure: you MUST produce EXACTLY the 4 tasks specified above — do not hedge, do not return []. Every task object must use exactly the keys tempId,title,description,agentRole,priority,dependencies,acceptanceCriteria,requiredTools,writeScope,validationCommands,needsReview(,reviewTargetTempId).`;
@@ -1183,7 +1183,8 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
       const project = await core.createProject(`accept3-${tag}`, root);
       const session = await core.createSession({ projectId: project.id, directory: root, title: `accept3-${tag}` });
       await core.setSessionModel(session.id, { providerId: provider, modelId, effort });
-      await core.registerIsolatedDirectory(project.id, implDir, "directory");
+      // Etapa 4: SIN directorios aislados pre-registrados; el Scheduler aprovisiona
+      // worktrees automáticamente para el implementer.
 
       // Seed de run + coordinador con snapshot REAL de la definición (el parent
       // debe delegar: un snapshot '{}' huérfano provoca delegation_denied y
@@ -1387,14 +1388,19 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
         implDone = (await core.tasks.getTask(implTask.id)).status === "completed";
       }
       push(`${tag}-impldone`, "implementer completed", implDone ? "PASS" : "FAIL", (await core.tasks.getTask(implTask.id)).status);
-      const resultFile = path.join(implDir, "result.txt");
-      const resultOk = existsSync(resultFile) && readFileSync(resultFile, "utf8").includes("combined:alpha-42+beta-84");
-      push(`${tag}-implfile`, "work-impl/result.txt with combined marker", resultOk ? "PASS" : "FAIL", resultOk ? "marker present" : "missing or wrong content");
+      // Etapa 4: el fichero vive en el worktree auto-aprovisionado (no en el repo).
+      const implWt = await core.worktrees.getByTask(implTask.id);
+      const wtPath = implWt?.canonicalPath ?? "";
+      const resultFile = wtPath ? path.join(wtPath, "work-impl", "result.txt") : "";
+      const resultOk = !!resultFile && existsSync(resultFile) && readFileSync(resultFile, "utf8").includes("combined:alpha-42+beta-84");
+      push(`${tag}-implfile`, "worktree/work-impl/result.txt with combined marker", resultOk ? "PASS" : "FAIL", resultOk ? `marker present in ${implWt?.branchName}` : "missing or wrong content");
+      push(`${tag}-implwt`, "implementer worktree provisioned with base commit", implWt && implWt.baseCommit && implWt.baseCommit.length === 40 ? "PASS" : "FAIL", implWt ? `${implWt.branchName} @ ${implWt.baseCommit.slice(0, 12)}` : "no worktree");
+      push(`${tag}-implcommit`, "harness recorded produced_commit", implWt?.producedCommit && /^[0-9a-f]{40}$/.test(implWt.producedCommit) ? "PASS" : "FAIL", implWt?.producedCommit?.slice(0, 12) ?? "none");
       if (!resultOk) {
         try {
           const implDelivery = await core.tasks.getDelivery(implTask.id);
           log(`[fase3] ${tag} implementer delivery: ${(implDelivery?.summary ?? "(none)").slice(0, 600)}`);
-          log(`[fase3] ${tag} work-impl listing: ${readdirSync(implDir).join(",") || "(empty)"} root: ${readdirSync(root).filter((n) => n !== ".git").join(",")}`);
+          log(`[fase3] ${tag} worktree listing: ${(wtPath && existsSync(wtPath) ? readdirSync(wtPath).join(",") : "(missing)") || "(empty)"} root: ${readdirSync(root).filter((n) => n !== ".git").join(",")}`);
         } catch (error) {
           log(`[fase3] ${tag} impl diagnostics failed: ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);
         }
@@ -1420,6 +1426,9 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
       }
       await core.scheduler.tick({ sessionId: session.id }).catch(() => undefined);
       push(`${tag}-revdone`, "reviewer completed", (await core.tasks.getTask(revTask.id)).status === "completed" ? "PASS" : "FAIL", (await core.tasks.getTask(revTask.id)).status);
+      // P2: el reviewer trabaja directamente sobre el worktree del target.
+      const revInst = (await core.agentInstances(session.id)).find((i) => i.id === revInstance);
+      push(`${tag}-revwt`, "reviewer runs inside target worktree", revInst?.worktreeId === implWt?.id && revInst?.directory === wtPath ? "PASS" : "FAIL", revInst ? `${revInst.worktreeId ?? "(none)"} @ ${revInst.directory.slice(-40)}` : "missing instance");
       const delivery = await core.agents.result(revInstance).catch(() => undefined);
       const quotes = (delivery?.summary ?? "").includes("alpha-42");
       push(`${tag}-revidence`, "review delivery quotes the combined marker", quotes ? "PASS" : "FAIL", (delivery?.summary ?? "").slice(0, 160) || "(empty)");
@@ -1448,9 +1457,11 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
         }
       }
 
-      // Sin worktrees automáticos: solo el directorio pre-asignado.
+      // Etapa 4: worktree auto-aprovisionado por el Scheduler (sin directorios pre-registrados).
       const dirs = await core.directories.list(project.id);
-      push(`${tag}-nowt`, "no auto-created worktrees/dirs", dirs.length === 1 && dirs[0]?.path === implDir ? "PASS" : "FAIL", `${dirs.length} isolated dirs`);
+      const wts = await core.worktrees.listProjectWorktrees(project.id);
+      push(`${tag}-autowt`, "scheduler auto-provisioned exactly one worktree, no isolated dirs", wts.length === 1 && dirs.length === 0 ? "PASS" : "FAIL", `${wts.length} worktrees, ${dirs.length} isolated dirs`);
+      push(`${tag}-wtbranch`, "worktree branch follows harness naming", wts[0] && /^harness\/run-.{1,32}\/task-tsk_/.test(wts[0].branchName) ? "PASS" : "FAIL", wts[0]?.branchName ?? "(none)");
 
       await collectInstances(core);
       for (const u of await runUsageSummary(core)) allUsage.push({ ...u, matrix: tag });
@@ -1483,9 +1494,9 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
   const skip = steps.filter((s) => s.status === "SKIP").length;
   const lines: string[] = [];
   lines.push("");
-  lines.push("## Fase 3 live — TaskGraph/Planner/Scheduler (modelos reales)");
+  lines.push("## Fase 4 live — WorktreeManager (modelos reales)");
   lines.push("");
-  lines.push(`- **Resultado fase 3 live:** PASS=${pass} FAIL=${fail} BLOCKED=${blocked} SKIP=${skip} — ${Math.round((Date.now() - started) / 1000)}s`);
+  lines.push(`- **Resultado fase 4 live:** PASS=${pass} FAIL=${fail} BLOCKED=${blocked} SKIP=${skip} — ${Math.round((Date.now() - started) / 1000)}s`);
   lines.push(`- **Matrices:** A meta/${META_MODEL}/${META_EFFORT} (planner + workers con mismo modelo/effort del coordinador), B opencode-go/${GO_MODEL}/${GO_EFFORT} (ID exacto del catálogo real, sin fallback)`);
   lines.push("");
   lines.push("| instanceId | parentInstanceId | definition | provider | modelId | effort |");
@@ -1498,9 +1509,9 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
   lines.push("|---|---|---|---|---|---|---|---|---|");
   for (const u of allUsage) lines.push(`| ${u.matrix} | ${u.provider} | ${u.model} | ${u.calls} | ${u.input} | ${u.output} | ${u.reasoning} | ${u.cached} | ${fmtCost(u.costMicro)} |`);
   lines.push("");
-  const reportPath = path.join(findRepoRoot(), ".harness", "implementation", "STAGE3_ACCEPTANCE_REPORT.md");
+  const reportPath = path.join(findRepoRoot(), ".harness", "implementation", "STAGE4_ACCEPTANCE_REPORT.md");
   try {
-    const prev = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : "# STAGE3_ACCEPTANCE_REPORT.md — Aceptación funcional Etapa 3\n";
+    const prev = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : "# STAGE4_ACCEPTANCE_REPORT.md — Aceptación funcional Etapa 4\n";
     writeFileSync(reportPath, `${prev}${lines.join("\n")}`, "utf8");
     log(`[fase3] report appended: ${reportPath}`);
   } catch (error) {

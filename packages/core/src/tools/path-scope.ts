@@ -65,6 +65,12 @@ export function resolveInScope(rootDir: string, userPath: string, options: Scope
   if (!sameOrInside(realRoot, full)) {
     throw new OctusError("scope_violation", `Path escapes the session workspace: ${userPath}`);
   }
+  // Metadatos Git internos: ningún agente lee/escribe dentro de .git (Etapa 4;
+  // el worktree expone .git como fichero puntero, pero su contenido es tabú).
+  const relToRoot = rel(full, realRoot);
+  if (relToRoot.split("/").includes(".git")) {
+    throw new OctusError("scope_violation", "Access to .git internals is forbidden");
+  }
   for (const root of options.protectedRoots ?? []) {
     let realProtected: string;
     try {
@@ -91,4 +97,9 @@ export function isUncPath(userPath: string): boolean {
 export function scopeRelative(rootDir: string, absoluteReal: string): string {
   const rel = path.relative(rootDir, absoluteReal).replaceAll("\\", "/");
   return rel === "" ? "." : rel;
+}
+
+/** Relativa con `/` para comparar segmentos (p. ej. detectar `.git`). */
+function rel(candidateReal: string, rootReal: string): string {
+  return path.relative(rootReal, candidateReal).replaceAll("\\", "/");
 }

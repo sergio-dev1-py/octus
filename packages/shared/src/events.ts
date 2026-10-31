@@ -64,6 +64,8 @@ export type PersistedEventType =
   | "reservation.released"
   | "worktree.created"
   | "worktree.released"
+  | "worktree.status_changed"
+  | "worktree.removed"
   | "integration.started"
   | "integration.status_changed"
   | "integration.completed"

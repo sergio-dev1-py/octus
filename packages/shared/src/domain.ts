@@ -127,6 +127,8 @@ export interface AgentInstance {
   runId: string;
   /** Task del DAG que origina la instancia (Etapa 3). Ausente en delegación simple. */
   taskId?: string;
+  /** Worktree asignado (Etapa 4). Ausente en delegación simple y camino legacy. */
+  worktreeId?: string;
   definitionId: string;
   parentInstanceId?: string;
   status: InstanceStatus;
@@ -319,7 +321,10 @@ export type TaskBlockedReason =
   | "no-workspace"
   | "no-capacity"
   | "needs-approval"
-  | "waiting-review-target";
+  | "waiting-review-target"
+  | "no-repository"
+  | "repo-blocked"
+  | "deps-unavailable";
 
 export type AttemptStatus =
   | "pending"
@@ -416,17 +421,85 @@ export interface Reservation {
   acquiredAt: Milliseconds;
 }
 
-export interface WorktreeRecord {
+// ---------------------------------------------------------------------------
+// Worktrees y repositorios (Worktree Manager, Etapa 4, ADR-043…052)
+// ---------------------------------------------------------------------------
+
+export type RepositoryStatus = "clean" | "dirty" | "blocked";
+
+export interface Repository {
   id: string;
-  taskId: string;
-  instanceId: string;
-  repoRoot: string;
-  path: string;
-  branch: string;
-  baseCommit: string;
-  producedCommit?: string;
-  status: "active" | "released" | "removed";
+  projectId: string;
+  rootPath: string;
+  worktreesRoot: string;
   createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+export interface RepositorySummary {
+  repositoryId?: string;
+  rootPath: string;
+  isGit: boolean;
+  branch?: string;
+  head?: string;
+  status: RepositoryStatus;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  incompleteOperation?: "merge" | "cherry-pick" | "rebase" | "rebase-merge" | "rebase-apply";
+  incompleteDetail?: string;
+  worktrees: Array<{ path: string; branch?: string; locked?: string; prunable?: boolean }>;
+  branches: string[];
+  gitCommonDir?: string;
+}
+
+export type WorktreeStatus =
+  | "provisioning"
+  | "available"
+  | "assigned"
+  | "running"
+  | "finished"
+  | "suspended"
+  | "cleanup_pending"
+  | "removed"
+  | "retained"
+  | "orphaned";
+
+export interface Worktree {
+  id: string;
+  projectId: string;
+  repositoryId: string;
+  runId: string;
+  taskId: string;
+  branchName: string;
+  baseCommit: string;
+  /** Origen de la base: 'head' o 'task:<id>' del writer-predecesor. */
+  baseSource: string;
+  producedCommit?: string;
+  canonicalPath: string;
+  status: WorktreeStatus;
+  attempt: number;
+  instanceId?: string;
+  dirtyExcluded: boolean;
+  dirtySummary?: string;
+  error?: string;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+export type WorktreeOpKind = "provision" | "assign" | "release" | "cleanup" | "recover" | "reconcile";
+export type WorktreeOpStatus = "started" | "done" | "failed";
+
+export interface WorktreeOperation {
+  id: string;
+  worktreeId?: string;
+  taskId?: string;
+  op: WorktreeOpKind;
+  status: WorktreeOpStatus;
+  step?: string;
+  detail?: string;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
 }
 
 export type IntegrationStatus = "building" | "validating" | "preview_ready" | "approved" | "promoted" | "invalidated" | "failed";

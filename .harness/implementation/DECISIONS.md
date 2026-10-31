@@ -354,3 +354,81 @@ Smoke en Electron 45.2.0 / Node 24.22.1 (cierra los pendientes del Hito 0): `nod
 - Un reviewer con dependencia en una task con `needsReview` es un deadlock estructural (la dependencia solo se satisface con `reviewed`, que exige el veredicto de ese mismo reviewer). Nueva regla de validación que lo rechaza con mensaje accionable + test unitario + aviso en el system prompt del planner (`PLANNER_SYSTEM`) + chequeo en el harness live.
 - Presupuesto live insuficiente para xhigh (100k tokens/run bloqueó al implementer a mitad de la matriz A): el Budget gate funcionó como diseñado (`budget_exceeded`). Subido a 10M micro / 500k tokens por run en el harness (acotado y registrado en el informe).
 - Matriz B (Go/deepseek-v4.1-flash/max): tras los fixes de transporte, el modelo responde al contrato de formato pero devuelve `{"tasks":[]}` de forma estable (12 generaciones). No es bug de producto: queda BLOCKED como limitación del modelo con effort max. El harness live vive en `apps/desktop --octus-acceptance-3` (claves del almacén del SO, proceso Electron) con variante env `packages/core check:live:stage3`; filtro por matriz con `OCTUS_ACCEPT_MATRIX=a|b|both`; requiere `--user-data-dir` del perfil real para descifrar (`@octus/desktop`).
+
+## ADR-043 — RepositoryManager de solo lectura
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** `RepositoryManager` (`packages/core/src/repositories/repository-manager.ts`) solo inspecciona: raíz (`rev-parse --show-toplevel`), rama, HEAD, contadores staged/unstaged/untracked (`status --porcelain=v1`), ramas, `git worktree list --porcelain`, `git-common-dir` y operaciones incompletas (MERGE_HEAD / CHERRY_PICK_HEAD / REBASE_HEAD / rebase-merge / rebase-apply). `validateRepository` exige repo git con HEAD resoluble y sin operación incompleta; sin efectos. Toda invocación git pasa por `git-exec.ts` (argv por array, cwd explícito, timeout 60s, sin concatenación).
+- **Consecuencias:** ningún manager modifica el repo principal por inspección; el estado sucio/incompleto se comunica, no se repara.
+
+## ADR-044 — WorktreeManager propietario único: ramas, paths y journal
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** `WorktreeManager` (`packages/core/src/worktrees/worktree-manager.ts`) es el único que crea worktrees/ramas gestionadas. Un worktree por task (`UNIQUE(task_id)`; re-solicitar reutiliza, con carrera resuelta por el índice). Ramas `harness/run-<runId>/task-<taskId>` validadas con `check-ref-format`, con sufijo `-rN` ante colisión ajena preexistente. Paths planos `<worktrees_root>/<taskId>/`, ruta canónica (`realpathSync`) guardada. Cada operación deja journal en `worktree_ops` (started→done/failed con paso y detalle). `AgentManager` solo consume vía puerto `WorktreePort.getAssignment` (sin ciclo de imports).
+- **Consecuencias:** trazabilidad rama↔task↔base sin duplicados; colisiones ajenas no rompen la provisión.
+
+## ADR-045 — Repositorio sucio: construir desde HEAD sin tocar al usuario (P1)
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** con cambios locales sin commit, el worktree se crea desde HEAD y se registra `dirty_excluded=1` con resumen `staged/unstaged/untracked (created from HEAD; local changes NOT included)`. Nunca se copian, mueven ni simulan los cambios locales dentro del worktree; nunca `reset/clean/stash/checkout` sobre el repo del usuario. El resumen queda visible en la fila, el evento y la UI. Las escrituras del implementer siguen pasando por la puerta de permisos existente (ask/allow), no hay vía libre por estar "aislado".
+- **Consecuencias:** el usuario nunca pierde trabajo local por provisión; el agente nunca cree disponer de cambios que no están en su worktree.
+
+## ADR-046 — Reviewer lee el worktree del target sin tomarlo (P2)
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** el Scheduler resuelve el worktree de `reviewTargetTaskId` y spawnea al reviewer con `directory` = worktree del target (`worktreeId` = target, `reviewTargetTaskId` = target). `AgentManager.resolveDirectory` acepta el worktree ajeno solo si el rol es `reviewer` y el task coincide con `reviewTargetTaskId`; estados legibles: `available/assigned/running/suspended/finished/retained` (finished es lo normal al revisar). El reviewer no hace `markRunning` sobre el worktree ajeno (no lo toma). Su perfil sigue sin herramientas de escritura; `test_run` continúa en copia desechable, nunca modifica el worktree original.
+- **Consecuencias:** la revisión observa el `produced_commit` exacto sin carreras de propiedad; sin bypass de permisos por rol.
+
+## ADR-047 — Raíz de worktrees hermana de dataDir, configurable por proyecto (P3)
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** por defecto `<dataDir>/../octus-worktrees/<projectId>` (fuera del repo y fuera de dataDir). `setWorktreesRoot` por proyecto exige ruta absoluta, no UNC (rechazo antes de tocar FS), fuera de dataDir y fuera del repo (comparación canónica `realpathSync` + `sameOrInside`), y sin worktrees activos. Sin worktrees activos previos, el cambio es seguro.
+- **Consecuencias:** los worktrees nunca contaminan el workspace ni la BD; la ubicación es auditable y movible por proyecto.
+
+## ADR-048 — Base por escritor único; multi-escritor bloqueado sin merges
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** base del worktree: HEAD sin predecesores, HEAD con solo predecesores lectores, o `produced_commit` del único writer-predecesor (`base_source='task:<id>'`, verificado con `commitExists`). Con ≥2 predecesores implementer directos → `blocked/deps-unavailable` explícito (estructural en `promoteDrafts` + dinámico en `ensureForTask`), re-evaluable si el DAG cambia. Sin merges en Etapa 4 (puerta de Etapa 5).
+- **Consecuencias:** la cadena writer→writer hereda bytes reales del predecesor; el diamante de escritores se comunica en vez de corromperse.
+
+## ADR-049 — Commit harness y reintento sobre el mismo worktree
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** al completar un implementer, el Scheduler hace `git add -- <scopes-relativos-al-repo>` + `commit --no-verify` con identidad fija `Octus Harness` dentro del worktree y registra `produced_commit` (árbol limpio → `produced = base`, sin commit vacío). Luego `markFinished` (retiene el espacio). Fallo/cancelación → `releaseWorktree` (conserva parciales). `retryTask`/`recoverForRetry` reutilizan el MISMO worktree (intento++), nunca provisionan otro. Cancelación en cascada → worktree a `finished` retenido, sin auto-borrado.
+- **Consecuencias:** cada task escritora deja un SHA auditable para dependientes e Integración futura; reintentar no pierde progreso parcial.
+
+## ADR-050 — Sin auto-borrado: limpieza explícita y reconciliación post-reinicio
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** solo `cleanupWorktree` explícito del usuario elimina el worktree físico (`git worktree remove`). Guardas: sin agentes activos; árbol limpio (sucio → rechazo con resumen, sin flag force en Etapa 4). La rama se conserva por defecto; `deleteBranch` solo si el tip == base. Tras reinicio, `reconcile()`: ops `started` se resuelven contra git (provisioning con físico→available, sin físico→orphaned; cleanup interrumpida→reabierta o cerrada), `assigned/running`→`suspended` reutilizable sin auto-run (ADR-040), y barrido de huérfanos en ambas direcciones (físico harness/* sin fila → fila `orphaned` con base real o marcador; fila sin físico → `orphaned`). Las ramas con trabajo producido se conservan para Etapa 5.
+- **Consecuencias:** ningún crash ni retry destruye evidencia; los huérfanos quedan visibles para decisión humana.
+
+## ADR-051 — Scheduler con worktrees: oleadas, motivos re-evaluables y reviewer
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** `tickInner` corre hasta 4 oleadas asignar→supervisar para despertar dependientes en el mismo tick en sesión quieta (mismo orden/equidad por oleada; la oleada 1 conserva el comportamiento previo). Nuevos `blockedReason` re-evaluables: `no-repository` (proyecto no-git → camino legacy con directorios aislados, sin worktree), `repo-blocked` (repo inválido/incompleto), `deps-unavailable` (base no lista o multi-writer). `draft→blocked` añadido a transiciones (aditivo). `failUnstarted` marca `failed` si el spawn muere antes del attempt (evita assigned-atascado).
+- **Consecuencias:** el DAG con worktrees no necesita ticks externos para progresar; el legacy no-git sigue funcionando intacto.
+
+## ADR-052 — Aislamiento Etapa 4: .git tabú, git_diff con base, UNC y UI mínima
+
+- **Estado:** Aceptada (propietario, Etapa 4).
+- **Decisión:** `resolveInScope` deniega cualquier segmento `.git` (el worktree expone `.git` como puntero, su contenido es tabú). `git_diff` acepta `base` SHA (4–40 hex, default HEAD) para que el reviewer compare contra `produced_commit`/`base_commit` sin shell. UNC denegadas en worktrees root, candidatos y validación. Scopes del implementer se resuelven repo→relativo→worktree con contención en ambos extremos. UI/IPC mínimos: `repos.inspect/setWorktreesRoot`, `worktrees.list/get/cleanup`; sección plegable con rama, base/produced, dirty_excluded, operaciones y guarda de limpieza; `busy` sin cambios.
+- **Consecuencias:** el agente no lee ni escribe metadatos git por herramientas de ficheros; la revisión tiene el diff exacto sin salir del gateway.
+
+## Hallazgos de implementación (Etapa 4)
+
+- Batch `worktrees`+`worktree_ops`: el INSERT de la op (FK a worktrees) iba primero y violaba la FK; el orden correcto es fila worktree → op (bug real encontrado por el primer test con git real).
+- `setWorktreesRoot` tragaba su propio `throw` dentro del `try` de `repoRootOf`: el rechazo "dentro del repo" nunca se lanzaba (bug real: el catch de no-git capturaba el throw de validación). Ahora `repoRoot` se resuelve fuera del try de validación.
+- `runGit(rev-parse HEAD)` falla de forma transitoria en Windows (AV/indexador bloquea `.git` recién creado): reintentos acotados (hasta 4, 250 ms) solo en lecturas de verificación (`validateFreshWorktree`, commit harness). Sin reintentos en escrituras.
+- Carrera test/producto: la task pasa a `completed` antes de que el mismo tick termine commit+`finished`; los tests esperan al worktree (`untilWorktrees`), no solo a la task.
+- Reviewer spawneado en el mismo tick en que el target pasa a `finished`: el gate solo aceptaba estados activos y el spawn moría. Fix por rol: el reviewer acepta `finished/retained` y no hace `markRunning` ajeno.
+- Dependientes quietos: tras `supervise`, nadie re-evaluaba en sesión sin eventos externos (B esperaba la review de A eternamente). Fix: oleadas acotadas (4) asignar→supervisar en el mismo tick; invariante de orden/equidad por oleada preservado; regresión Etapa 3 actualizada a invariante determinista (serialización por límites, sin duplicados).
+- Trigger `worktrees.task_id IS NULL`: bloqueaba registrar huérfanos físicos sin task; ahora NULL solo permitido con `status='orphaned'` (auditoría de reconcile).
+- Comparación de paths git vs `realpathSync` en Windows (`/` vs `\`, mayúsculas): el producto usa `samePath` normalizado; los tests comparan normalizado.
+- `git worktree list --porcelain` con `prunable`/`locked`/`bare`/`detached`: el parser cubre las claves observadas en git real de Windows.
+
+## Hallazgos de validación live (Etapa 4, matriz A con modelos reales)
+
+- Matriz A (meta/muse-spark-1.3-contributor/xhigh): **PASS 35/35** en 62 s (`--octus-acceptance-3`, `--user-data-dir=@octus/desktop` para descifrar safeStorage). Flujo: plan→planner real→2 lectoras en 1 tick→implementer en worktree auto-aprovisionado (`harness/run-…/task-…`, sin directorios aislados pre-registrados)→commit harness con `produced_commit`→reviewer corriendo dentro del worktree del target→veredicto accept→run done. Modelos y usage verificados por instancia (25 llamadas, 59662 in / 6471 out).
+- Sin claves visibles: el harness solo registra `meta=true go=true`. Primera ejecución falló con `credential missing` por usar el `userData` de Electron por defecto en vez del perfil real; relanzar con `--user-data-dir="$env:APPDATA\@octus\desktop"` lo resuelve (mismo requisito documentado en Etapa 3).
+- Matriz B no re-ejecutada en Etapa 4 (limitación del modelo documentada en Etapa 3, sin cambios de transporte en esta etapa).

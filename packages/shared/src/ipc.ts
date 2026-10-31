@@ -11,6 +11,7 @@ import type {
   Plan,
   PlanRevision,
   Project,
+  RepositorySummary,
   Run,
   Session,
   Task,
@@ -20,6 +21,8 @@ import type {
   TaskReviewVerdict,
   TaskStatus,
   ToolCallRecord,
+  Worktree,
+  WorktreeOperation,
 } from "./domain.js";
 import type { CoreEvent } from "./events.js";
 import type { ModelDescriptor, ProviderDescriptor } from "./model.js";
@@ -120,6 +123,11 @@ export interface OctusIPC {
   "tasks.retry": { request: { taskId: string }; response: { ok: boolean; attempt?: number; instanceId?: string; error?: string } };
   "tasks.review": { request: { reviewerTaskId: string; targetTaskId: string; verdict: "accept" | "request-changes"; detail?: Record<string, unknown> }; response: { ok: boolean; error?: string } };
   "tasks.scheduler": { request: { sessionId: string }; response: { lastRunId?: string; active: { tasks: number; reservations: number } } };
+  "worktrees.list": { request: { projectId: string }; response: { worktrees: Worktree[] } };
+  "worktrees.get": { request: { worktreeId: string }; response: { ok: boolean; worktree?: Worktree; operations?: WorktreeOperation[]; error?: string } };
+  "worktrees.cleanup": { request: { worktreeId: string; deleteBranch?: boolean }; response: { ok: boolean; error?: string } };
+  "repos.inspect": { request: { projectId: string }; response: { summary: RepositorySummary } };
+  "repos.setWorktreesRoot": { request: { projectId: string; path: string }; response: { ok: boolean; error?: string } };
 }
 
 export type IpcChannel = keyof OctusIPC;

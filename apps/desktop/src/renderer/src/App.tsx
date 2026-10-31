@@ -8,6 +8,7 @@ import {
   archivePlan,
   cancelAgent,
   cancelTask,
+  cleanupWorktree,
   createProject,
   createSession,
   decideApproval,
@@ -18,6 +19,7 @@ import {
   rejectRevision,
   reloadBudgets,
   reloadProviders,
+  reloadWorktrees,
   retryTask,
   reviewTask,
   selectProject,
@@ -26,6 +28,7 @@ import {
   setError,
   setProfile,
   setView,
+  setWorktreesRoot,
   state,
 } from "./store.js";
 
@@ -558,8 +561,80 @@ function TasksSection() {
   );
 }
 
-function AgentsSection() {
-  const active = () => state.agentInstances.filter((i) => ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
+function WorktreesSection() {
+  const active = () => state.worktrees.filter((w) => ["provisioning", "assigned", "running", "suspended", "cleanup_pending"].includes(w.status));
+  const repo = () => state.repoSummary;
+  return (
+    <details class="stage2">
+      <summary>
+        Worktrees ({active().length} active / {state.worktrees.length} total)
+      </summary>
+      <Show when={repo() && !repo()!.isGit}>
+        <p class="muted">Project is not inside a git repository: writers use registered isolated directories (legacy path).</p>
+      </Show>
+      <Show when={repo() && repo()!.isGit}>
+        <p class="muted">
+          repo <code>{repo()!.rootPath}</code> · branch <code>{repo()!.branch}</code> · {repo()!.status}
+          <Show when={(repo()!.staged + repo()!.unstaged + repo()!.untracked) > 0}>
+            {" "}· local changes staged:{repo()!.staged} unstaged:{repo()!.unstaged} untracked:{repo()!.untracked} (excluded from new worktrees)
+          </Show>
+        </p>
+      </Show>
+      <Show when={state.worktrees.length === 0}>
+        <p class="muted">No worktrees yet. Implementer tasks provision one automatically.</p>
+      </Show>
+      <For each={state.worktrees}>
+        {(wt) => (
+          <div class="card">
+            <div class="row">
+              <code>{wt.branchName}</code>
+              <span class={`pill ${wt.status === "removed" ? "muted" : wt.status === "orphaned" ? "err" : wt.status === "finished" || wt.status === "retained" ? "ok" : "warn"}`}>{wt.status}</span>
+              <span class="muted">attempt {wt.attempt}</span>
+            </div>
+            <p class="muted">
+              <code>{wt.canonicalPath}</code>
+            </p>
+            <p class="muted">
+              base <code>{wt.baseCommit.slice(0, 12)}</code> ({wt.baseSource})
+              <Show when={wt.producedCommit != null}> → produced <code>{(wt.producedCommit as string).slice(0, 12)}</code></Show>
+            </p>
+            <Show when={wt.dirtyExcluded && wt.dirtySummary}>
+              <p class="muted">local changes excluded: {wt.dirtySummary}</p>
+            </Show>
+            <Show when={wt.error}>
+              <p class="muted">error: {wt.error}</p>
+            </Show>
+            <Show when={(state.worktreeOps[wt.id] ?? []).length > 0}>
+              <details>
+                <summary>Operations ({(state.worktreeOps[wt.id] ?? []).length})</summary>
+                <ul>
+                  <For each={state.worktreeOps[wt.id] ?? []}>
+                    {(op) => (
+                      <li>
+                        <code>{op.op}</code> {op.status}
+                        <Show when={op.step}> · {op.step}</Show>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </Show>
+            <div class="row">
+              <Show when={["finished", "available", "suspended", "orphaned", "retained"].includes(wt.status)}>
+                <button class="danger" onClick={() => void cleanupWorktree(wt.id)}>
+                  Clean up
+                </button>
+              </Show>
+              <button onClick={() => void reloadWorktrees()}>Refresh</button>
+            </div>
+          </div>
+        )}
+      </For>
+    </details>
+  );
+}
+
+function AgentsSection() {  const active = () => state.agentInstances.filter((i) => ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
   return (
     <details class="stage2">
       <summary>
@@ -649,6 +724,7 @@ function ChatView() {
       </div>
       <PlansSection />
       <TasksSection />
+      <WorktreesSection />
       <AgentsSection />
       <Composer />
       <details>

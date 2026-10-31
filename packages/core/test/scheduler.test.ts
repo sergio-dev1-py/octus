@@ -103,7 +103,13 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
       const c = await t.core.tasks.getTask(dag.taskIds[2]!);
       expect(["assigned", "running", "completed"]).toContain(a.status);
       expect(["assigned", "running", "completed"]).toContain(b.status);
-      expect(c.status).toBe("draft");
+      // Puerta determinista (Etapa 4: el scheduler despierta dependientes en el
+      // mismo tick en que observa las compleciones): c solo puede haber avanzado
+      // si a y b ya están completadas.
+      if (c.status !== "draft") {
+        expect(a.status).toBe("completed");
+        expect(b.status).toBe("completed");
+      }
       // Completa a y b (instancias reales en background).
       for (const id of [dag.taskIds[0]!, dag.taskIds[1]!]) {
         const attempts = await t.core.tasks.getAttempts(id);
@@ -407,9 +413,25 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
       expect((await t.core.tasks.getTask(dag.taskIds[0]!)).blockedReason).toBe("no-capacity");
       t.core.setAgentLimits({ maxPerSession: 4, maxPerProject: 6, maxDepth: 2, maxImplementers: 2, maxReaders: 1, maxReviewers: 1 });
       await t.core.scheduler.tick({ sessionId: s.session.id });
-      const one = await Promise.all(dag.taskIds.map(async (id) => (await t.core.tasks.getTask(id)).status));
-      expect(one.filter((x) => x === "assigned" || x === "running" || x === "completed").length).toBe(1);
-      expect(one.filter((x) => x === "blocked").length).toBe(1);
+      // Con maxReaders=1 los dos exploradores se serializan: el segundo no
+      // empieza hasta que el primero termina (cualquiera de los dos puede ir
+      // primero; el invariante es la no-superposición, no el orden).
+      // (Etapa 4: el tick despierta dependientes en cuanto observa la compleción.)
+      await until(
+        async () => (await t.core.tasks.getTask(dag.taskIds[0]!)).status === "completed" && (await t.core.tasks.getTask(dag.taskIds[1]!)).status === "completed",
+        30000,
+      );
+      const attA = (await t.core.tasks.getAttempts(dag.taskIds[0]!))[0]!;
+      const attB = (await t.core.tasks.getAttempts(dag.taskIds[1]!))[0]!;
+      expect(attA.completedAt).toBeDefined();
+      expect(attB.completedAt).toBeDefined();
+      // Intervalos disjuntos: uno terminó antes de que el otro empezara.
+      const disjoint = attB.startedAt! >= attA.completedAt! || attA.startedAt! >= attB.completedAt!;
+      expect(disjoint).toBe(true);
+      // Sin duplicados: un intento por tarea.
+      for (const id of dag.taskIds) {
+        expect((await t.core.tasks.getAttempts(id)).length).toBe(1);
+      }
     } finally {
       await t.cleanup();
     }

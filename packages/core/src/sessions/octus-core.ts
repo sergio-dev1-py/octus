@@ -46,6 +46,8 @@ import { PLAN_TOOLS } from "../plans/plan-tools.js";
 import { TaskManager } from "../tasks/task-manager.js";
 import { TaskPlanner } from "../tasks/task-planner.js";
 import { TaskScheduler } from "../tasks/task-scheduler.js";
+import { RepositoryManager } from "../repositories/repository-manager.js";
+import { WorktreeManager } from "../worktrees/worktree-manager.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
 import { MetaAdapter } from "../providers/meta-adapter.js";
@@ -104,6 +106,8 @@ export class OctusCore {
   readonly tasks: TaskManager;
   readonly planner: TaskPlanner;
   readonly scheduler: TaskScheduler;
+  readonly repositories: RepositoryManager;
+  readonly worktrees: WorktreeManager;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -178,6 +182,8 @@ export class OctusCore {
     );
     this.plans = new PlanManager(db, this.events, this.bus);
     this.directories = new DirectoryRegistry(db);
+    this.repositories = new RepositoryManager(db);
+    this.worktrees = new WorktreeManager(db, this.events, this.bus, this.repositories, options.dataDir);
     this.tests = new TestRunner(db);
     this.runtime = new AgentRuntime(db, this.events, this.bus, this.router, this.gateway, this.context, {
       ...(options.runtimeOptions ?? {}),
@@ -197,6 +203,7 @@ export class OctusCore {
       this.directories,
       () => this.config.get().agentLimits ?? DEFAULT_AGENT_LIMITS,
       (event) => this.streamHandlers.get(event.sessionId)?.(event),
+      () => this.worktrees,
     );
     toolServices.agents = this.agents;
     toolServices.plans = this.plans;
@@ -214,6 +221,7 @@ export class OctusCore {
         return { maxImplementers: l.maxImplementers, maxReaders: l.maxReaders, maxReviewers: l.maxReviewers };
       },
       () => this.config.get().scheduler,
+      () => this.worktrees,
     );
     this.planner = new TaskPlanner(db, this.router, this.registry, this.directories, this.tests, this.plans, this.tasks);
     this.scheduler = new TaskScheduler(
@@ -230,6 +238,7 @@ export class OctusCore {
       },
       () => this.config.get().scheduler,
       () => this.config.get().agentLimits,
+      () => this.worktrees,
     );
     toolServices.tasks = {
       plan: async (input) => {
@@ -747,6 +756,7 @@ export class OctusCore {
       sessionId: String(r.session_id),
       runId: String(r.run_id),
       taskId: r.task_id ? String(r.task_id) : undefined,
+      worktreeId: r.worktree_id ? String(r.worktree_id) : undefined,
       definitionId: String(r.definition_id),
       parentInstanceId: r.parent_instance_id ? String(r.parent_instance_id) : undefined,
       status: r.status as AgentInstance["status"],
@@ -804,6 +814,29 @@ export class OctusCore {
       [sessionId, sessionId],
     );
     return { lastRunId, active: { tasks: active?.tasks ?? 0, reservations: active?.reservations ?? 0 } };
+  }
+
+  // ------------------------------------------------------------------ worktrees y repos (Etapa 4)
+  async listProjectWorktrees(projectId: string) {
+    return this.worktrees.listProjectWorktrees(projectId);
+  }
+
+  async getWorktree(worktreeId: string) {
+    const worktree = await this.worktrees.getWorktree(worktreeId);
+    const operations = await this.worktrees.listOperations(worktreeId);
+    return { worktree, operations };
+  }
+
+  async cleanupWorktree(worktreeId: string, opts?: { deleteBranch?: boolean }) {
+    return this.worktrees.cleanupWorktree(worktreeId, opts);
+  }
+
+  async inspectRepository(projectId: string) {
+    return this.repositories.inspectRepository(projectId);
+  }
+
+  async setWorktreesRoot(projectId: string, path: string) {
+    return this.worktrees.setWorktreesRoot(projectId, path);
   }
 
   private async cancelSessionTasks(sessionId: string): Promise<void> {
@@ -937,6 +970,7 @@ export class OctusCore {
         sessionId: String(r.session_id),
         runId: String(r.run_id),
         taskId: r.task_id ? String(r.task_id) : undefined,
+        worktreeId: r.worktree_id ? String(r.worktree_id) : undefined,
         definitionId: String(r.definition_id),
         parentInstanceId: r.parent_instance_id ? String(r.parent_instance_id) : undefined,
         status: r.status as AgentInstance["status"],
@@ -1077,6 +1111,7 @@ export class OctusCore {
       this.bus.publish(event);
     }
     await this.tasks.reconcile().catch(() => undefined);
+    await this.worktrees.reconcile().catch(() => undefined);
     await this.plans.orphanSweep().catch(() => 0);
   }
 }

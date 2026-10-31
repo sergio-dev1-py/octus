@@ -15,6 +15,10 @@ export interface SpawnRequest {
   parentInstanceId: string;
   /** Task del DAG que origina el spawn (Etapa 3). Sin task: delegación simple. */
   taskId?: string;
+  /** Worktree asignado por el WorktreeManager (Etapa 4). Gana sobre directoryId. */
+  worktreeId?: string;
+  /** Para reviewer sobre worktree ajeno: task cuyo worktree se lee (P2). */
+  reviewTargetTaskId?: string;
 }
 
 export interface SpawnResult {

@@ -16,6 +16,7 @@ import type { AgentRegistry } from "../agents/agent-registry.js";
 import type { DirectoryRegistry } from "../orchestration/directory-registry.js";
 import type { AgentManager } from "../orchestration/agent-manager.js";
 import type { TestRunner } from "../tools/test-runner.js";
+import type { WorktreeManager } from "../worktrees/worktree-manager.js";
 import { adjacency, cascadeCancelSet, detectCycle, isDependencySatisfied, orderTasks } from "./task-graph.js";
 
 export type { TaskStatus, TaskBlockedReason };
@@ -26,7 +27,7 @@ const NON_TERMINAL: TaskStatus[] = ["draft", "ready", "assigned", "running", "bl
 
 /** Transiciones explícitas permitidas por setStatus (recordReview/retry tienen las suyas). */
 const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
-  draft: ["ready", "cancelled"],
+  draft: ["ready", "blocked", "cancelled"],
   ready: ["assigned", "blocked", "cancelled"],
   assigned: ["running", "blocked", "cancelled", "interrupted"],
   running: ["completed", "failed", "blocked", "cancelled", "interrupted"],
@@ -86,6 +87,7 @@ export class TaskManager {
     private readonly agents: () => AgentManager,
     private readonly getRoleLimits: () => RoleLimits,
     private readonly getSchedulerConfig: () => { maxAttemptsPerTask: number; backoffBaseMs: number },
+    private readonly worktrees?: () => WorktreeManager | undefined,
   ) {}
 
   // ------------------------------------------------------------------ lectura
@@ -389,6 +391,14 @@ export class TaskManager {
         { sql: "UPDATE tasks SET status = 'cancelled', blocked_reason = NULL, blocked_details = NULL, updated_at = ? WHERE id = ? AND status NOT IN ('completed','reviewed')", params: [now(), id] },
         { sql: "DELETE FROM scheduler_reservations WHERE task_id = ?", params: [id] },
       ]);
+      // Cancelación: worktree a finished retenido (auditoría + Etapa 5). Sin auto-borrado.
+      const wts = this.worktrees?.();
+      if (wts) {
+        const wt = await wts.getByTask(id).catch(() => undefined);
+        if (wt && !["removed", "retained", "finished"].includes(wt.status)) {
+          await wts.markFinished(wt.id).catch(() => undefined);
+        }
+      }
       const event = await this.events.append({ type: "task.status_changed", aggregate: { kind: "task", id }, correlationId: createId("cor"), payload: { to: "cancelled", reason: "cascade" } });
       this.bus.publish(event);
       cancelled.push(id);
@@ -494,6 +504,13 @@ export class TaskManager {
     const brief = `Task: ${task.title}\n${task.description}\nAcceptance criteria:\n${(task.acceptanceCriteria ?? []).map((c) => `- ${c}`).join("\n")}${scope ? `\nScope: ${scope}` : ""}\nValidation (allowlisted commands only): ${(task.validationCommands ?? []).join(", ") || "none"}${opts?.briefSuffix ? `\n${opts.briefSuffix}` : ""}${previous}`;
     const coord = await this.requireCoordinatorInstance(task.runId);
     let instanceId: string;
+    // Reintento sobre el MISMO worktree (conserva parciales; §H). Sin worktree: legacy.
+    let retryWorktreeId: string | undefined;
+    const wts = this.worktrees?.();
+    if (task.agentRole === "implementer" && wts) {
+      const recovered = await wts.recoverForRetry(taskId, attempt).catch(() => undefined);
+      if (recovered?.ok) retryWorktreeId = recovered.worktreeId;
+    }
     try {
       const spawned = await this.agents().spawn({
         parentInstanceId: coord,
@@ -501,8 +518,14 @@ export class TaskManager {
         brief,
         mode: "background",
         directoryId: opts?.directoryId,
+        taskId,
+        worktreeId: retryWorktreeId,
+        reviewTargetTaskId: task.agentRole === "reviewer" ? task.reviewTargetTaskId : undefined,
       });
       instanceId = spawned.instanceId;
+      if (retryWorktreeId && wts) {
+        await wts.markRunning(retryWorktreeId, instanceId).catch(() => undefined);
+      }
     } catch (error) {
       await this.db.batch([
         { sql: "UPDATE task_attempts SET status = 'failed', error_message = ?, completed_at = ? WHERE task_id = ? AND attempt = ?", params: [error instanceof Error ? error.message.slice(0, 2000) : String(error).slice(0, 2000), now(), taskId, attempt] },

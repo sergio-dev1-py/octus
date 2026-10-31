@@ -13,6 +13,7 @@ import { normalizePath, now } from "../util.js";
 import type { AgentRegistry } from "../agents/agent-registry.js";
 import type { DirectoryRegistry } from "../orchestration/directory-registry.js";
 import type { AgentManager } from "../orchestration/agent-manager.js";
+import type { WorktreeManager } from "../worktrees/worktree-manager.js";
 import { cascadeCancelSet, isDependencySatisfied, orderTasks } from "./task-graph.js";
 import { deserializeTask, type RoleLimits, type TaskManager } from "./task-manager.js";
 
@@ -72,6 +73,7 @@ export class TaskScheduler {
     private readonly getRoleLimits: () => RoleLimits,
     private readonly getSchedulerConfig: () => { maxAttemptsPerTask: number; backoffBaseMs: number },
     private readonly getGlobalLimits: () => { maxPerSession: number; maxPerProject: number; maxDepth: number },
+    private readonly worktrees?: () => WorktreeManager,
   ) {}
 
   async tick(filter?: { sessionId?: string }): Promise<Assignment[]> {
@@ -82,16 +84,29 @@ export class TaskScheduler {
 
   private async tickInner(filter?: { sessionId?: string }): Promise<Assignment[]> {
     const assigned: Assignment[] = [];
+    // Oleadas acotadas: asignar → supervisar; si supervise completó intentos,
+    // los dependientes recién desbloqueados se evalúan en la misma pasada
+    // (sin esperar un tick externo que quizá nunca llegue en sesión quieta).
+    // El orden y la equidad de cada oleada son los mismos; 4 oleadas como tope.
+    for (let wave = 0; wave < 4; wave++) {
+      const fresh = await this.assignWave(filter, assigned.length);
+      assigned.push(...fresh);
+      const progressed = await this.supervise(filter?.sessionId);
+      if (!progressed) break;
+    }
+    return assigned;
+  }
+
+  /** Una oleada: promover drafts, ordenar con equidad y asignar (pasos 1–8 + 11). */
+  private async assignWave(filter: { sessionId?: string } | undefined, alreadyAssigned: number): Promise<Assignment[]> {
+    const assigned: Assignment[] = [];
     // Promueve drafts elegibles (incluye reviewer cuyo target ya completó).
     for (const run of await this.runsWithTasks(filter?.sessionId)) {
       await this.promoteDrafts(run.runId);
     }
     // 1. Runs elegibles con trabajo pendiente (ready o blocked re-evaluable).
     const runs = await this.eligibleRuns(filter?.sessionId);
-    if (runs.length === 0) {
-      await this.supervise(filter?.sessionId);
-      return assigned;
-    }
+    if (runs.length === 0) return assigned;
     // 2-3. Orden justo: rotación entre runs, prioridad/desc dentro.
     const ordered = await this.fairOrder(runs);
     for (const run of ordered) {
@@ -106,8 +121,9 @@ export class TaskScheduler {
         }
       }
       // 11. Despertar dependientes: la próxima evaluación los recoge (mismo tick si hay hueco).
+      // El cómputo de capacidad acumula lo asignado en oleadas previas del mismo tick.
       const more = await this.readyTasks(run.runId);
-      if (more.length > 0 && assigned.length < this.totalCapacity()) {
+      if (more.length > 0 && assigned.length + alreadyAssigned < this.totalCapacity()) {
         const next = await this.tryAssign(run, more[0]!);
         if (next) {
           assigned.push(next);
@@ -115,8 +131,6 @@ export class TaskScheduler {
         }
       }
     }
-    // 10. Supervisar ejecuciones en curso.
-    await this.supervise(filter?.sessionId);
     return assigned;
   }
 
@@ -163,6 +177,20 @@ export class TaskScheduler {
       }
       if (this.missingDeps(task, byId, deps).length === 0) {
         await this.tasks().setStatus(task.id, "ready");
+        continue;
+      }
+      // Estructural Etapa 4 (§G): ≥2 predecesores escritores directos exigen
+      // combinar cambios (= merge, Etapa 5). Sin combinación segura, bloqueo
+      // explícito en vez de draft eterno. Re-evaluable si el DAG cambia.
+      if (task.agentRole === "implementer") {
+        const depIds = deps.filter((d) => d.taskId === task.id).map((d) => d.dependsOn);
+        const writers = depIds.filter((id) => byId.get(id)?.agentRole === "implementer");
+        if (writers.length > 1) {
+          await this.tasks().setStatus(task.id, "blocked", {
+            reason: "deps-unavailable",
+            details: { reason: "multiple writer predecessors require a merge (Stage 5); task stays blocked", predecessors: writers },
+          });
+        }
       }
     }
   }
@@ -239,6 +267,8 @@ export class TaskScheduler {
           }
         } else if (reason === "no-capacity") {
           out.push(task); // reintenta adquisición abajo
+        } else if (reason === "no-repository" || reason === "repo-blocked" || reason === "deps-unavailable") {
+          out.push(task); // entorno/dependencias pueden haber cambiado; re-resuelve abajo
         }
       }
     }
@@ -286,6 +316,24 @@ export class TaskScheduler {
     }
   }
 
+  /** Workspace de escritura: worktree gestionado si hay repo git, legacy si no. */
+  private async ensureWorkspace(
+    run: EligibleRun,
+    task: Task,
+  ): Promise<
+    | { ok: true; worktreeId?: string; path?: string }
+    | { ok: false; blockedReason: "no-repository" | "repo-blocked" | "deps-unavailable" | "no-capacity"; details: Record<string, unknown> }
+  > {
+    const wt = this.worktrees?.();
+    if (!wt) return { ok: true };
+    const ensured = await wt.ensureForTask({ projectId: run.projectId, runId: run.runId, taskId: task.id, attempt: task.attempt + 1 });
+    if (!ensured.ok) {
+      if (ensured.blockedReason === "no-repository") return { ok: true };
+      return { ok: false, blockedReason: ensured.blockedReason, details: ensured.details };
+    }
+    return { ok: true, worktreeId: ensured.worktreeId, path: ensured.path };
+  }
+
   /** Intento de asignación atómica (pasos 3–8). Devuelve null si queda bloqueada. */
   private async tryAssign(run: EligibleRun, task: Task): Promise<Assignment | null> {
     const tm = this.tasks();
@@ -305,6 +353,14 @@ export class TaskScheduler {
       await tm.setStatus(task.id, "blocked", { reason: "needs-approval", details: { reason: `coordinator cannot delegate to ${task.agentRole}` } });
       return null;
     }
+    // Reviewer: lee el worktree del target (P2). Sin worktree (legacy) usa el workspace.
+    let reviewTargetWorktreeId: string | undefined;
+    if (task.agentRole === "reviewer" && task.reviewTargetTaskId && this.worktrees) {
+      const targetWt = await this.worktrees().getByTask(task.reviewTargetTaskId).catch(() => undefined);
+      if (targetWt && ["assigned", "running", "suspended", "available", "finished"].includes(targetWt.status)) {
+        reviewTargetWorktreeId = targetWt.id;
+      }
+    }
     // 10b. Sin doble intento activo.
     const activeAttempt = await this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM task_attempts WHERE task_id = ? AND status IN ('pending','running')", [task.id]);
     if ((activeAttempt?.n ?? 0) > 0) return null;
@@ -317,16 +373,32 @@ export class TaskScheduler {
       await tm.setStatus(task.id, "blocked", { reason: "no-capacity", details: { reason: "concurrency limits reached" } });
       return null;
     }
-    // 7. Workspace para escritores.
+    // 7. Workspace para escritores: worktree automático si el proyecto es git (Etapa 4),
+    // camino legacy (directorios registrados) si no lo es.
     let directoryId: string | undefined;
     let scopes: string[] = [];
+    let worktreeId: string | undefined;
     if (task.agentRole === "implementer") {
-      if (!(await this.workspaceResolvable(task))) {
-        await tm.setStatus(task.id, "blocked", { reason: "no-workspace", details: { writeScope: task.writeScope } });
+      const ensured = await this.ensureWorkspace(run, task);
+      if (!ensured.ok) {
+        const reason = ensured.blockedReason === "no-repository" || ensured.blockedReason === "repo-blocked" || ensured.blockedReason === "deps-unavailable"
+          ? ensured.blockedReason
+          : "no-capacity";
+        await tm.setStatus(task.id, "blocked", { reason, details: ensured.details });
         return null;
       }
-      scopes = task.writeScope.map((s) => canonicalizeScope(s, run.sessionDir));
-      directoryId = await this.resolveDirectoryId(run.projectId, run.sessionDir, scopes);
+      if (ensured.worktreeId && ensured.path) {
+        worktreeId = ensured.worktreeId;
+        scopes = [ensured.path];
+        directoryId = undefined;
+      } else {
+        if (!(await this.workspaceResolvable(task))) {
+          await tm.setStatus(task.id, "blocked", { reason: "no-workspace", details: { writeScope: task.writeScope } });
+          return null;
+        }
+        scopes = task.writeScope.map((s) => canonicalizeScope(s, run.sessionDir));
+        directoryId = await this.resolveDirectoryId(run.projectId, run.sessionDir, scopes);
+      }
     }
     // Reservas atómicas: slots + scopes (todo o nada, sin transacciones largas).
     const reservationId = createId("rsv");
@@ -377,9 +449,16 @@ export class TaskScheduler {
         brief,
         mode: "background",
         directoryId,
+        taskId: task.id,
+        worktreeId: worktreeId ?? reviewTargetWorktreeId,
+        reviewTargetTaskId: task.agentRole === "reviewer" ? task.reviewTargetTaskId : undefined,
       });
       const attempt = await tm.startAttempt(task.id, spawned.instanceId);
       await this.db.exec("UPDATE scheduler_reservations SET instance_id = ? WHERE task_id = ? AND attempt = ?", [spawned.instanceId, task.id, attempt]);
+      // markRunning solo para el worktree propio (el reviewer lee el del target sin tomarlo).
+      if (worktreeId && this.worktrees) {
+        await this.worktrees().markRunning(worktreeId, spawned.instanceId).catch(() => undefined);
+      }
       return { taskId: task.id, runId: run.runId, instanceId: spawned.instanceId, attempt, definitionId: task.agentRole, directoryId };
     } catch (error) {
       await this.releaseReservations(task.id, "spawn-failed");
@@ -458,8 +537,9 @@ export class TaskScheduler {
     return row.id;
   }
 
-  /** 9–10. Supervisa ejecuciones: registra resultado, libera reservas, marca runs. */
-  private async supervise(sessionId?: string): Promise<void> {
+  /** 9–10. Supervisa ejecuciones: registra resultado, libera reservas, marca runs. Devuelve true si completó algún intento (hay trabajo nuevo que despertar). */
+  private async supervise(sessionId?: string): Promise<boolean> {
+    let progressed = false;
     const rows = await this.db.query<Record<string, string | number | null>>(
       `SELECT t.* FROM tasks t JOIN runs r ON r.id = t.run_id
        WHERE t.status = 'running' ${sessionId ? "AND r.session_id = ?" : ""}`,
@@ -492,6 +572,33 @@ export class TaskScheduler {
           errorCode: terminal === "completed" ? undefined : "agent_failed",
           errorMessage: message?.slice(0, 2000),
         });
+        progressed = true;
+        // Commit harness del implementer (Etapa 4): fija produced_commit antes de liberar.
+        if (task.agentRole === "implementer" && terminal === "completed" && this.worktrees) {
+          try {
+            const assignment = await this.worktrees().getByTask(task.id);
+            if (assignment) {
+              const sess = await this.db.queryOne<{ directory: string }>(
+                "SELECT s.directory AS directory FROM runs r JOIN sessions s ON s.id = r.session_id WHERE r.id = ?",
+                [task.runId],
+              );
+              await this.worktrees().commitTaskWork(assignment.id, {
+                scopes: task.writeScope,
+                sessionDir: sess ? String(sess.directory) : "",
+                message: `harness: task ${task.id} attempt ${attempt.attempt ?? "?"} (run ${task.runId})`,
+              });
+              await this.worktrees().markFinished(assignment.id);
+            }
+          } catch (err) {
+            // Auditar sin tumbar el run: el error queda en la fila del worktree.
+            const msg = err instanceof Error ? err.message.slice(0, 500) : String(err).slice(0, 500);
+            await this.db.exec("UPDATE worktrees SET error = ?, updated_at = ? WHERE task_id = ?", [msg, now(), task.id]).catch(() => undefined);
+          }
+        } else if (task.agentRole === "implementer" && terminal !== "completed" && this.worktrees) {
+          // Fallo/cancelación: liberar para reintento (conserva parciales).
+          const assignment = await this.worktrees().getByTask(task.id).catch(() => undefined);
+          if (assignment) await this.worktrees().releaseWorktree(assignment.id, `attempt-${terminal}`).catch(() => undefined);
+        }
         await this.releaseReservations(task.id, `attempt-${terminal}`);
         if (task.agentRole === "reviewer" && terminal === "completed") {
           await this.tasks().recordProgress(task.id, "result", "Review delivery ready; awaiting explicit recordReview verdict.");
@@ -499,6 +606,7 @@ export class TaskScheduler {
         await this.finishRunIfDone(task.runId);
       }
     }
+    return progressed;
   }
 
   private async releaseReservations(taskId: string, reason: string): Promise<void> {

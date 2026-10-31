@@ -15,6 +15,7 @@ import type { ModelRouter } from "../providers/model-router.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import { sameOrInside } from "../tools/path-scope.js";
 import type { AgentDelivery, AgentStatusView, AgentToolService, SpawnMode, SpawnRequest, SpawnResult } from "../tools/tool-services.js";
+import type { WorktreePort } from "../worktrees/worktree-port.js";
 import { now } from "../util.js";
 import { DirectoryRegistry } from "./directory-registry.js";
 
@@ -50,6 +51,7 @@ export class AgentManager implements AgentToolService {
     private readonly directories: DirectoryRegistry,
     private readonly getLimits: () => AgentLimits,
     private readonly onStream: (event: StreamEvent) => void,
+    private readonly worktrees?: () => WorktreePort | undefined,
   ) {}
 
   // ------------------------------------------------------------------ spawn
@@ -68,12 +70,12 @@ export class AgentManager implements AgentToolService {
     }
     await this.checkConcurrency(parent.sessionId, parent.projectId);
     const model = this.resolveModel(request.model, definition.defaultModel);
-    const assignment = await this.resolveDirectory(parent, definition.kind, request.directoryId);
+    const assignment = await this.resolveDirectory(parent, definition.kind, request.directoryId, request.worktreeId, request.taskId, request.reviewTargetTaskId);
     const instanceId = createId("ins");
     const timestamp = now();
     const snapshot = snapshotOf(definition);
     await this.db.exec(
-      "INSERT INTO agent_instances (id, session_id, run_id, definition_id, parent_instance_id, status, model, directory, definition_version, prompt_hash, definition_snapshot, assigned_directory_id, instance_rules, task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO agent_instances (id, session_id, run_id, definition_id, parent_instance_id, status, model, directory, definition_version, prompt_hash, definition_snapshot, assigned_directory_id, instance_rules, task_id, worktree_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         instanceId,
         parent.sessionId,
@@ -88,6 +90,7 @@ export class AgentManager implements AgentToolService {
         assignment.directoryId,
         JSON.stringify(assignment.instanceRules),
         request.taskId ?? null,
+        request.worktreeId ?? null,
         timestamp,
         timestamp,
       ],
@@ -370,7 +373,34 @@ export class AgentManager implements AgentToolService {
     parent: { sessionId: string; projectId: string },
     childKind: AgentKind,
     directoryId: string | undefined,
+    worktreeId?: string,
+    taskId?: string,
+    reviewTargetTaskId?: string,
   ): Promise<{ directory: string; directoryId: string | null; instanceRules: Array<{ action: string; resource: string; effect: "allow" | "deny" | "ask" }> }> {
+    // Worktree asignado por el WorktreeManager (Etapa 4): gana sobre directoryId.
+    if (worktreeId) {
+      const port = this.worktrees?.();
+      if (!port) throw new OctusError("invalid_state", "Worktree assignment requested but no WorktreeManager is wired");
+      const assigned = await port.getAssignment(worktreeId);
+      if (!assigned) throw new OctusError("not_found", `Assigned worktree not found: ${worktreeId}`);
+      if (assigned.projectId !== parent.projectId) {
+        throw new OctusError("scope_violation", "Assigned worktree belongs to another project");
+      }
+      const owns = taskId !== undefined && assigned.taskId === taskId;
+      const reviews = childKind === "reviewer" && reviewTargetTaskId !== undefined && assigned.taskId === reviewTargetTaskId;
+      if (!owns && !reviews) {
+        throw new OctusError("scope_violation", "Assigned worktree belongs to another task");
+      }
+      // Implementer: solo el espacio asignado activo. Reviewer: lee el worktree
+      // del target en cualquier estado intacto (finished es lo normal al revisar).
+      const usable = owns
+        ? ["assigned", "running", "suspended"]
+        : ["available", "assigned", "running", "suspended", "finished", "retained"];
+      if (!usable.includes(assigned.status)) {
+        throw new OctusError("invalid_state", `Assigned worktree is ${assigned.status}, not usable for spawn`);
+      }
+      return { directory: assigned.path, directoryId: null, instanceRules: [] };
+    }
     const session = await this.db.queryOne<{ directory: string }>("SELECT directory FROM sessions WHERE id = ?", [parent.sessionId]);
     const sessionDir = session ? String(session.directory) : "";
     if (!directoryId) {
