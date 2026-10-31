@@ -39,10 +39,11 @@ export class MemoryWriter {
   /**
    * Propuesta desde un agente (P1): siempre `proposed`; valida procedencia
    * (el scope pertenece al linaje del agente) y existencia del scope.
+   * Sin agente (acción del usuario en UI): solo existencia del scope.
    * Jamás aprueba ni verifica aquí.
    */
-  async propose(input: ProposeInput, agent: AgentProvenance): Promise<MemoryItem> {
-    await this.checkProvenance(input.scope, input.scopeId, agent);
+  async propose(input: ProposeInput, agent?: AgentProvenance): Promise<MemoryItem> {
+    if (agent) await this.checkProvenance(input.scope, input.scopeId, agent);
     await this.memories.requireScopeRow(input.scope, input.scopeId);
     return this.memories.propose(input);
   }

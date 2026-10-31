@@ -1109,6 +1109,41 @@ export class OctusCore {
     return { tasks, worktrees, integrations, previews, promotions, orphanedPlans, memory };
   }
 
+  // ------------------------------------------------- memoria (Etapa 6, P1/P2)
+  /** Lectura de memorias (filtros opcionales por scope/estado/categoría). */
+  async listMemories(filter?: { scope?: "project" | "session" | "run" | "task" | "instance"; scopeId?: string; status?: "proposed" | "verified" | "approved" | "stale" | "superseded" | "rejected" | Array<"proposed" | "verified" | "approved" | "stale" | "superseded" | "rejected">; category?: string }) {
+    return this.memory.list(filter ?? {});
+  }
+
+  async getMemory(id: string) {
+    return this.memory.get(id);
+  }
+
+  /** Propuesta explícita (UI/usuario u otro flujo con procedencia verificada). */
+  async proposeMemory(input: { scope: "project" | "session" | "run" | "task" | "instance"; scopeId: string; category: string; topic: string; content: string; source: string; originRef?: { path?: string; section?: string; commit?: string; contentHash?: string }; confidence?: "low" | "medium" | "high" }) {
+    return this.memoryWriter.propose(input);
+  }
+
+  /** Validación ordinaria por el usuario (decision/instruction exigen approved). */
+  async validateMemory(id: string) {
+    return this.memoryWriter.decide(id, "verified");
+  }
+
+  /** Decisión explícita del usuario (verified|approved|rejected). */
+  async decideMemory(id: string, decision: "verified" | "approved" | "rejected") {
+    return this.memoryWriter.decide(id, decision);
+  }
+
+  /** Revalidación contra el origen (hash/commit). */
+  async revalidateMemory(id: string) {
+    return this.memoryWriter.revalidate(id);
+  }
+
+  /** Resolución de contradicción: ganadora limpia, resto a stale. */
+  async resolveMemoryConflict(winnerId: string, note?: string) {
+    return this.memoryWriter.resolveConflict(winnerId, note);
+  }
+
   private async cancelSessionTasks(sessionId: string): Promise<void> {
     const tasks = await this.tasks.listTasks({ sessionId });
     for (const task of tasks) {

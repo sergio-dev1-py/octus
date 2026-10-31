@@ -114,6 +114,15 @@ const CHANNELS: IpcChannel[] = [
   "approvals.status",
   "promotions.promote",
   "promotions.status",
+  "memory.list",
+  "memory.get",
+  "memory.propose",
+  "memory.validate",
+  "memory.decide",
+  "memory.revalidate",
+  "memory.resolve",
+  "recovery.status",
+  "recovery.reconcile",
 ];
 
 let mainWindow: BrowserWindow | undefined;
@@ -748,6 +757,75 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     "promotions.status": async (payload) => {
       if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
       return { promotions: await need().listPromotions(payload.integrationId) };
+    },
+    "memory.list": async (payload) => {
+      return { entries: await need().listMemories({ scope: payload.scope, scopeId: payload.scopeId, status: payload.status }) };
+    },
+    "memory.get": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        return { entry: await need().getMemory(payload.id) };
+      } catch (error) {
+        return { entry: undefined as never, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "memory.propose": async (payload) => {
+      if (!isNonEmptyString(payload.scope) || !isNonEmptyString(payload.scopeId) || !isNonEmptyString(payload.category) || !isNonEmptyString(payload.topic) || typeof payload.content !== "string" || !isNonEmptyString(payload.source)) {
+        throw new Error("invalid payload");
+      }
+      try {
+        const entry = await need().proposeMemory({ scope: payload.scope, scopeId: payload.scopeId, category: payload.category, topic: payload.topic, content: payload.content, source: payload.source, originRef: payload.originRef, confidence: payload.confidence });
+        return { ok: true, id: entry.id, status: entry.status };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "memory.validate": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        const entry = await need().validateMemory(payload.id);
+        return { ok: true, status: entry.status };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "memory.decide": async (payload) => {
+      if (!isNonEmptyString(payload.id) || !["verified", "approved", "rejected"].includes(payload.decision)) throw new Error("invalid payload");
+      try {
+        const entry = await need().decideMemory(payload.id, payload.decision);
+        return { ok: true, status: entry.status };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "memory.revalidate": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        const out = await need().revalidateMemory(payload.id);
+        return { ok: true, changed: out.changed, status: out.entry.status, reason: out.reason };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "memory.resolve": async (payload) => {
+      if (!isNonEmptyString(payload.winnerId)) throw new Error("invalid payload");
+      try {
+        const entry = await need().resolveMemoryConflict(payload.winnerId, payload.note);
+        return { ok: true, status: entry.status };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "recovery.status": async () => {
+      return need().recoveryStatus();
+    },
+    "recovery.reconcile": async () => {
+      try {
+        const summary = await need().reconcileRecovery();
+        return { ok: true, summary };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
     },
   };
 }

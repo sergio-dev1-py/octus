@@ -549,6 +549,34 @@ describe("etapa 6.3 — coordinador de recuperación", () => {
   });
 });
 
+describe("etapa 6.4 — wrappers IPC (usuario)", () => {
+  test("propose/validate/decide/revalidate/resolve vía OctusCore", async () => {
+    const t = await makeTestCore();
+    try {
+      const s = await setup(t, "U1");
+      const proposed = await t.core.proposeMemory({ scope: "project", scopeId: s.projectId, category: "fact", topic: "ipc-f", content: "c", source: "user" });
+      expect(proposed.status).toBe("proposed");
+      expect((await t.core.validateMemory(proposed.id)).status).toBe("verified");
+      const dec = await t.core.proposeMemory({ scope: "project", scopeId: s.projectId, category: "decision", topic: "ipc-d", content: "c", source: "user" });
+      await expectRejects(t.core.validateMemory(dec.id), /requires approved/i);
+      expect((await t.core.decideMemory(dec.id, "approved")).status).toBe("approved");
+      const rev = await t.core.revalidateMemory(proposed.id);
+      expect(rev.changed).toBe(false);
+      const listed = await t.core.listMemories({ scope: "project", scopeId: s.projectId });
+      expect(listed.length).toBeGreaterThanOrEqual(2);
+      expect((await t.core.getMemory(dec.id)).topic).toBe("ipc-d");
+      const conflict = await t.core.proposeMemory({ scope: "project", scopeId: s.projectId, category: "decision", topic: "ipc-d", content: "otra", source: "user" });
+      await t.core.decideMemory(conflict.id, "approved");
+      expect((await t.core.getMemory(dec.id)).reviewNote).toMatch(/contradiction/i);
+      const kept = await t.core.resolveMemoryConflict(dec.id, "se mantiene la primera");
+      expect(kept.reviewNote).toBeUndefined();
+      expect((await t.core.getMemory(conflict.id)).status).toBe("stale");
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
+
 describe("etapa 6.2 — selección de memoria (FINAL-1/FINAL-3)", () => {
   let n = 0;
   const item = (over: Partial<import("@octus/shared").MemoryItem>): import("@octus/shared").MemoryItem => {
