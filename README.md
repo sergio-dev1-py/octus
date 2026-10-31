@@ -16,7 +16,7 @@
 
 ---
 
-Octus is a desktop harness for delegating real coding work to specialized AI subagents under a single coordinator — with human-only approvals, per-call usage ledger, and deterministic orchestration. It runs providers live (Meta Responses API, OpenCode Go per-model native protocols) and ships a governed path from **plan → approved revision → task DAG → parallel workers → review → done**.
+Octus is a desktop harness for delegating real coding work to specialized AI subagents under a single coordinator — with human-only approvals, per-call usage ledger, and deterministic orchestration. It runs providers live (Meta Responses API, OpenCode Go per-model native protocols) and ships a governed path from **plan → approved revision → task DAG → parallel workers → review → integrated branch → validated preview → SHA-pinned approval → safe promotion**.
 
 No images yet — the UI exists and boots green; screenshots land once the interface stabilizes.
 
@@ -26,7 +26,7 @@ No images yet — the UI exists and boots green; screenshots land once the inter
 - **One coordinator, two profiles.** A single coordinator works in `plan` (read-only analysis) or `build` (execution) over one continuous session; four worker profiles (`explorer`, `researcher`, `implementer`, `reviewer`) do the work.
 - **Approvals are human-only.** Plans advance only on explicit user approval pinned to exact `(plan_id, revision_id)`. Models can request approval; they can never grant it.
 - **Every provider call is billed on the ledger.** `usage_records` rows per call (tokens, reasoning, cache, cost) plus run/session budgets with warn/block gates. Unconfigured paid calls are refused before leaving the router.
-- **Deterministic scheduler.** Task DAG with cycle detection, dependency ready-gates (`needsReview`), role/session/project concurrency limits with persisted fairness cursor, atomic scope reservations, retries with backoff, and crash reconciliation. No auto worktrees, no auto merges — those belong to later stages.
+- **Deterministic scheduler.** Task DAG with cycle detection, dependency ready-gates (`needsReview`), role/session/project concurrency limits with persisted fairness cursor, atomic scope reservations, retries with backoff, and crash reconciliation. Writers work in harness-managed Git worktrees; multi-writer dependents build on integrated work bases.
 
 ## Project status
 
@@ -38,11 +38,11 @@ Work proceeds in gated stages (ADR-016): a stage only starts after the previous 
 | 1 — Core, persistence, providers, runtime | Single streaming agent, basic tools, SQLite ledger, Meta + Go adapters, budgets | ✅ **Closed 2026-10-31** — 14/14 live checks, 56 core + 1 shared tests green |
 | 2 — Agents, permissions, Plan Manager | Plan/build profiles, 4 worker profiles, foreground/background delegation, isolated dirs, test allowlist, trusted instructions, user-pinned approvals | ✅ Implemented — 110 core + 1 shared green, 15 new live checks after `MODEL_API_KEY` |
 | 3 — Scheduler, tasks, DAG, parallelism | `tasks`/`task_dependencies` migration, TaskGraph, TaskPlanner (internal service), deterministic scheduler, retry/recover, review verdicts, minimal DAG UI | ✅ Implemented — 140 core + 1 shared green; **live matrix A 35/35 PASS** (Meta contributor/xhigh, real plan→DAG→parallel→review→done, per-instance model+usage verified); matrix B **BLOCKED** by model (deepseek-v4.1-flash/max won't emit the planner contract after 12 attempts — product-side transports fixed and verified) |
-| 4 — Git worktrees | Isolated worktree per writer task, base→produced commit traceability | ⬜ Planned |
-| 5 — Integration, validation, preview, approval | Sequential integration, SHA-pinned approval, safe promotion | ⬜ Planned |
+| 4 — Git worktrees | Isolated worktree per writer task, base→produced commit traceability, harness-managed branches | ✅ **Done 2026-10-31** — live matrix A 35/35 PASS (worktree auto-provisioned, reviewer in target worktree, `produced_commit` recorded); `worktrees.test.ts` 21/21; suite 162 core + 1 shared green |
+| 5 — Integration, validation, preview, approval | Sequential integration, assisted conflict resolution, per-SHA validation gates, detached previews, SHA-pinned approval, CAS/fast-forward promotion, no push | ✅ **Done 2026-10-31** — 9/9 feature branches pushed green-gated (`feat/stage5-0-contracts-migration` … `feat/stage5-8-acceptance-docs`); suite 197 core + 1 shared green (`integration.test.ts` 37/37); **live matrix A 45/45 PASS** (auto-build→review→preview reachable→pinned approval→FF promote, run done, no remote) |
 | 6 — Memory, recovery, advanced concurrency | Project/session/run/task memory, long-session robustness | ⬜ Planned |
 
-Details: [`IMPLEMENTATION_ROADMAP.md`](./.harness/implementation/IMPLEMENTATION_ROADMAP.md) · [`STAGE2_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE2_ACCEPTANCE_REPORT.md) · [`STAGE3_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE3_ACCEPTANCE_REPORT.md) · [`DECISIONS.md`](./.harness/implementation/DECISIONS.md) (ADRs 001–042 + implementation findings, incl. 9 real bugs found by tests/live and fixed).
+Details: [`IMPLEMENTATION_ROADMAP.md`](./.harness/implementation/IMPLEMENTATION_ROADMAP.md) · [`STAGE4_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE4_ACCEPTANCE_REPORT.md) · [`STAGE5_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE5_ACCEPTANCE_REPORT.md) (appended by the live runner) · [`DECISIONS.md`](./.harness/implementation/DECISIONS.md) (ADRs 001–062 + implementation findings, incl. real bugs found by tests/live and fixed).
 
 ## Repository layout
 

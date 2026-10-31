@@ -54,12 +54,23 @@ export class PromotionManager {
   async promoteIntegration(integrationId: string): Promise<PromotionResult> {
     const integration = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM integrations WHERE id = ?", [integrationId]);
     if (!integration) throw new OctusError("not_found", `Integration not found: ${integrationId}`);
-    if (String(integration.status) !== "approved") {
+    if (!["approved", "promoted"].includes(String(integration.status))) {
       throw new OctusError("invalid_state", `Integration ${integrationId} is ${String(integration.status)}, not approved`);
     }
     const head = integration.head ? String(integration.head) : undefined;
     if (!head) throw new OctusError("invalid_state", `Integration ${integrationId} has no head to promote`);
     const targetBranch = String(integration.target_branch);
+    // Ya promovida: solo re-verificar que el destino sigue en el head.
+    if (String(integration.status) === "promoted") {
+      const repo = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM repositories WHERE id = ?", [String(integration.repository_id)]);
+      if (!repo) throw new OctusError("not_found", `Repository not found`);
+      const tip = await this.targetTip(String(repo.root_path), targetBranch);
+      if (tip === head) {
+        const prior = await this.db.queryOne<{ id: string }>("SELECT id FROM promotions WHERE integration_id = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1", [integrationId]);
+        return { promotionId: prior ? String(prior.id) : "already-applied", integrationId, newSha: head, targetBranch, reused: true };
+      }
+      throw new OctusError("invalid_state", `Integration ${integrationId} is already promoted but ${targetBranch} moved since (${tip.slice(0, 12)} != ${head.slice(0, 12)})`);
+    }
     // Aprobación vigente (re-verifica SHA, destino, validaciones, preview).
     const approval = await this.db.queryOne<{ id: string }>("SELECT id FROM integration_approvals WHERE integration_id = ? AND candidate_sha = ? AND decision = 'approved'", [integrationId, head]);
     if (!approval) {
@@ -79,11 +90,46 @@ export class PromotionManager {
     const repo = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM repositories WHERE id = ?", [String(integration.repository_id)]);
     if (!repo) throw new OctusError("not_found", `Repository not found`);
     const repoRoot = String(repo.root_path);
-    // Idempotencia: destino ya en el SHA (promoción anterior efectiva).
+    // Idempotencia: destino ya en el SHA (promoción anterior efectiva o el
+    // contenido ya estaba en destino). Convergir: cerrar papeles pendientes
+    // (integración→promoted, run→done) en vez de devolver sin tocar nada —
+    // si no, el run quedaría en integrating para siempre sin vía de salida.
     const tip = await this.targetTip(repoRoot, targetBranch);
     if (tip === head) {
       const prior = await this.db.queryOne<{ id: string }>("SELECT id FROM promotions WHERE integration_id = ? AND approval_id = ? AND status = 'completed'", [integrationId, String(approval.id)]);
-      return { promotionId: prior ? String(prior.id) : "already-applied", integrationId, newSha: head, targetBranch, reused: true };
+      const intStatus = String(integration.status);
+      const runRow = await this.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [String(integration.run_id)]);
+      const runStatus = runRow ? String(runRow.status) : undefined;
+      const timestamp = now();
+      const stmts: Array<{ sql: string; params: unknown[] }> = [];
+      let promotionId: string;
+      if (prior) {
+        promotionId = String(prior.id);
+      } else {
+        promotionId = createId("pr");
+        stmts.push({ sql: "INSERT INTO promotions (id, integration_id, approval_id, target_branch, expected_old_sha, new_sha, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?)", params: [promotionId, integrationId, String(approval.id), targetBranch, tip, head, timestamp, timestamp] });
+        stmts.push({ sql: "INSERT INTO promotion_ops (id, promotion_id, op, status, step, detail, created_at, updated_at) VALUES (?, ?, 'promote', 'done', 'converged-idempotent', ?, ?, ?)", params: [createId("pop"), promotionId, `destination already at ${head.slice(0, 12)}`, timestamp, timestamp] });
+      }
+      if (intStatus !== "promoted") {
+        stmts.push({ sql: "UPDATE integrations SET status = 'promoted', updated_at = ? WHERE id = ?", params: [timestamp, integrationId] });
+      }
+      if (runStatus !== undefined && runStatus !== "done") {
+        stmts.push({ sql: "UPDATE runs SET status = 'done', updated_at = ?, completed_at = ? WHERE id = ?", params: [timestamp, timestamp, String(integration.run_id)] });
+      }
+      if (stmts.length > 0) {
+        await this.db.batch(stmts as Array<{ sql: string; params: import("../persistence/protocol.js").SqlParam[] }>);
+      }
+      if (intStatus !== "promoted") {
+        const completed = await this.events.append({ type: "promotion.completed", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { promotionId, targetBranch, newSha: head, converged: true } });
+        this.bus.publish(completed);
+        const changed = await this.events.append({ type: "integration.status_changed", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { to: "promoted", head, converged: true } });
+        this.bus.publish(changed);
+      }
+      if (runStatus !== undefined && runStatus !== "done") {
+        const runDone = await this.events.append({ type: "run.completed", aggregate: { kind: "run", id: String(integration.run_id) }, correlationId: createId("cor"), payload: { via: "promotion", promotionId, converged: true } });
+        this.bus.publish(runDone);
+      }
+      return { promotionId, integrationId, newSha: head, targetBranch, reused: true };
     }
     const promotionId = createId("pr");
     const opId = createId("pop");
@@ -191,11 +237,17 @@ export class PromotionManager {
       const expectedOld = String(p.expected_old_sha);
       const newSha = String(p.new_sha);
       if (tip === newSha) {
-        // La promoción se completó antes del corte: cerrar el papeleo.
-        await this.db.batch([
+        // La promoción se completó antes del corte: cerrar el papeleo
+        // (incluido el run: si no, el próximo settle lo cancelaría).
+        const runId = String(integration.run_id ?? "");
+        const batchOps: Array<{ sql: string; params: unknown[] }> = [
           { sql: "UPDATE promotions SET status = 'completed', updated_at = ? WHERE id = ?", params: [now(), promotionId] },
           { sql: "UPDATE integrations SET status = 'promoted', updated_at = ? WHERE id = ? AND status <> 'promoted'", params: [now(), integrationId] },
-        ]);
+        ];
+        if (runId) {
+          batchOps.push({ sql: "UPDATE runs SET status = 'done', updated_at = ?, completed_at = ? WHERE id = ? AND status <> 'done'", params: [now(), now(), runId] });
+        }
+        await this.db.batch(batchOps as Array<{ sql: string; params: import("../persistence/protocol.js").SqlParam[] }>);
         const event = await this.events.append({ type: "promotion.completed", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { promotionId, recovered: true } });
         this.bus.publish(event);
         resolved++;

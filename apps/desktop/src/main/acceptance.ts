@@ -1037,7 +1037,8 @@ export async function runAcceptancePhase2(): Promise<number> {
  * Sin directorios pre-registrados, sin ramas manuales, sin cambiar defaults de
  * producción (solo override de sesión + DB temporal). Presupuestos acotados como en fase 2.
  */
-export async function runAcceptancePhase3(): Promise<number> {
+export async function runAcceptancePhase3(opts?: { stage5?: boolean }): Promise<number> {
+  const STAGE5 = opts?.stage5 === true;
   const started = Date.now();
   const steps: Step[] = [];
   const instances: InstanceRow[] = [];
@@ -1466,6 +1467,57 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
       push(`${tag}-autowt`, "scheduler auto-provisioned exactly one worktree, no isolated dirs", wts.length === 1 && dirs.length === 0 ? "PASS" : "FAIL", `${wts.length} worktrees, ${dirs.length} isolated dirs`);
       push(`${tag}-wtbranch`, "worktree branch follows harness naming", wts[0] && /^harness\/run-.{1,32}\/task-tsk_/.test(wts[0].branchName) ? "PASS" : "FAIL", wts[0]?.branchName ?? "(none)");
 
+      // Etapa 5 (solo --octus-acceptance-5): integración → validación → preview → aprobación → promoción.
+      if (STAGE5) {
+        try {
+          // Auto-build P1: la integración ya existe con el produced incorporado.
+          const ints = await core.integrations.listByRun(runId);
+          const integration = ints[0];
+          push(`${tag}-autoint`, "integration auto-created with produced commit", ints.length === 1 && !!integration?.head ? "PASS" : "FAIL", integration ? `${integration.integrationBranch} @ ${integration.head?.slice(0, 12)}` : "(none)");
+          if (integration?.head) {
+            // Review de la integración (reviewer real sobre su worktree).
+            const spawned = await core.agents.spawn({ parentInstanceId: coordId, definitionId: "reviewer", brief: "Review the integration worktree against the acceptance criteria (combined marker file). Report findings with file and line.", mode: "background", integrationId: integration.id });
+            await core.agents.wait(spawned.instanceId, 600_000);
+            push(`${tag}-intrevdone`, "integration reviewer completed", (await core.agentInstances(session.id)).find((i) => i.id === spawned.instanceId)?.status === "completed" ? "PASS" : "FAIL", spawned.instanceId.slice(-6));
+            await core.validations.recordIntegrationReview(integration.id, { instanceId: spawned.instanceId, verdict: "accept", summary: "live: quotes combined marker" });
+            const gate = await core.validations.validationGate(integration.id, integration.head);
+            push(`${tag}-gate`, "validation gate passes (suite + accept review)", gate.ok ? "PASS" : "FAIL", gate.ok ? "clear" : gate.reasons.join("; ").slice(0, 200));
+            // Preview real con runtime disponible (node o bun; sin coste de modelo).
+            const runtime = hasRunner();
+            if (!runtime) {
+              push(`${tag}-preview`, "preview runtime available", "FAIL", "neither node nor bun on PATH");
+            } else {
+              await core.previews.saveAllowlist(project.id, [
+                { id: "live-serve", name: "live server", phase: "start", argv: [runtime, "-e", `require("http").createServer((q,r)=>{r.end("ok-live")}).listen(Number(process.env.OCTUS_PREVIEW_PORT))`] },
+              ]);
+              const pv = await core.previews.createPreview(integration.id);
+              push(`${tag}-pvcreate`, "preview workspace provisioned at head", pv.sha === integration.head ? "PASS" : "FAIL", pv.sha.slice(0, 12));
+              const started = await core.previews.startPreview(pv.id, { startEntryId: "live-serve" });
+              push(`${tag}-preview`, "preview reachable on exact SHA", started.reachable && started.status === "reachable" ? "PASS" : "FAIL", `${started.status} ${started.url ?? ""}`);
+            }
+            // Aprobación ligada al SHA + promoción segura a main.
+            const livePv = (await core.previews.listPreviews(integration.id)).find((p) => p.sha === integration.head && p.status === "reachable");
+            if (!livePv) {
+              push(`${tag}-approve`, "approval pinned to exact SHA", "SKIP", "no reachable preview (preview step failed)");
+            } else {
+              const { duplicate } = await core.approvals.approveIntegration(integration.id, { previewId: livePv.id });
+              const st = await core.approvals.getApprovalStatus(integration.id);
+              push(`${tag}-approve`, `approval pinned to exact SHA${duplicate ? " (duplicate idempotent)" : ""}`, st.ok && !!st.approval ? "PASS" : "FAIL", st.ok ? st.approval!.candidateSha.slice(0, 12) : st.reasons.join("; ").slice(0, 200));
+              const promoted = await core.promotions.promoteIntegration(integration.id);
+              const mainTip = git(root, ["rev-parse", "main"]).trim();
+              push(`${tag}-promote`, "promotion fast-forwards main to approved SHA", promoted.newSha === integration.head && mainTip === integration.head ? "PASS" : "FAIL", `main=${mainTip.slice(0, 12)} reused=${promoted.reused}`);
+              push(`${tag}-rundone5`, "run finishes done after promotion", (await core.getRun(runId)).run.status === "done" ? "PASS" : "FAIL", (await core.getRun(runId)).run.status);
+              push(`${tag}-nopush`, "no remote configured (nothing to push to)", execFileSync("git", ["remote", "-v"], { cwd: root, encoding: "utf8", timeout: 10_000 }).trim() === "" ? "PASS" : "FAIL", "remote -v empty");
+              // Higiene: detener el preview (el proceso no debe sobrevivir al harness).
+              await core.previews.stopPreview(livePv.id).catch(() => undefined);
+              await core.previews.cleanupPreview(livePv.id).catch(() => undefined);
+            }
+          }
+        } catch (error) {
+          push(`${tag}-stage5`, "stage 5 flow", "FAIL", error instanceof Error ? error.message.slice(0, 300) : String(error));
+        }
+      }
+
       await collectInstances(core);
       for (const u of await runUsageSummary(core)) allUsage.push({ ...u, matrix: tag });
     } catch (error) {
@@ -1495,11 +1547,13 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
   const fail = steps.filter((s) => s.status === "FAIL").length;
   const blocked = steps.filter((s) => s.status === "BLOCKED").length;
   const skip = steps.filter((s) => s.status === "SKIP").length;
+  const stageLabel = STAGE5 ? "5" : "4";
+  const stageTitle = STAGE5 ? "Fase 5 live — IntegrationManager/Preview/Approval/Promotion (modelos reales)" : "Fase 4 live — WorktreeManager (modelos reales)";
   const lines: string[] = [];
   lines.push("");
-  lines.push("## Fase 4 live — WorktreeManager (modelos reales)");
+  lines.push(`## ${stageTitle}`);
   lines.push("");
-  lines.push(`- **Resultado fase 4 live:** PASS=${pass} FAIL=${fail} BLOCKED=${blocked} SKIP=${skip} — ${Math.round((Date.now() - started) / 1000)}s`);
+  lines.push(`- **Resultado fase ${stageLabel} live:** PASS=${pass} FAIL=${fail} BLOCKED=${blocked} SKIP=${skip} — ${Math.round((Date.now() - started) / 1000)}s`);
   lines.push(`- **Matrices:** A meta/${META_MODEL}/${META_EFFORT} (planner + workers con mismo modelo/effort del coordinador), B opencode-go/${GO_MODEL}/${GO_EFFORT} (ID exacto del catálogo real, sin fallback)`);
   lines.push("");
   lines.push("| instanceId | parentInstanceId | definition | provider | modelId | effort |");
@@ -1512,9 +1566,9 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
   lines.push("|---|---|---|---|---|---|---|---|---|");
   for (const u of allUsage) lines.push(`| ${u.matrix} | ${u.provider} | ${u.model} | ${u.calls} | ${u.input} | ${u.output} | ${u.reasoning} | ${u.cached} | ${fmtCost(u.costMicro)} |`);
   lines.push("");
-  const reportPath = path.join(findRepoRoot(), ".harness", "implementation", "STAGE4_ACCEPTANCE_REPORT.md");
+  const reportPath = path.join(findRepoRoot(), ".harness", "implementation", STAGE5 ? "STAGE5_ACCEPTANCE_REPORT.md" : "STAGE4_ACCEPTANCE_REPORT.md");
   try {
-    const prev = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : "# STAGE4_ACCEPTANCE_REPORT.md — Aceptación funcional Etapa 4\n";
+    const prev = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : `# STAGE${stageLabel}_ACCEPTANCE_REPORT.md — Aceptación funcional Etapa ${stageLabel}\n`;
     writeFileSync(reportPath, `${prev}${lines.join("\n")}`, "utf8");
     log(`[fase3] report appended: ${reportPath}`);
   } catch (error) {

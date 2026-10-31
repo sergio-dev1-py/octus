@@ -1402,6 +1402,85 @@ describe("etapa 5.7 — IPC/UI/ciclo de vida", () => {
     }
   });
 
+  test("promote con preview reachable deja el run en done", async () => {
+    const exe = process.execPath;
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "PD");
+      await t.core.previews.saveAllowlist(project.id, [
+        { id: "serve", name: "serve", phase: "start", argv: [exe, "-e", `require("http").createServer((q,r)=>{r.end("ok")}).listen(Number(process.env.OCTUS_PREVIEW_PORT))`] },
+      ]);
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-pd", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const spawned = await t.core.agents.spawn({ parentInstanceId: coordId, definitionId: "reviewer", brief: "Review the integration worktree.", mode: "background", integrationId: integration.id });
+        await t.core.agents.wait(spawned.instanceId, 60000);
+        await t.core.validations.recordIntegrationReview(integration.id, { instanceId: spawned.instanceId, verdict: "accept", summary: "test" });
+        const pv = await t.core.previews.createPreview(integration.id);
+        const started = await t.core.previews.startPreview(pv.id, { startEntryId: "serve" });
+        expect(started.reachable).toBe(true);
+        const { duplicate } = await t.core.approvals.approveIntegration(integration.id, { previewId: pv.id });
+        expect(duplicate).toBe(false);
+        const promoted = await t.core.promotions.promoteIntegration(integration.id);
+        expect(promoted.reused).toBe(false);
+        expect((await t.core.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]))!.status).toBe("done");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("promote idempotente converge aunque el destino ya esté en el head", async () => {
+    // Regresión live A3-meta-rundone5: el destino ya contenía el head aprobado
+    // (commit previo en main) y promote devolvía reused sin cerrar nada —
+    // el run quedaba en integrating para siempre. Ahora converge.
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "PC");
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-pc", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const head = (await t.core.integrations.getIntegration(integration.id)).head!;
+        const spawned = await t.core.agents.spawn({ parentInstanceId: coordId, definitionId: "reviewer", brief: "Review the integration worktree.", mode: "background", integrationId: integration.id });
+        await t.core.agents.wait(spawned.instanceId, 60000);
+        await t.core.validations.recordIntegrationReview(integration.id, { instanceId: spawned.instanceId, verdict: "accept", summary: "test" });
+        // Simula el caso live: el destino ya contiene el head ANTES de aprobar
+        // (target observado == head, el gate pasa y promote toma la vía reused).
+        execFileSync("git", ["update-ref", "refs/heads/main", head, git(root, ["rev-parse", "main"]).trim()], { cwd: root, timeout: 30_000, windowsHide: true });
+        await t.core.approvals.approveIntegration(integration.id, { waiverReason: "test: converge path" });
+        const promoted = await t.core.promotions.promoteIntegration(integration.id);
+        expect(promoted.reused).toBe(true);
+        expect((await t.core.integrations.getIntegration(integration.id)).status).toBe("promoted");
+        expect((await t.core.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]))!.status).toBe("done");
+        expect((await t.core.promotions.listByIntegration(integration.id)).filter((p) => p.status === "completed")).toHaveLength(1);
+        // Segunda llamada: puro no-op idempotente, sin duplicar filas.
+        const again = await t.core.promotions.promoteIntegration(integration.id);
+        expect(again.reused).toBe(true);
+        expect((await t.core.promotions.listByIntegration(integration.id))).toHaveLength(1);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("settle: el reinicio conserva runs con integración abierta", async () => {
     const t = await makeTestCore();
     try {

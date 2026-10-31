@@ -432,3 +432,85 @@ Smoke en Electron 45.2.0 / Node 24.22.1 (cierra los pendientes del Hito 0): `nod
 - Matriz A (meta/muse-spark-1.3-contributor/xhigh): **PASS 35/35** en 62 s (`--octus-acceptance-3`, `--user-data-dir=@octus/desktop` para descifrar safeStorage). Flujo: plan→planner real→2 lectoras en 1 tick→implementer en worktree auto-aprovisionado (`harness/run-…/task-…`, sin directorios aislados pre-registrados)→commit harness con `produced_commit`→reviewer corriendo dentro del worktree del target→veredicto accept→run done. Modelos y usage verificados por instancia (25 llamadas, 59662 in / 6471 out).
 - Sin claves visibles: el harness solo registra `meta=true go=true`. Primera ejecución falló con `credential missing` por usar el `userData` de Electron por defecto en vez del perfil real; relanzar con `--user-data-dir="$env:APPDATA\@octus\desktop"` lo resuelve (mismo requisito documentado en Etapa 3).
 - Matriz B no re-ejecutada en Etapa 4 (limitación del modelo documentada en Etapa 3, sin cambios de transporte en esta etapa).
+
+## Hallazgos de validación live (Etapa 4, matriz A con modelos reales)
+
+- Matriz A (meta/muse-spark-1.3-contributor/xhigh): **PASS 35/35** en 62 s (`--octus-acceptance-3`, `--user-data-dir=@octus/desktop` para descifrar safeStorage). Flujo: plan→planner real→2 lectoras en 1 tick→implementer en worktree auto-aprovisionado (`harness/run-…/task-…`, sin directorios aislados pre-registrados)→commit harness con `produced_commit`→reviewer corriendo dentro del worktree del target→veredicto accept→run done. Modelos y usage verificados por instancia (25 llamadas, 59662 in / 6471 out).
+- Sin claves visibles: el harness solo registra `meta=true go=true`. Primera ejecución falló con `credential missing` por usar el `userData` de Electron por defecto en vez del perfil real; relanzar con `--user-data-dir="$env:APPDATA\@octus\desktop"` lo resuelve (mismo requisito documentado en Etapa 3).
+- Matriz B no re-ejecutada en Etapa 4 (limitación del modelo documentada en Etapa 3, sin cambios de transporte en esta etapa).
+
+## ADR-053 — IntegrationManager: interlink branch + worktree, 13 verificaciones, FF/merge
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** `IntegrationManager` (`packages/core/src/integration/integration-manager.ts`) es el único que crea la rama intermedia `harness/integration/run-<runId>` (+`-rN` ante colisión) y su worktree (`<worktrees_root>/integrations/run-<runId>[-a<attempt>]`, ruta canónica validada). `createForRun` es idempotente por run abierto; `incorporateCommit(task, attempt)` exige 13 verificaciones en orden: task existente, produced registrado, mismo proyecto/repo (commit existe en el repo), HEAD del worktree, escritores previos ya incorporados (orden topológico observado, no asumido), diff limitado al write_scope (sin `.git`, sin secretos `isSecretBasename`), y attempt == último completado (sin contenido rancio). Estrategia: contenido→skip (FF implícito), FF posible→`merge --ff-only`, resto→`merge --no-ff` con identidad harness; conflicto→`merge --abort` inmediato (la rama nunca queda con MERGE_HEAD) + fila abierta. `UNIQUE(integration, task, attempt)` hace idempotente la re-incorporación. Sin rebase/squash/cherry-pick (preservan procedencia). `runSuite*` corre al ensamblar (Etapa 5.4).
+- **Consecuencias:** cada commit asentado queda trazado (original/integrated SHA, task, intento, instancia, worktree); ningún SHA entra sin verificación.
+
+## ADR-054 — Work bases para múltiples predecesores escritores (§B)
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** `ensureWorkBaseForTask` (puerto `IntegrationPort`, consumido por `WorktreeManager.resolveBase` cuando hay ≥2 writers) construye la rama `harness/workbase/run-<R>/task-<T>` fusionando los `produced_commit` revisados en orden determinista (FF cuando es ancestro, merge `--no-ff` si no). Idempotente por task con mismos SHAs (`reused`); con predecesores no revisados o sin produced → `blocked/deps-unavailable` re-evaluable; con conflicto → fila abierta + blocked con `{conflict:true}` (el flujo §C la resuelve). `WorktreeManager` deriva el worktree del dependiente desde el tip (`baseSource='workbase:<id>'`); `sweepOrphans` ignora `harness/integration|workbase|resolution/*` (espacios del IntegrationManager). Reconcile marca workbases sin físico como `stale` (el próximo ensure reconstruye: contenido derivado, reproducible).
+- **Consecuencias:** el diamante de escritores de la Etapa 4 (`deps-unavailable` estructural) ahora progresa sin merges a main; la workbase nunca promociona nada por sí sola.
+
+## ADR-055 — Auto-build P1: crear + incorporar + validar sin tick externo
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** con todos los escritores revisados, el Scheduler auto-construye: `buildIntegrationForRun` (create idempotente + incorporate + suite) se invoca desde `finishRunIfDone` (runs git con escritores van a `integrating` en vez de `done`; legacy no-git conserva `done`) y desde un pase `settleIntegratingRuns` al final de cada tick (el veredicto llega por acción explícita fuera de `supervise`; sin este pase el run quedaría en `executing` eternamente). `settleInterrupted` protege runs con integración abierta (`building/conflicted/validating/preview_ready/approved`) y reconcilia tasks→worktrees→integrations→promotions. Nuevo evento `run.status_changed`.
+- **Consecuencias:** preview, aprobación y promoción siguen siendo manuales; el auto-build solo deja el ensamblado validado listo.
+
+## ADR-056 — Resolución asistida de conflictos (§C)
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** `ConflictManager` prepara un worktree de resolución `harness/resolution/<conflictId>` reproduciendo el merge (MERGE_HEAD vive SOLO ahí), spawnea un implementer con selector validado (`resolutionWorkspaceId`, solo implementer, estados open/resolving, sin rutas libres) y brief estricto (solo ficheros del conflicto, prohibido commitear). `finalizeResolution` verifica: merge state intacto (HEAD==ours, MERGE_HEAD==theirs), cambios ⊆ scope (vía `status --porcelain`, que sí ve untracked; `git diff` solo no bastaba — bug real encontrado por tests), sin secretos/`.git`, y fija el merge commit con el harness (padres intactos). `incorporateResolution` verifica padres (M^1==head, M^2==theirs) e integra con FF + fila `resolution`. Reutilización: misma pareja (ours, theirs) ya resuelta y padres aún válidos → sin agente. Sin resolución forzada; sin auto-reset; ramas/worktrees de resolución se conservan para auditoría (`cleanupResolutionWorkspace` explícito).
+- **Consecuencias:** el agente propone, el harness dispone; la rama de integración nunca ve un merge a medias.
+
+## ADR-057 — ValidationService: suite por SHA, skipped explícito, gate antes de aprobar
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** `ValidationService` ejecuta la unión de `validationCommands` de las tasks incorporadas para el SHA exacto, en copia desechable (`TestRunner`, allowlist del proyecto; fuera de la allowlist → `blocked` sin ejecutar, nunca comandos arbitrarios). Idempotente por (integration, sha, kind, entry); `force` borra y re-ejecuta. Sin comandos → fila `suite/skipped` con motivo (P4: skipped ≠ passed, pero no bloquea). Gate: cero failed/blocked/pending/running + review `accept` registrada para ese SHA. La review de integración la registra una acción explícita (`recordIntegrationReview`) que exige instancia reviewer completada corriendo DENTRO del worktree de integración (igualdad de ruta canónica).
+- **Consecuencias:** "suite passed" siempre significa ejecutada y verde sobre el SHA exacto; lo no aplicable queda registrado, no silenciado.
+
+## ADR-058 — PreviewManager: detached sobre el SHA, allowlist, sin sandbox fingido
+
+- **Estado:** Aceptada (propietario, Etapa 5; cierra P-06).
+- **Decisión:** `PreviewManager` provisiona un worktree detached en el SHA exacto (`<worktrees_root>/previews/<id>`), ejecuta fases `install` (secuencial, debe salir 0) y arranca UNA entrada `start` de la allowlist por proyecto (`preview.allowlist`, configurada por el usuario; sin autodetección de package.json — P3). Env por allowlist + `OCTUS_PREVIEW_*` (PORT/HOST/URL/DATA_DIR/SHA) con assert fail-closed anti-secretos; DB de prueba separada (`<dataDir>/previews/<id>`); localhost por convención; puertos dinámicos con sonda TCP; `killTree` al detener; logs acotados (5 MB). Estados `starting/running/reachable/stopped/completed/failed/orphaned`; reconcile marca huérfanos sin matar pids ajenos. Declaración honesta: allowlist + sin secretos + dir separado + localhost NO es un sandbox (línea ADR-018).
+- **Consecuencias:** el preview corresponde al SHA registrado (`shaMatchesHead` verificado en inspección); URL y logs auditables; la app del usuario nunca se ejecuta en su workspace.
+
+## ADR-059 — Aprobación pinneada al SHA con invalidación (P2, P4, P5)
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** `ApprovalService.approveIntegration` exige integración `validating|preview_ready` + gate verde + (preview reachable sobre el head | waiver con motivo explícito). La fila `integration_approvals` es inmutable y pinnea (integration, head, preview|waiver, target_branch, target_sha_observado, hash de validaciones, actor='user', fecha); `UNIQUE(integration, head)`: duplicado idéntico → idempotente; decisión distinta → rebuild. `checkApproval`/`getApprovalStatus` re-verifican todo en vivo (HEAD físico y de fila, destino inmóvil, validaciones sin cambios, preview reachable). Cualquier cambio posterior invalida (evento `approval.invalidated`); la aprobación nunca autoriza una versión nueva. `rejectIntegration` es terminal (run → `rejected`, P2); re-decidir exige rebuild. Waiver prohibido si existe cualquier preview para ese head (P5: no ocultar previews aplicables; borrarlo explícitamente es la vía).
+- **Consecuencias:** aprobar es un acto humano auditable ligado a bytes exactos; el rechazo conserva todo para auditoría sin auto-borrado.
+
+## ADR-060 — PromotionManager: CAS o FF limpio, sin push, reconciliación que determina
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** `promoteIntegration` exige aprobación vigente (re-verificada) e integración `approved`. Pre-cheques: destino resoluble e inmóvil (CAS contra `expectedOldSha`), checkout del destino limpio y sin operaciones git pendientes (nunca stash; si sucio → bloqueo con mensaje accionable), preview/validaciones re-verificadas. Destino checked-out → `merge --ff-only` allí; no checked-out en ningún worktree → `update-ref <target> <new> <old>` atómico; verificación posterior del tip. Journal `promotion_ops`; run `promoting` → `done`. Cero código de push en el producto (test J26 lo audita por grep + `git remote -v` vacío). `markStale` + `rebuildIntegration` (fila nueva attempt+1 con `supersedes`, base fresca) ante destino movido; rejected exige run nuevo. `reconcile()` no repite a ciegas: tip==new → completa el papeleo; tip==old → failed reintentable; otro → diverged + stale.
+- **Consecuencias:** la promoción es segura y recuperable tras cortes; el workspace del usuario nunca se altera en silencio.
+
+## ADR-061 — Superficie IPC/UI de integración: explícita, por run, sin atajos del modelo
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** 37 canales IPC tipados (`integrations.*`, `conflicts.*`, `validations.*`, `previews.*`, `approvals.*`, `promotions.*`) con validación de emisor y de carga en main, wrappers finos en `OctusCore` y sección plegable `IntegrationsSection` por run (commits, validaciones, reviews, conflictos con solicitar/finalizar/incorporar/abortar, preview con start/stop/logs/cleanup, aprobación con waiver o preview reachable, promoción, rebuild, incorporate). Ninguna herramienta de modelo aprueba, registra veredictos, resuelve conflictos ni promueve (extensión de ADR-022). Eventos nuevos re-frescan la sección; `busy` cubre `integrating/promoting`.
+- **Consecuencias:** todo el flujo Etapa 5 es operable y auditable desde la UI sin paneles separados.
+
+## ADR-062 — Task `integrated`: estado terminal de éxito tras asentar
+
+- **Estado:** Aceptada (propietario, Etapa 5).
+- **Decisión:** al asentar su commit (`incorporateCommit` o `incorporateResolution`), la task pasa a `integrated` (transiciones `completed|reviewed → integrated`; `integrated → cancelled` conservada). `integrated` cuenta como éxito en `cascadeCancelSet`, cancela-cascada, `finishRunIfDone` y reconciles; `isDependencySatisfied` y `resolveBase`/workbase la aceptan como predecesor válido (equivale a reviewed + asentado). Sin `integrated`, los dependientes de commits ya asentados se bloquearían para siempre (bug real encontrado por J9/re-suite completa).
+- **Consecuencias:** Plan → Task → Integration trazable por estado, no solo por filas.
+
+## Hallazgos de implementación (Etapa 5)
+
+- `repositories.project_id` UNIQUE con `Promise.all(ensureForTask x2)`: carrera latente (SELECT→INSERT no atómico) que la suite completa expuso como flake; fix con UPSERT `ON CONFLICT DO UPDATE` en `ensureRepositoryRow`.
+- Comparar `rev-parse --show-toplevel` de un worktree con la raíz del repo siempre falla (devuelve el propio worktree): el check "mismo repo" correcto es `commitExists(repoRoot, produced)` + ancestria.
+- `git checkout` con `core.autocrlf` global de Windows rompía los `edit` exactos de los tests: fixtures con `core.autocrlf=false` + `core.eol=lf`.
+- Test 14 de Etapa 4 asumía mensaje "merge (Etapa 5)": con la Etapa 5 implementada el bloqueo dice la causa real (predecesor sin revisar / work base pendiente); mensaje y test actualizados.
+- `resolveBase`/`isDependencySatisfied` no aceptaban `integrated`: tras incorporar A, B (dependiente) quedaba bloqueado para siempre. `integrated` ahora satisface dependencias y sirve de base (equivale a reviewed + asentado).
+- `finalizeResolution` con `git diff` no ve untracked: la validación de scope usa `status --porcelain` (cubre staged+unstaged+untracked); sin esto, un fichero nuevo fuera del scope pasaba.
+- Onda de MERGE_HEAD: el abort pertenece a la rama de integración, jamás al worktree de resolución (el agente necesita el merge a medias + MERGE_HEAD).
+- `startPreview` devolvía `running` aunque el proceso ya hubiera muerto: espera compuesta (salida del proceso o sonda positiva) + relectura del estado antes de responder.
+- FDs del hijo (stdout/stderr pipe) bloqueaban `rm -rf` del tmp en Windows: `destroy()` + `unref()` al detener.
+- Preview sin `startEntryId` elegía la primera entrada `start` por orden de allowlist: los tests la fijan explícita para determinismo.
+- Los conflictos registran task/attempt/instance vía migración 0006 (trazabilidad e idempotencia de la resolución).
+- Orden de checks en `incorporateCommit`: existencia de fila previa e idempotencia primero; el gate de estado admite `building/conflicted/validating` (un `validating` con commit nuevo -p. ej. reintento tardío- debe poder incorporarse).
+- Vía idempotente de `promoteIntegration` no convergía (bug real, encontrado por live A3-meta-rundone5 dos veces 44/45 + espejo unitario): con `tip==head` devolvía `reused` sin cerrar nada — integración quedaba en `approved` y run en `integrating` para siempre, sin vía de salida (cada reintento repetía el early-return). Causa live: el deliverable ya estaba commiteado en main antes de aprovisionar el worktree (base==produced; el modelo real con permisos auto-aprobados del harness escribió/commiteó en el root de sesión) — flujo válido que la vía idempotente debe absorber. Fix: la rama `tip==head` ahora converge (fila promotion completed si falta, integración→promoted, run→done + eventos, solo transiciones pendientes); `promoted` + reintento con tip==head es no-op puro; `reconcile` tip==newSha también completa el run (si no, el próximo settle lo cancelaría). Test: "promote idempotente converge aunque el destino ya esté en el head".

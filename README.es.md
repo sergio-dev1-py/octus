@@ -16,7 +16,7 @@
 
 ---
 
-Octus es un harness de escritorio para delegar trabajo real de programación a subagentes de IA especializados bajo un único coordinador — con aprobaciones exclusivamente humanas, registro de uso por llamada y orquestación determinista. Ejecuta proveedores en vivo (API Responses de Meta, protocolos nativos por modelo de OpenCode Go) y ofrece un camino gobernado de **plan → revisión aprobada → DAG de tareas → workers en paralelo → revisión → done**.
+Octus es un harness de escritorio para delegar trabajo real de programación a subagentes de IA especializados bajo un único coordinador — con aprobaciones exclusivamente humanas, registro de uso por llamada y orquestación determinista. Ejecuta proveedores en vivo (API Responses de Meta, protocolos nativos por modelo de OpenCode Go) y ofrece un camino gobernado de **plan → revisión aprobada → DAG de tareas → workers en paralelo → revisión → rama integrada → preview validado → aprobación fijada a SHA → promoción segura**.
 
 Aún sin imágenes — la UI existe y arranca en verde; las capturas llegarán cuando la interfaz se estabilice.
 
@@ -26,7 +26,7 @@ Aún sin imágenes — la UI existe y arranca en verde; las capturas llegarán c
 - **Un coordinador, dos perfiles.** Un único coordinador trabaja en `plan` (análisis de solo lectura) o `build` (ejecución) sobre una misma sesión continua; cuatro perfiles worker (`explorer`, `researcher`, `implementer`, `reviewer`) hacen el trabajo.
 - **Aprobaciones solo humanas.** Los planes solo avanzan con aprobación explícita del usuario fijada a `(plan_id, revision_id)` exactos. Los modelos pueden pedir aprobación; jamás concederla.
 - **Cada llamada al proveedor queda registrada.** Filas de `usage_records` por llamada (tokens, razonamiento, caché, coste) más presupuestos por run/sesión con puertas de aviso/bloqueo. Las llamadas de pago sin configurar se rechazan antes de salir del router.
-- **Scheduler determinista.** DAG de tareas con detección de ciclos, puertas de dependencias (`needsReview`), límites de concurrencia por rol/sesión/proyecto con cursor de equidad persistido, reservas atómicas de ámbitos, reintentos con backoff y reconciliación tras caídas. Sin worktrees automáticos ni merges automáticos — eso es de etapas posteriores.
+- **Scheduler determinista.** DAG de tareas con detección de ciclos, puertas de dependencias (`needsReview`), límites de concurrencia por rol/sesión/proyecto con cursor de equidad persistido, reservas atómicas de ámbitos, reintentos con backoff y reconciliación tras caídas. Los escritores trabajan en worktrees gestionados por el harness; los dependientes multi-escritor parten de work bases integradas.
 
 ## Estado del proyecto
 
@@ -38,11 +38,11 @@ Se avanza por etapas con puerta (ADR-016): una etapa solo empieza cuando la ante
 | 1 — Núcleo, persistencia, proveedores y runtime | Agente único en streaming, herramientas básicas, ledger SQLite, adaptadores Meta + Go, presupuestos | ✅ **Cerrada 2026-10-31** — 14/14 checks live, 56 tests core + 1 shared en verde |
 | 2 — Agentes, permisos y Plan Manager | Perfiles plan/build, 4 perfiles worker, delegación foreground/background, directorios aislados, allowlist de tests, instrucciones confiables, aprobaciones fijadas al usuario | ✅ Implementada — 110 core + 1 shared en verde, 15 checks live nuevos tras `MODEL_API_KEY` |
 | 3 — Scheduler, tareas, DAG y paralelismo | Migración `tasks`/`task_dependencies`, TaskGraph, TaskPlanner (servicio interno), scheduler determinista, retry/recover, veredictos de revisión, UI DAG mínima | ✅ Implementada — 140 core + 1 shared en verde; **live matriz A 35/35 PASS** (Meta contributor/xhigh, plan→DAG→paralelo→revisión→done reales, modelo+uso verificados por instancia); matriz B **BLOCKED** por el modelo (deepseek-v4.1-flash/max no emite el contrato del planner tras 12 intentos — no es bug de producto) |
-| 4 — Git worktrees | Worktree aislado por tarea escritora, trazabilidad base→commit producido | ⬜ Planificada |
-| 5 — Integración, validación, preview, aprobación | Integración secuencial, aprobación fijada a SHA, promoción segura | ⬜ Planificada |
+| 4 — Git worktrees | Worktree aislado por tarea escritora, trazabilidad base→commit producido, ramas gestionadas | ✅ **Hecha 2026-10-31** — live matriz A 35/35 PASS (worktree auto-aprovisionado, reviewer en el worktree del target, `produced_commit` registrado); `worktrees.test.ts` 21/21; suite 162 core + 1 shared en verde |
+| 5 — Integración, validación, preview, aprobación | Integración secuencial, resolución asistida de conflictos, gates de validación por SHA, previews desechables, aprobación fijada a SHA, promoción CAS/fast-forward, sin push | ✅ **Hecha 2026-10-31** — 9/9 ramas subidas en verde (`feat/stage5-0-contracts-migration` … `feat/stage5-8-acceptance-docs`); suite 197 core + 1 shared en verde (`integration.test.ts` 37/37); **live matriz A 45/45 PASS** (auto-build→review→preview reachable→aprobación fijada→promoción FF, run done, sin remoto) |
 | 6 — Memoria, recuperación, concurrencia avanzada | Memoria por proyecto/sesión/run/task, robustez en sesiones largas | ⬜ Planificada |
 
-Detalles: [`IMPLEMENTATION_ROADMAP.md`](./.harness/implementation/IMPLEMENTATION_ROADMAP.md) · [`STAGE2_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE2_ACCEPTANCE_REPORT.md) · [`STAGE3_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE3_ACCEPTANCE_REPORT.md) · [`DECISIONS.md`](./.harness/implementation/DECISIONS.md) (ADRs 001–042 + hallazgos, incl. 9 bugs reales encontrados por tests/live y corregidos).
+Detalles: [`IMPLEMENTATION_ROADMAP.md`](./.harness/implementation/IMPLEMENTATION_ROADMAP.md) · [`STAGE4_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE4_ACCEPTANCE_REPORT.md) · [`STAGE5_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE5_ACCEPTANCE_REPORT.md) (lo añade el corredor live) · [`DECISIONS.md`](./.harness/implementation/DECISIONS.md) (ADRs 001–062 + hallazgos, incl. bugs reales encontrados por tests/live y corregidos).
 
 ## Estructura del repositorio
 
