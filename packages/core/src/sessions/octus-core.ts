@@ -54,6 +54,9 @@ import { PreviewManager } from "../integration/preview-manager.js";
 import { ApprovalService } from "../integration/approval-service.js";
 import { PromotionManager } from "../integration/promotion-manager.js";
 import { ConflictManager } from "../integration/conflict-manager.js";
+import { MemoryService } from "../memory/memory-service.js";
+import { MemoryWriter } from "../memory/memory-writer.js";
+import { MEMORY_TOOLS } from "../memory/memory-tools.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
 import { MetaAdapter } from "../providers/meta-adapter.js";
@@ -120,6 +123,8 @@ export class OctusCore {
   readonly approvals: ApprovalService;
   readonly promotions: PromotionManager;
   readonly conflicts: ConflictManager;
+  readonly memory: MemoryService;
+  readonly memoryWriter: MemoryWriter;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -190,7 +195,7 @@ export class OctusCore {
           return { definitionTools: def?.tools ?? [], deniedTools: def?.deniedTools ?? [], definitionRules: def?.permissionRules ?? [], instanceRules };
         },
       },
-      STAGE1_TOOLS.concat(WEB_TOOLS, GIT_TOOLS, TEST_TOOLS, PLAN_TOOLS, AGENT_TOOLS, TASK_TOOLS),
+      STAGE1_TOOLS.concat(WEB_TOOLS, GIT_TOOLS, TEST_TOOLS, PLAN_TOOLS, AGENT_TOOLS, TASK_TOOLS, MEMORY_TOOLS),
     );
     this.plans = new PlanManager(db, this.events, this.bus);
     this.directories = new DirectoryRegistry(db);
@@ -221,9 +226,21 @@ export class OctusCore {
       () => this.conflicts,
       () => this.integrations,
     );
+    this.memory = new MemoryService(db, this.events, this.bus);
+    this.memoryWriter = new MemoryWriter(this.memory, this.questions);
     toolServices.agents = this.agents;
     toolServices.plans = this.plans;
     toolServices.tests = this.tests;
+    toolServices.memory = {
+      propose: async (input, agent) => {
+        const entry = await this.memoryWriter.propose(input, agent);
+        return { id: entry.id, status: entry.status, scope: entry.scope, category: entry.category, topic: entry.topic };
+      },
+      validate: async (id, coordinatorInstanceId) => {
+        const entry = await this.memoryWriter.validate(id, coordinatorInstanceId);
+        return { id: entry.id, status: entry.status };
+      },
+    };
     this.tasks = new TaskManager(
       db,
       this.events,

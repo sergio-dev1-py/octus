@@ -21,6 +21,7 @@ tools:
   - git_diff
   - git_stage
   - git_commit
+  - memory_propose
 deniedTools:
   - delegate
   - websearch

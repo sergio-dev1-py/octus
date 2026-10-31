@@ -17,6 +17,7 @@ tools:
   - git_diff
   - test_run
   - question
+  - memory_propose
 deniedTools:
   - write
   - edit

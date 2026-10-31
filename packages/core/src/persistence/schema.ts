@@ -795,13 +795,14 @@ BEGIN
     WHEN NEW.version IS NOT OLD.version THEN RAISE(ABORT, 'memory_entries.version is immutable')
   END;
 END;
--- Gobernanza: transiciones blancas de estado (FINAL-2: verified→stale permitida).
+-- Gobernanza: transiciones blancas de estado (FINAL-2: verified→stale;
+-- proposed→approved solo vía aprobación explícita del usuario, nunca validate).
 CREATE TRIGGER trg_memory_status_upd BEFORE UPDATE OF status ON memory_entries
 BEGIN
   SELECT CASE
     WHEN OLD.status = NEW.status THEN NULL
-    WHEN OLD.status = 'proposed' AND NEW.status IN ('verified', 'rejected') THEN NULL
-    WHEN OLD.status = 'verified' AND NEW.status IN ('approved', 'rejected', 'stale') THEN NULL
+    WHEN OLD.status = 'proposed' AND NEW.status IN ('verified', 'rejected', 'approved') THEN NULL
+    WHEN OLD.status = 'verified' AND NEW.status IN ('approved', 'rejected', 'stale', 'superseded') THEN NULL
     WHEN OLD.status = 'approved' AND NEW.status IN ('stale', 'superseded') THEN NULL
     WHEN OLD.status = 'stale' AND NEW.status IN ('verified', 'superseded') THEN NULL
     ELSE RAISE(ABORT, 'memory_entries: illegal status transition')

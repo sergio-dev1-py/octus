@@ -30,6 +30,8 @@ tools:
   - plan.list
   - plan_tasks
   - record_review
+  - memory_propose
+  - memory_validate
 deniedTools: []
 permissionRules: []
 deliveryFormat: |

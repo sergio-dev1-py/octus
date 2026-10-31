@@ -55,7 +55,7 @@ Rules:
 - Output ONLY a JSON object: {"tasks":[{tempId,title,description,agentRole,priority,dependencies,acceptanceCriteria,requiredTools,writeScope,validationCommands,needsReview,reviewTargetTempId?,estimatedComplexity?}]}.
 - agentRole is one of explorer|researcher|implementer|reviewer. implementer tasks MUST set needsReview=true; reviewer tasks MUST set reviewTargetTempId to the tempId of the task they review and needsReview=false.
 - dependencies reference tempIds within this proposal only, with no cycles and no self-dependencies. Reviewer tasks must NOT declare dependencies at all: their ordering comes exclusively from reviewTargetTempId (a dependency on a task requiring review would deadlock the DAG and is rejected).
-- requiredTools must be basic tools the role plausibly has (read, glob, grep, write, edit, shell, git_status, git_diff, git_stage, git_commit, websearch, webfetch, test_run, question). Never invent tools.
+- requiredTools must be basic tools the role plausibly has (read, glob, grep, write, edit, shell, git_status, git_diff, git_stage, git_commit, websearch, webfetch, test_run, question, memory_propose). Never invent tools. memory_propose lets any worker propose a provisional memory entry (governance decides the rest).
 - writeScope lists workspace-relative directories the task writes; only for implementer tasks.
 - validationCommands must name project test commands (leave empty when unknown).
 - Every task needs concrete acceptance criteria with verifiable evidence.
