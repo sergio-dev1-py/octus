@@ -1035,6 +1035,319 @@ describe("etapa 5.5 — preview (J12–J16)", () => {
     }
   });
 });
+describe("etapa 5.6 — aprobación y promoción (J17–J26)", () => {
+  /** Flujo completo hasta aprobado (con waiver; sin preview). */
+  async function settleAndApprove(
+    t: TestCore,
+    sessionId: string,
+    runId: string,
+    coordId: string,
+    pairs: Array<{ writer: string; reviewer: string }>,
+  ): Promise<{ integrationId: string; head: string }> {
+    await settlePairs(t, sessionId, pairs);
+    await untilAutoBuilt(t, sessionId, runId, pairs.length);
+    const integration = (await t.core.integrations.listByRun(runId))[0]!;
+    const head = (await t.core.integrations.getIntegration(integration.id)).head!;
+    const spawned = await t.core.agents.spawn({ parentInstanceId: coordId, definitionId: "reviewer", brief: "Review the integration worktree for defects. Report findings.", mode: "background", integrationId: integration.id });
+    await t.core.agents.wait(spawned.instanceId, 60000);
+    await t.core.validations.recordIntegrationReview(integration.id, { instanceId: spawned.instanceId, verdict: "accept", summary: "test accept" });
+    await t.core.approvals.approveIntegration(integration.id, { waiverReason: "test: library change, no server to preview" });
+    return { integrationId: integration.id, head };
+  }
+
+  test("J17: aprobación pinneada al SHA exacto con actor y hash", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "AP");
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-ap", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        const { integrationId, head } = await settleAndApprove(t, session.id, runId, coordId, [{ writer: wId, reviewer: rId }]);
+        const rows = await t.core.approvals.listApprovals(integrationId);
+        expect(rows).toHaveLength(1);
+        const ap = rows[0]!;
+        expect(ap.candidateSha).toBe(head);
+        expect(ap.decision).toBe("approved");
+        expect(ap.actor).toBe("user");
+        expect(ap.targetBranch).toBe("main");
+        expect(ap.targetShaObserved).toHaveLength(40);
+        expect(ap.validationsHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(ap.grantedAt).toBeGreaterThan(0);
+        expect((await t.core.integrations.getIntegration(integrationId)).status).toBe("approved");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J18: cambio del SHA tras aprobar invalida; promover se niega", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "M8");
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-m8", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        const { integrationId, head } = await settleAndApprove(t, session.id, runId, coordId, [{ writer: wId, reviewer: rId }]);
+        // Deriva simulada: commit directo en el worktree de integración.
+        const intPath = (await t.core.integrations.getIntegration(integrationId)).canonicalPath;
+        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "--no-verify", "-m", "drift"], { cwd: intPath, timeout: 30_000, windowsHide: true });
+        const status = await t.core.approvals.getApprovalStatus(integrationId);
+        expect(status.ok).toBe(false);
+        expect(status.reasons.join(";")).toMatch(/moved/i);
+        await expectRejects(t.core.promotions.promoteIntegration(integrationId), /no longer valid|moved/i);
+        // La integración conserva todo para auditoría (rama, commits, aprobación).
+        const kept = await t.core.integrations.getIntegration(integrationId);
+        expect(kept.status).toBe("approved");
+        expect((await t.core.integrations.getCommits(integrationId))).toHaveLength(1);
+        expect((await t.core.approvals.listApprovals(integrationId))).toHaveLength(1);
+        void head;
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J20: aprobación duplicada es idempotente; decisión distinta exige rebuild", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "D2");
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-d2", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        const { integrationId } = await settleAndApprove(t, session.id, runId, coordId, [{ writer: wId, reviewer: rId }]);
+        const again = await t.core.approvals.approveIntegration(integrationId, { waiverReason: "test: duplicate" });
+        expect(again.duplicate).toBe(true);
+        expect((await t.core.approvals.listApprovals(integrationId))).toHaveLength(1);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J19: destino movido bloquea la promoción (stale) y el rebuild continúa", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "MV");
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-mv", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        const { integrationId } = await settleAndApprove(t, session.id, runId, coordId, [{ writer: wId, reviewer: rId }]);
+        // El destino avanza (commit vacío en main del fixture temporal).
+        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "--no-verify", "-m", "upstream"], { cwd: root, timeout: 30_000, windowsHide: true });
+        await expectRejects(t.core.promotions.promoteIntegration(integrationId), /target branch moved|no longer valid/i);
+        expect((await t.core.integrations.getIntegration(integrationId)).status).toBe("stale");
+        // Rebuild explícito: fila nueva con attempt+1 sobre la base nueva.
+        const rebuilt = await t.core.promotions.rebuildIntegration(integrationId);
+        expect(rebuilt.attempt).toBe(1);
+        const fresh = await t.core.integrations.getIntegration(rebuilt.id);
+        expect(fresh.supersedes).toBe(integrationId);
+        expect(fresh.targetBaseCommit).toBe(git(root, ["rev-parse", "main"]).trim());
+        expect(fresh.status).toBe("building");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J22: interrupción durante la promoción es recuperable sin duplicar", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "RC");
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-rc2", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        const { integrationId, head } = await settleAndApprove(t, session.id, runId, coordId, [{ writer: wId, reviewer: rId }]);
+        const promoted = await t.core.promotions.promoteIntegration(integrationId);
+        expect(promoted.reused).toBe(false);
+        expect(promoted.newSha).toBe(head);
+        expect(git(root, ["rev-parse", "main"]).trim()).toBe(head);
+        // Simula corte tras mover la referencia: vuelve a 'started' + 'approved'.
+        await t.core.db.exec("UPDATE promotions SET status = 'started', updated_at = 1 WHERE id = ?", [promoted.promotionId]);
+        await t.core.db.exec("UPDATE integrations SET status = 'approved', updated_at = 1 WHERE id = ?", [integrationId]);
+        const rec = await t.core.promotions.reconcile();
+        expect(rec.resolved).toBe(1);
+        expect((await t.core.promotions.getPromotion(promoted.promotionId)).status).toBe("completed");
+        expect((await t.core.integrations.getIntegration(integrationId)).status).toBe("promoted");
+        // Idempotencia: segunda pasada no duplica.
+        expect((await t.core.promotions.reconcile()).resolved).toBe(0);
+        expect((await t.core.promotions.listByIntegration(integrationId))).toHaveLength(1);
+        // Divergencia: destino movido por terceros + started → diverged + stale.
+        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "--no-verify", "-m", "third-party"], { cwd: root, timeout: 30_000, windowsHide: true });
+        await t.core.db.exec("UPDATE promotions SET status = 'started', updated_at = 1 WHERE id = ?", [promoted.promotionId]);
+        await t.core.db.exec("UPDATE integrations SET status = 'approved', updated_at = 1 WHERE id = ?", [integrationId]);
+        const rec2 = await t.core.promotions.reconcile();
+        expect(rec2.diverged).toBe(1);
+        expect((await t.core.integrations.getIntegration(integrationId)).status).toBe("stale");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J21: interrupción durante la integración resuelve ops sin duplicar", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "RI");
+      const { runId } = await makeRun(t, session.id);
+      const integration = await t.core.integrations.createForRun({ projectId: project.id, runId });
+      await t.core.db.exec("INSERT INTO integration_ops (id, integration_id, op, status, created_at, updated_at) VALUES ('iop_fake1', ?, 'incorporate', 'started', 1, 1)", [integration.id]);
+      const rec = await t.core.integrations.reconcile();
+      expect(rec.resolved).toBeGreaterThanOrEqual(1);
+      const op = await t.core.db.queryOne<{ status: string }>("SELECT status FROM integration_ops WHERE id = 'iop_fake1'");
+      expect(op!.status).toBe("failed");
+      expect((await t.core.integrations.reconcile()).resolved).toBe(0);
+      await sweepAll(t, project.id, root);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J24a: promoción fast-forward sin checkout (update-ref CAS)", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "UR");
+      git(root, ["branch", "target-b"]);
+      expect(git(root, ["worktree", "list", "--porcelain"]).includes("target-b")).toBe(false);
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-ur", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      // La integración se crea pronto con el destino explícito (el auto-build la reutiliza).
+      const forced = await t.core.integrations.createForRun({ projectId: project.id, runId, targetBranch: "target-b" });
+      expect(forced.targetBranch).toBe("target-b");
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = await t.core.integrations.getIntegration(forced.id);
+        const head = integration.head!;
+        const spawned = await t.core.agents.spawn({ parentInstanceId: coordId, definitionId: "reviewer", brief: "Review the integration worktree for defects. Report findings.", mode: "background", integrationId: integration.id });
+        await t.core.agents.wait(spawned.instanceId, 60000);
+        await t.core.validations.recordIntegrationReview(integration.id, { instanceId: spawned.instanceId, verdict: "accept", summary: "test" });
+        await t.core.approvals.approveIntegration(integration.id, { waiverReason: "test: docs-only change" });
+        const mainBefore = git(root, ["rev-parse", "main"]).trim();
+        const promoted = await t.core.promotions.promoteIntegration(integration.id);
+        expect(promoted.reused).toBe(false);
+        // update-ref: target-b avanza al head sin checkout en ningún sitio.
+        expect(git(root, ["rev-parse", "target-b"]).trim()).toBe(head);
+        expect(git(root, ["worktree", "list", "--porcelain"]).includes("target-b")).toBe(false);
+        // main no se tocó.
+        expect(git(root, ["rev-parse", "main"]).trim()).toBe(mainBefore);
+        expect((await t.core.integrations.getIntegration(integration.id)).status).toBe("promoted");
+        expect((await t.core.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]))!.status).toBe("done");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J24b/c: destino checked-out limpio hace merge; sucio bloquea sin tocar nada (J25)", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "MC");
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-mc", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        const { integrationId, head } = await settleAndApprove(t, session.id, runId, coordId, [{ writer: wId, reviewer: rId }]);
+        // (c) destino sucio: bloqueo explícito, cambios del usuario intactos.
+        writeFileSync(path.join(root, "dirty.txt"), "user work\n");
+        await expectRejects(t.core.promotions.promoteIntegration(integrationId), /pending changes/i);
+        expect(existsSync(path.join(root, "dirty.txt"))).toBe(true);
+        expect((await t.core.integrations.getIntegration(integrationId)).status).toBe("approved");
+        expect(git(root, ["rev-parse", "main"]).trim()).not.toBe(head);
+        // Limpio: merge --ff-only en el checkout existente (J24b + J25).
+        await import("node:fs").then((fs) => fs.rmSync(path.join(root, "dirty.txt")));
+        const promoted = await t.core.promotions.promoteIntegration(integrationId);
+        expect(promoted.reused).toBe(false);
+        expect(git(root, ["rev-parse", "main"]).trim()).toBe(head);
+        expect(readFileSync(path.join(root, "solo-w.txt"), "utf8")).toBe("solo-w\n");
+        expect((await t.core.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]))!.status).toBe("done");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J26: sin push automático (ni código ni remoto)", async () => {
+    const { readFileSync: read } = await import("node:fs");
+    const base = path.join(import.meta.dir, "..", "src", "integration");
+    for (const f of ["integration-manager.ts", "conflict-manager.ts", "validation-service.ts", "preview-manager.ts", "approval-service.ts", "promotion-manager.ts"]) {
+      const text = read(path.join(base, f), "utf8");
+      expect(text).not.toMatch(/\bgit\s+push\b/);
+      expect(text).not.toMatch(/["']push["']/);
+    }
+    const t = await makeTestCore();
+    try {
+      const { root } = await gitProject(t, "NP");
+      expect(execFileSync("git", ["remote", "-v"], { cwd: root, encoding: "utf8", timeout: 30_000, windowsHide: true }).trim()).toBe("");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("settle: el reinicio conserva runs con integración abierta", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session } = await gitProject(t, "RS");
+      const { runId } = await makeRun(t, session.id);
+      const integration = await t.core.integrations.createForRun({ projectId: project.id, runId });
+      expect(integration.status).toBe("building");
+      await t.core.close();
+      const { OctusCore } = await import("../src/sessions/octus-core.js");
+      const { MemorySecretStore } = await import("../src/secrets/secret-store.js");
+      const core2 = await OctusCore.create({ dataDir: path.join(t.dir, "data"), primarySecrets: new MemorySecretStore(), providers: [t.fakeMeta, t.fakeGo] });
+      try {
+        expect((await core2.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]))!.status).toBe("executing");
+        expect((await core2.integrations.getIntegration(integration.id)).status).toBe("building");
+      } finally {
+        await core2.close().catch(() => undefined);
+      }
+    } finally {
+      await t.cleanup().catch(() => undefined);
+    }
+  });
+});
 describe("etapa 5.1 — conflicto detectado (anticipa §C)", () => {
   test("merge con conflicto: abort + fila abierta + rama preservada", async () => {
     const t = await makeTestCore({

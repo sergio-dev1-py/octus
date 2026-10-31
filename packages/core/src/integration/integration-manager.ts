@@ -75,7 +75,7 @@ export class IntegrationManager implements IntegrationPort {
    * intermedia + worktree desde el destino observado. Sin efectos en el
    * workspace principal.
    */
-  async createForRun(input: { projectId: string; runId: string; targetBranch?: string }): Promise<Integration> {
+  async createForRun(input: { projectId: string; runId: string; targetBranch?: string }, opts?: { supersedes?: string }): Promise<Integration> {
     const open = await this.db.queryOne<Record<string, string | number | null>>(
       "SELECT * FROM integrations WHERE run_id = ? AND status NOT IN ('rejected','promoted','stale','aborted','failed','invalidated') ORDER BY attempt DESC, created_at DESC LIMIT 1",
       [input.runId],
@@ -96,20 +96,21 @@ export class IntegrationManager implements IntegrationPort {
     const targetBranch = input.targetBranch ?? (await this.repos.getCurrentBranch(repoRoot));
     await assertValidBranchName(repoRoot, targetBranch);
     const targetBase = await this.repos.getHead(repoRoot);
+    const existingAttempts = await this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM integrations WHERE run_id = ?", [input.runId]);
+    const attempt = existingAttempts?.n ?? 0;
     const branch = await this.uniqueIntegrationBranch(repoRoot, repoId, input.runId);
     const root = await this.worktrees.effectiveWorktreesRoot(input.projectId);
     if (isUncPath(root)) throw new OctusError("scope_violation", "UNC paths are not allowed for integrations");
-    const candidate = path.join(root, "integrations", `run-${input.runId}`);
+    // Path por intento: el rebuild convive con la fila superseded (UNIQUE).
+    const candidate = path.join(root, "integrations", attempt > 0 ? `run-${input.runId}-a${attempt}` : `run-${input.runId}`);
 
     const id = createId("int");
     const opId = createId("iop");
     const timestamp = now();
-    const existingAttempts = await this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM integrations WHERE run_id = ?", [input.runId]);
-    const attempt = existingAttempts?.n ?? 0;
     await this.db.batch([
       {
-        sql: "INSERT INTO integrations (id, project_id, repository_id, run_id, target_branch, target_base_commit, integration_branch, canonical_path, attempt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?, ?)",
-        params: [id, input.projectId, repoId, input.runId, targetBranch, targetBase, branch, candidate, attempt, timestamp, timestamp],
+        sql: "INSERT INTO integrations (id, project_id, repository_id, run_id, target_branch, target_base_commit, integration_branch, canonical_path, attempt, supersedes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building', ?, ?)",
+        params: [id, input.projectId, repoId, input.runId, targetBranch, targetBase, branch, candidate, attempt, opts?.supersedes ?? null, timestamp, timestamp],
       },
       {
         sql: "INSERT INTO integration_ops (id, integration_id, op, status, step, detail, created_at, updated_at) VALUES (?, ?, 'create', 'started', 'begin', ?, ?, ?)",
@@ -342,7 +343,6 @@ export class IntegrationManager implements IntegrationPort {
   private async runSuiteForHead(integrationId: string): Promise<void> {
     if (!this.validations) return;
     const timestamp = now();
-    await this.db.exec("UPDATE integrations SET status = 'validating', updated_at = ? WHERE id = ? AND status = 'building'", [timestamp, integrationId]);
     try {
       await this.validations.runSuiteValidation(integrationId);
     } catch (error) {

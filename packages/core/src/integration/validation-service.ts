@@ -58,6 +58,8 @@ export class ValidationService {
     if (String(integration.status) === "conflicted") {
       throw new OctusError("invalid_state", `Integration ${integrationId} is conflicted; resolve first`);
     }
+    // La suite marca el inicio de la validación (solo desde building).
+    await this.db.exec("UPDATE integrations SET status = 'validating', updated_at = ? WHERE id = ? AND status = 'building'", [now(), integrationId]);
     if (opts?.force) {
       await this.db.exec("DELETE FROM validations WHERE integration_id = ? AND sha = ?", [integrationId, head]);
     }

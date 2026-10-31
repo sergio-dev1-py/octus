@@ -37,6 +37,11 @@ describe("persistence worker", () => {
       for (const stage5 of ["integrations", "integration_commits", "integration_ops", "work_bases", "integration_conflicts", "conflict_resolutions", "validations", "integration_reviews", "previews", "integration_approvals", "promotions", "promotion_ops"]) {
         expect(names).toContain(stage5);
       }
+      // Migración 0006: vínculo task/attempt/instance en conflictos.
+      const conflictCols = await db.query<{ name: string }>("PRAGMA table_info(integration_conflicts)");
+      for (const col of ["task_id", "attempt", "resolution_instance_id"]) {
+        expect(conflictCols.map((c) => c.name)).toContain(col);
+      }
       const journal = await db.queryOne<{ journal_mode: string }>("PRAGMA journal_mode");
       expect(journal?.journal_mode.toLowerCase()).toBe("wal");
       const fk = await db.queryOne<{ foreign_keys: number }>("PRAGMA foreign_keys");

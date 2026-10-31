@@ -51,6 +51,8 @@ import { WorktreeManager } from "../worktrees/worktree-manager.js";
 import { IntegrationManager } from "../integration/integration-manager.js";
 import { ValidationService } from "../integration/validation-service.js";
 import { PreviewManager } from "../integration/preview-manager.js";
+import { ApprovalService } from "../integration/approval-service.js";
+import { PromotionManager } from "../integration/promotion-manager.js";
 import { ConflictManager } from "../integration/conflict-manager.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
@@ -115,6 +117,8 @@ export class OctusCore {
   readonly integrations: IntegrationManager;
   readonly validations: ValidationService;
   readonly previews: PreviewManager;
+  readonly approvals: ApprovalService;
+  readonly promotions: PromotionManager;
   readonly conflicts: ConflictManager;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
@@ -255,6 +259,8 @@ export class OctusCore {
     );
     this.conflicts = new ConflictManager(db, this.events, this.bus, this.repositories, this.worktrees, () => this.agents, options.dataDir);
     this.previews = new PreviewManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir);
+    this.approvals = new ApprovalService(db, this.events, this.bus, this.validations, this.previews);
+    this.promotions = new PromotionManager(db, this.events, this.bus, this.repositories, this.approvals, () => this.integrations);
     toolServices.tasks = {
       plan: async (input) => {
         const out = await this.planner.planTasks(input.coordinatorInstanceId, input);
@@ -1098,7 +1104,7 @@ export class OctusCore {
   private async settleInterrupted(): Promise<void> {
     const timestamp = now();
     // Etapa 5: los runs con integración abierta sobreviven (su reconcile es propio).
-    const openInt = await this.db.query<{ run_id: string }>("SELECT DISTINCT run_id FROM integrations WHERE status IN ('building','conflicted','validating')").catch(() => [] as Array<{ run_id: string }>);
+    const openInt = await this.db.query<{ run_id: string }>("SELECT DISTINCT run_id FROM integrations WHERE status IN ('building','conflicted','validating','preview_ready','approved')").catch(() => [] as Array<{ run_id: string }>);
     const protectedRuns = new Set((openInt ?? []).map((r) => String(r.run_id)));
     const runs = await this.db.query<{ id: string }>(
       "SELECT id FROM runs WHERE status IN ('planning', 'executing', 'integrating', 'awaiting_approval', 'promoting')",
@@ -1142,6 +1148,7 @@ export class OctusCore {
     await this.tasks.reconcile().catch(() => undefined);
     await this.worktrees.reconcile().catch(() => undefined);
     await this.integrations.reconcile().catch(() => undefined);
+    await this.promotions.reconcile().catch(() => undefined);
     await this.plans.orphanSweep().catch(() => 0);
   }
 }

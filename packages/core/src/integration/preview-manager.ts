@@ -259,6 +259,8 @@ export class PreviewManager {
       await this.db.exec("UPDATE previews SET status = 'reachable', updated_at = ? WHERE id = ?", [now(), previewId]);
       const ready = await this.events.append({ type: "preview.ready", aggregate: { kind: "integration", id: preview.integrationId }, correlationId: createId("cor"), payload: { previewId, url: preview.url, sha: preview.sha } });
       this.bus.publish(ready);
+      // La integración queda lista para aprobación sobre este SHA exacto.
+      await this.db.exec("UPDATE integrations SET status = 'preview_ready', updated_at = ? WHERE id = ? AND status = 'validating' AND head = ?", [now(), preview.integrationId, preview.sha]);
       return { status: "reachable", url: preview.url, pid: final.pid, reachable: true };
     }
     // El proceso pudo terminar durante la sonda (exit≠0 → failed registrado).
@@ -334,6 +336,21 @@ export class PreviewManager {
 
   async getPreviewStatus(previewId: string): Promise<string> {
     return (await this.getPreview(previewId)).status;
+  }
+
+  /**
+   * Re-sondea un preview reachable y actualiza su estado. Para gates que
+   * exigen evidencia viva (aprobación, promoción) en vez de estado guardado.
+   */
+  async verifyReachable(previewId: string): Promise<boolean> {
+    const preview = await this.getPreview(previewId).catch(() => undefined);
+    if (!preview) return false;
+    if (!["running", "reachable"].includes(preview.status)) return false;
+    const reachable = await this.probePort(preview.port, 3000);
+    if (reachable && preview.status === "running") {
+      await this.db.exec("UPDATE previews SET status = 'reachable', updated_at = ? WHERE id = ?", [now(), previewId]);
+    }
+    return reachable;
   }
 
   async getPreviewLogs(previewId: string, tailChars = 50_000): Promise<string> {
