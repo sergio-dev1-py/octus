@@ -730,6 +730,116 @@ describe("etapa 5.3 — resolución asistida (J5/J6)", () => {
     }
   });
 });
+describe("etapa 5.4 — validación (J10/J11)", () => {
+  async function allowlistedExe(t: TestCore, projectId: string): Promise<void> {
+    const exe = process.execPath;
+    await t.core.tests.saveAllowlist(projectId, [
+      { id: "v-pass", name: "pass", argv: [exe, "-e", "process.exit(0)"] },
+      { id: "v-fail", name: "fail", argv: [exe, "-e", "process.exit(1)"] },
+    ]);
+  }
+
+  const IMPLV = (tempId: string, cmds: string[]): PlannedTaskInput => ({ ...IMPL(tempId), validationCommands: cmds });
+
+  test("J10: suite distingue passed/failed; gate bloquea con fallos", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["a", "b"], (key) => ({ name: "write", args: { path: `file-${key}.txt`, content: `content-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "V1");
+      await allowlistedExe(t, project.id);
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-v1", [IMPLV("a", ["v-pass"]), IMPLV("b", ["v-fail"]), REVIEWER_OF("ra", "a"), REVIEWER_OF("rb", "b")]);
+      const [aId, bId, raId, rbId] = dag.taskIds as [string, string, string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: aId, reviewer: raId }, { writer: bId, reviewer: rbId }]);
+        await untilAutoBuilt(t, session.id, runId, 2);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const head = (await t.core.integrations.getIntegration(integration.id)).head!;
+        // La suite corrió sola con el ensamblado (P1): passed + failed, nada parcial.
+        const rows = await t.core.validations.listValidations(integration.id, head);
+        const byEntry = new Map(rows.map((r) => [r.entryId ?? r.kind, r.status]));
+        expect(byEntry.get("v-pass")).toBe("passed");
+        expect(byEntry.get("v-fail")).toBe("failed");
+        expect((await t.core.integrations.getIntegration(integration.id)).status).toBe("validating");
+        const gate = await t.core.validations.validationGate(integration.id, head);
+        expect(gate.ok).toBe(false);
+        expect(gate.reasons.join(";")).toMatch(/failing/);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J11: comando fuera de allowlist queda blocked (nunca se ejecuta)", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "V2");
+      await allowlistedExe(t, project.id);
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-v2", [IMPLV("w", ["v-pass"]), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const head = (await t.core.integrations.getIntegration(integration.id)).head!;
+        expect((await t.core.validations.listValidations(integration.id, head)).map((r) => r.status)).toEqual(["passed"]);
+        // La allowlist cambia después: re-ejecutar no ejecuta nada, marca blocked.
+        await t.core.tests.saveAllowlist(project.id, []);
+        const rerun = await t.core.validations.runSuiteValidation(integration.id, head, { force: true });
+        expect(rerun.map((r) => r.status)).toEqual(["blocked"]);
+        expect((await t.core.validations.validationGate(integration.id, head)).ok).toBe(false);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J11: suite vacía es skipped explícito; el gate exige review accept", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "V3");
+      const { runId, instanceId: coordId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-v3", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const head = (await t.core.integrations.getIntegration(integration.id)).head!;
+        const rows = await t.core.validations.listValidations(integration.id, head);
+        expect(rows.map((r) => [r.kind, r.status])).toEqual([["suite", "skipped"]]);
+        // Sin review accept el gate no pasa (skipped nunca equivale a passed).
+        expect((await t.core.validations.validationGate(integration.id, head)).ok).toBe(false);
+        // Reviewer sobre el worktree de integración + veredicto explícito.
+        const spawned = await t.core.agents.spawn({ parentInstanceId: coordId, definitionId: "reviewer", brief: "Review the integration worktree for defects. Report findings.", mode: "background", integrationId: integration.id });
+        await t.core.agents.wait(spawned.instanceId, 60000);
+        await t.core.validations.recordIntegrationReview(integration.id, { instanceId: spawned.instanceId, verdict: "accept", summary: "test review" });
+        const gate = await t.core.validations.validationGate(integration.id, head);
+        expect(gate).toEqual({ ok: true, reasons: [] });
+        // Negativo: una instancia implementer no puede registrar veredicto.
+        const wAtt = (await t.core.tasks.getAttempts(wId))[0]!;
+        await expectRejects(t.core.validations.recordIntegrationReview(integration.id, { instanceId: wAtt.instanceId!, verdict: "accept" }), /not a reviewer/i);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
 describe("etapa 5.1 — conflicto detectado (anticipa §C)", () => {
   test("merge con conflicto: abort + fila abierta + rama preservada", async () => {
     const t = await makeTestCore({

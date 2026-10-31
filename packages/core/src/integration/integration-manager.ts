@@ -23,7 +23,8 @@ import { assertValidBranchName, runGit } from "../repositories/git-exec.js";
 import type { RepositoryManager } from "../repositories/repository-manager.js";
 import { deserializeTask } from "../tasks/task-manager.js";
 import type { WorktreeManager } from "../worktrees/worktree-manager.js";
-import type { EnsureWorkBaseResult, IntegrationPort, WorkBaseAssignment } from "./integration-port.js";
+import type { ValidationService } from "./validation-service.js";
+import type { EnsureWorkBaseResult, IntegrationPort, IntegrationWorkspace, WorkBaseAssignment } from "./integration-port.js";
 
 export interface IncorporateResult {
   integrationId: string;
@@ -43,6 +44,7 @@ export class IntegrationManager implements IntegrationPort {
     private readonly repos: RepositoryManager,
     private readonly worktrees: WorktreeManager,
     private readonly dataDir: string,
+    private readonly validations?: ValidationService,
   ) {}
 
   // ------------------------------------------------------------------ lectura
@@ -147,7 +149,7 @@ export class IntegrationManager implements IntegrationPort {
    */
   async incorporateCommit(integrationId: string, taskId: string, attempt: number): Promise<IncorporateResult> {
     const integration = await this.getIntegration(integrationId);
-    if (!["building", "conflicted"].includes(integration.status)) {
+    if (!["building", "conflicted", "validating"].includes(integration.status)) {
       throw new OctusError("invalid_state", `Integration ${integrationId} is ${integration.status}, not open for incorporation`);
     }
     const prior = await this.db.queryOne<{ original_sha: string; integrated_sha: string }>(
@@ -327,7 +329,33 @@ export class IntegrationManager implements IntegrationPort {
     const head = (await this.getIntegration(integrationId)).head;
     const event = await this.events.append({ type: "integration.completed", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { commits: out.length, head } });
     this.bus.publish(event);
+    // P1 (Etapa 5): el ensamblado completo ejecuta la suite sobre el head.
+    // Los fallos de infra se auditan; los de tests quedan en filas failed.
+    await this.runSuiteForHead(integrationId).catch(() => undefined);
     return out;
+  }
+
+  /**
+   * Marca validating y ejecuta la suite sobre el head actual. La suite nunca
+   * tumba la incorporación: sus resultados viven en filas por SHA.
+   */
+  private async runSuiteForHead(integrationId: string): Promise<void> {
+    if (!this.validations) return;
+    const timestamp = now();
+    await this.db.exec("UPDATE integrations SET status = 'validating', updated_at = ? WHERE id = ? AND status = 'building'", [timestamp, integrationId]);
+    try {
+      await this.validations.runSuiteValidation(integrationId);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const opId = createId("iop");
+      await this.db.exec("INSERT INTO integration_ops (id, integration_id, op, status, step, detail, created_at, updated_at) VALUES (?, ?, 'validate', 'failed', 'suite infra', ?, ?, ?)", [
+        opId,
+        integrationId,
+        msg.slice(0, 2000),
+        timestamp,
+        now(),
+      ]);
+    }
   }
 
   /** Cierre explícito sin borrar nada (ramas/worktrees/commits preservados). */
@@ -414,6 +442,21 @@ export class IntegrationManager implements IntegrationPort {
       path: String(row.canonical_path),
       status: row.status as WorkBaseStatus,
       reused: true,
+    };
+  }
+
+  /** Puerto consumido por AgentManager: el reviewer lee el worktree de integración. */
+  async getIntegrationWorkspace(integrationId: string): Promise<IntegrationWorkspace | undefined> {
+    const integration = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM integrations WHERE id = ?", [integrationId]).catch(() => null);
+    if (!integration || !["building", "validating"].includes(String(integration.status))) return undefined;
+    const candidate = String(integration.canonical_path);
+    if (!(await this.physicalIntegrationWorkspace(candidate))) return undefined;
+    return {
+      id: integrationId,
+      projectId: String(integration.project_id),
+      path: realpathSync(candidate),
+      branchName: String(integration.integration_branch),
+      status: String(integration.status),
     };
   }
 
@@ -594,6 +637,15 @@ export class IntegrationManager implements IntegrationPort {
       return out.replace(/\/+$/, "");
     };
     return norm(a) === norm(b);
+  }
+
+  private async physicalIntegrationWorkspace(canonicalPath: string): Promise<boolean> {
+    try {
+      const toplevel = realpathSync((await runGit(canonicalPath, ["rev-parse", "--show-toplevel"])).stdout.trim());
+      return this.samePath(toplevel, canonicalPath) || this.samePath(realpathSync(canonicalPath), canonicalPath);
+    } catch {
+      return false;
+    }
   }
 
   // ---------------------------------------------------------------- internas (resto)

@@ -77,6 +77,7 @@ export type PersistedEventType =
   | "integration.conflict_opened"
   | "integration.conflict_resolved"
   | "integration.validated"
+  | "integration.reviewed"
   | "integration.status_changed"
   | "integration.completed"
   | "preview.ready"

@@ -21,6 +21,8 @@ export interface SpawnRequest {
   reviewTargetTaskId?: string;
   /** Workspace de resolución de un conflicto (Etapa 5). Gana sobre directoryId. */
   resolutionWorkspaceId?: string;
+  /** Worktree de integración para revisión (Etapa 5). Gana sobre directoryId. */
+  integrationId?: string;
 }
 
 export interface SpawnResult {

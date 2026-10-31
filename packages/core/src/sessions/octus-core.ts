@@ -49,6 +49,7 @@ import { TaskScheduler } from "../tasks/task-scheduler.js";
 import { RepositoryManager } from "../repositories/repository-manager.js";
 import { WorktreeManager } from "../worktrees/worktree-manager.js";
 import { IntegrationManager } from "../integration/integration-manager.js";
+import { ValidationService } from "../integration/validation-service.js";
 import { ConflictManager } from "../integration/conflict-manager.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
@@ -111,6 +112,7 @@ export class OctusCore {
   readonly repositories: RepositoryManager;
   readonly worktrees: WorktreeManager;
   readonly integrations: IntegrationManager;
+  readonly validations: ValidationService;
   readonly conflicts: ConflictManager;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
@@ -188,8 +190,9 @@ export class OctusCore {
     this.directories = new DirectoryRegistry(db);
     this.repositories = new RepositoryManager(db);
     this.worktrees = new WorktreeManager(db, this.events, this.bus, this.repositories, options.dataDir, () => this.integrations);
-    this.integrations = new IntegrationManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir);
     this.tests = new TestRunner(db);
+    this.validations = new ValidationService(db, this.events, this.bus, this.tests);
+    this.integrations = new IntegrationManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir, this.validations);
     this.runtime = new AgentRuntime(db, this.events, this.bus, this.router, this.gateway, this.context, {
       ...(options.runtimeOptions ?? {}),
       sessionProviders: {
@@ -210,6 +213,7 @@ export class OctusCore {
       (event) => this.streamHandlers.get(event.sessionId)?.(event),
       () => this.worktrees,
       () => this.conflicts,
+      () => this.integrations,
     );
     toolServices.agents = this.agents;
     toolServices.plans = this.plans;
