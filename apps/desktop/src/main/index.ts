@@ -82,6 +82,38 @@ const CHANNELS: IpcChannel[] = [
   "worktrees.cleanup",
   "repos.inspect",
   "repos.setWorktreesRoot",
+  "integrations.create",
+  "integrations.get",
+  "integrations.list",
+  "integrations.rebuild",
+  "integrations.abort",
+  "integrations.incorporate",
+  "integrations.spawnReviewer",
+  "integrations.review",
+  "conflicts.list",
+  "conflicts.get",
+  "conflicts.requestResolution",
+  "conflicts.finalize",
+  "conflicts.incorporate",
+  "conflicts.abort",
+  "conflicts.cleanup",
+  "validations.list",
+  "validations.rerun",
+  "previews.create",
+  "previews.list",
+  "previews.start",
+  "previews.stop",
+  "previews.restart",
+  "previews.inspect",
+  "previews.logs",
+  "previews.cleanup",
+  "previews.allowlist",
+  "previews.saveAllowlist",
+  "approvals.approve",
+  "approvals.reject",
+  "approvals.status",
+  "promotions.promote",
+  "promotions.status",
 ];
 
 let mainWindow: BrowserWindow | undefined;
@@ -468,6 +500,255 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     },
+    "integrations.create": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || !isNonEmptyString(payload.runId)) throw new Error("invalid payload");
+      try {
+        return { integration: await need().createIntegration({ projectId: payload.projectId, runId: payload.runId, targetBranch: payload.targetBranch }) };
+      } catch (error) {
+        return { integration: undefined as never, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "integrations.get": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        return { ...(await need().getIntegration(payload.integrationId)), error: undefined };
+      } catch (error) {
+        return { integration: undefined as never, commits: [], operations: [], error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "integrations.list": async (payload) => {
+      if (!isNonEmptyString(payload.runId)) throw new Error("invalid payload");
+      return { integrations: await need().listRunIntegrations(payload.runId) };
+    },
+    "integrations.rebuild": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const { id, attempt } = await need().rebuildIntegration(payload.integrationId);
+        return { ok: true, id, attempt };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "integrations.abort": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        await need().abortIntegration(payload.integrationId, payload.reason);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "integrations.incorporate": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const { incorporated } = await need().incorporateIntegration(payload.integrationId);
+        return { ok: true, incorporated };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "integrations.spawnReviewer": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const { instanceId } = await need().spawnIntegrationReview(payload.integrationId, payload.brief);
+        return { ok: true, instanceId };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "integrations.review": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId) || !isNonEmptyString(payload.instanceId)) throw new Error("invalid payload");
+      if (payload.verdict !== "accept" && payload.verdict !== "request-changes") throw new Error("invalid payload");
+      try {
+        await need().recordIntegrationReview(payload.integrationId, { instanceId: payload.instanceId, verdict: payload.verdict, summary: payload.summary });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "conflicts.list": async (payload) => {
+      return { conflicts: await need().listIntegrationConflicts({ scope: payload.scope, scopeRef: payload.scopeRef, status: payload.status }) };
+    },
+    "conflicts.get": async (payload) => {
+      if (!isNonEmptyString(payload.conflictId)) throw new Error("invalid payload");
+      try {
+        return { ...(await need().getConflict(payload.conflictId)), error: undefined };
+      } catch (error) {
+        return { conflict: undefined as never, resolutions: [], error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "conflicts.requestResolution": async (payload) => {
+      if (!isNonEmptyString(payload.conflictId)) throw new Error("invalid payload");
+      try {
+        const out = await need().requestConflictResolution(payload.conflictId, { briefSuffix: payload.briefSuffix });
+        return { ok: true, ...out };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "conflicts.finalize": async (payload) => {
+      if (!isNonEmptyString(payload.conflictId) || !isNonEmptyString(payload.instanceId)) throw new Error("invalid payload");
+      try {
+        const { resolutionSha } = await need().finalizeConflictResolution(payload.conflictId, payload.instanceId);
+        return { ok: true, resolutionSha };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "conflicts.incorporate": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId) || !isNonEmptyString(payload.conflictId)) throw new Error("invalid payload");
+      try {
+        const out = await need().incorporateConflictResolution(payload.integrationId, payload.conflictId);
+        return { ok: true, ...out };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "conflicts.abort": async (payload) => {
+      if (!isNonEmptyString(payload.conflictId)) throw new Error("invalid payload");
+      try {
+        await need().abortConflict(payload.conflictId, payload.reason);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "conflicts.cleanup": async (payload) => {
+      if (!isNonEmptyString(payload.conflictId)) throw new Error("invalid payload");
+      try {
+        const { removed } = await need().cleanupConflictResolution(payload.conflictId);
+        return { ok: true, removed };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "validations.list": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      return need().listValidations(payload.integrationId, payload.sha);
+    },
+    "validations.rerun": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const { validations } = await need().rerunValidations(payload.integrationId, payload.sha);
+        return { ok: true, validations };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "previews.create": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const preview = await need().createPreview(payload.integrationId);
+        return { ok: true, preview };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "previews.list": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      return { previews: await need().listPreviews(payload.integrationId) };
+    },
+    "previews.start": async (payload) => {
+      if (!isNonEmptyString(payload.previewId)) throw new Error("invalid payload");
+      try {
+        const out = await need().startPreview(payload.previewId, { startEntryId: payload.startEntryId });
+        return { ok: true, ...out };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "previews.stop": async (payload) => {
+      if (!isNonEmptyString(payload.previewId)) throw new Error("invalid payload");
+      try {
+        const { stopped } = await need().stopPreview(payload.previewId);
+        return { ok: true, stopped };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "previews.restart": async (payload) => {
+      if (!isNonEmptyString(payload.previewId)) throw new Error("invalid payload");
+      try {
+        const out = await need().restartPreview(payload.previewId, { startEntryId: payload.startEntryId });
+        return { ok: true, ...out };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "previews.inspect": async (payload) => {
+      if (!isNonEmptyString(payload.previewId)) throw new Error("invalid payload");
+      try {
+        return { ...(await need().inspectPreview(payload.previewId)), error: undefined };
+      } catch (error) {
+        return { preview: undefined as never, shaMatchesHead: false, reachable: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "previews.logs": async (payload) => {
+      if (!isNonEmptyString(payload.previewId)) throw new Error("invalid payload");
+      return need().getPreviewLogs(payload.previewId, payload.tailChars);
+    },
+    "previews.cleanup": async (payload) => {
+      if (!isNonEmptyString(payload.previewId)) throw new Error("invalid payload");
+      try {
+        const { removed } = await need().cleanupPreview(payload.previewId);
+        return { ok: true, removed };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "previews.allowlist": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      return { entries: await need().previewAllowlist(payload.projectId) };
+    },
+    "previews.saveAllowlist": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || !Array.isArray(payload.entries)) throw new Error("invalid payload");
+      try {
+        const entries = await need().savePreviewAllowlist(payload.projectId, payload.entries);
+        return { ok: true, entries };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "approvals.approve": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const out = await need().approveIntegration(payload.integrationId, { previewId: payload.previewId, waiverReason: payload.waiverReason });
+        return { ok: true, ...out };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "approvals.reject": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const { approvalId } = await need().rejectIntegration(payload.integrationId, payload.reason);
+        return { ok: true, approvalId };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "approvals.status": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const out = await need().approvalStatus(payload.integrationId);
+        return { ok: true, reasons: out.reasons, approval: out.approval };
+      } catch (error) {
+        return { ok: false, reasons: [], error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "promotions.promote": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      try {
+        const out = await need().promoteIntegration(payload.integrationId);
+        return { ok: true, ...out };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "promotions.status": async (payload) => {
+      if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
+      return { promotions: await need().listPromotions(payload.integrationId) };
+    },
   };
 }
 
@@ -641,6 +922,13 @@ async function main(): Promise<void> {
     await app.whenReady();
     const { runAcceptancePhase3 } = await import("./acceptance.js");
     const code = await runAcceptancePhase3();
+    app.exit(code);
+    return;
+  }
+  if (process.argv.includes("--octus-acceptance-5")) {
+    await app.whenReady();
+    const { runAcceptancePhase3 } = await import("./acceptance.js");
+    const code = await runAcceptancePhase3({ stage5: true });
     app.exit(code);
     return;
   }

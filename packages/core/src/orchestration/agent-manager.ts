@@ -16,6 +16,8 @@ import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import { sameOrInside } from "../tools/path-scope.js";
 import type { AgentDelivery, AgentStatusView, AgentToolService, SpawnMode, SpawnRequest, SpawnResult } from "../tools/tool-services.js";
 import type { WorktreePort } from "../worktrees/worktree-port.js";
+import type { IntegrationPort } from "../integration/integration-port.js";
+import type { ResolutionPort } from "../integration/resolution-port.js";
 import { now } from "../util.js";
 import { DirectoryRegistry } from "./directory-registry.js";
 
@@ -52,6 +54,8 @@ export class AgentManager implements AgentToolService {
     private readonly getLimits: () => AgentLimits,
     private readonly onStream: (event: StreamEvent) => void,
     private readonly worktrees?: () => WorktreePort | undefined,
+    private readonly resolutions?: () => ResolutionPort | undefined,
+    private readonly integrations?: () => IntegrationPort | undefined,
   ) {}
 
   // ------------------------------------------------------------------ spawn
@@ -70,7 +74,7 @@ export class AgentManager implements AgentToolService {
     }
     await this.checkConcurrency(parent.sessionId, parent.projectId);
     const model = this.resolveModel(request.model, definition.defaultModel);
-    const assignment = await this.resolveDirectory(parent, definition.kind, request.directoryId, request.worktreeId, request.taskId, request.reviewTargetTaskId);
+    const assignment = await this.resolveDirectory(parent, definition.kind, request.directoryId, request.worktreeId, request.taskId, request.reviewTargetTaskId, request.resolutionWorkspaceId, request.integrationId);
     const instanceId = createId("ins");
     const timestamp = now();
     const snapshot = snapshotOf(definition);
@@ -376,7 +380,43 @@ export class AgentManager implements AgentToolService {
     worktreeId?: string,
     taskId?: string,
     reviewTargetTaskId?: string,
+    resolutionWorkspaceId?: string,
+    integrationId?: string,
   ): Promise<{ directory: string; directoryId: string | null; instanceRules: Array<{ action: string; resource: string; effect: "allow" | "deny" | "ask" }> }> {
+    // Worktree de integración para revisión (Etapa 5): manager-asignado, nunca ruta libre.
+    if (integrationId) {
+      const port = this.integrations?.();
+      if (!port) throw new OctusError("invalid_state", "Integration workspace requested but no IntegrationManager is wired");
+      const ws = await port.getIntegrationWorkspace(integrationId);
+      if (!ws) throw new OctusError("not_found", `Integration workspace not found: ${integrationId}`);
+      if (ws.projectId !== parent.projectId) {
+        throw new OctusError("scope_violation", "Integration workspace belongs to another project");
+      }
+      if (childKind !== "reviewer") {
+        throw new OctusError("scope_violation", "Only a reviewer may read the integration workspace");
+      }
+      if (!["building", "validating"].includes(ws.status)) {
+        throw new OctusError("invalid_state", `Integration workspace is ${ws.status}, not usable for spawn`);
+      }
+      return { directory: ws.path, directoryId: null, instanceRules: [] };
+    }
+    // Workspace de resolución de un conflicto (Etapa 5): manager-asignado, nunca ruta libre.
+    if (resolutionWorkspaceId) {
+      const port = this.resolutions?.();
+      if (!port) throw new OctusError("invalid_state", "Resolution workspace requested but no ConflictManager is wired");
+      const ws = await port.getResolutionWorkspace(resolutionWorkspaceId);
+      if (!ws) throw new OctusError("not_found", `Resolution workspace not found: ${resolutionWorkspaceId}`);
+      if (ws.projectId !== parent.projectId) {
+        throw new OctusError("scope_violation", "Resolution workspace belongs to another project");
+      }
+      if (childKind !== "implementer") {
+        throw new OctusError("scope_violation", "Only an implementer may resolve conflicts");
+      }
+      if (!["open", "resolving"].includes(ws.status)) {
+        throw new OctusError("invalid_state", `Resolution workspace is ${ws.status}, not usable for spawn`);
+      }
+      return { directory: ws.path, directoryId: null, instanceRules: [] };
+    }
     // Worktree asignado por el WorktreeManager (Etapa 4): gana sobre directoryId.
     if (worktreeId) {
       const port = this.worktrees?.();

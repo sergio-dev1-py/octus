@@ -4,24 +4,43 @@ import type { Message, MessagePart } from "@octus/shared";
 import { invoke } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import {
+  abortConflict,
+  abortIntegration,
+  approveIntegration,
   approveRevision,
   archivePlan,
   cancelAgent,
   cancelTask,
+  cleanupConflictResolution,
+  cleanupPreview,
   cleanupWorktree,
+  createPreview,
   createProject,
   createSession,
   decideApproval,
   exportRevision,
+  finalizeConflictResolution,
   implementRevision,
+  incorporateConflictResolution,
+  incorporateIntegration,
   initStore,
+  inspectPreview,
   interrupt,
+  loadPreviewLogs,
+  promoteIntegration,
+  rebuildIntegration,
+  rejectIntegration,
   rejectRevision,
   reloadBudgets,
+  reloadIntegrations,
   reloadProviders,
   reloadWorktrees,
+  requestConflictResolution,
+  restartPreview,
   retryTask,
   reviewTask,
+  rerunValidations,
+  recordIntegrationReview,
   selectProject,
   selectSession,
   sendPrompt,
@@ -29,7 +48,10 @@ import {
   setProfile,
   setView,
   setWorktreesRoot,
+  spawnIntegrationReviewer,
+  startPreview,
   state,
+  stopPreview,
 } from "./store.js";
 
 function PartView(props: { part: MessagePart }) {
@@ -634,6 +656,235 @@ function WorktreesSection() {
   );
 }
 
+function IntegrationsSection() {
+  const [waiver, setWaiver] = createSignal<Record<string, string>>({});
+  const [reviewerInstance, setReviewerInstance] = createSignal<Record<string, string>>({});
+  const active = () => state.integrations.filter((i) => ["building", "conflicted", "validating", "preview_ready", "approved", "promoting"].includes(i.status));
+  return (
+    <details class="stage2">
+      <summary>
+        Integrations ({active().length} active / {state.integrations.length} total)
+      </summary>
+      <Show when={state.integrations.length === 0}>
+        <p class="muted">No integrations yet. Reviewed writer tasks auto-integrate into an intermediate branch.</p>
+      </Show>
+      <For each={state.integrations}>
+        {(integration) => (
+          <div class="card">
+            <div class="row">
+              <code>{integration.integrationBranch}</code>
+              <span class={`pill ${integration.status === "promoted" ? "ok" : integration.status === "failed" || integration.status === "conflicted" ? "err" : integration.status === "stale" ? "err" : "warn"}`}>{integration.status}</span>
+              <span class="muted">attempt {integration.attempt}</span>
+            </div>
+            <p class="muted">
+              run <code>{integration.runId}</code> · target <code>{integration.targetBranch}</code> @ <code>{integration.targetBaseCommit.slice(0, 12)}</code>
+            </p>
+            <Show when={integration.head}>
+              <p class="muted">
+                head <code>{(integration.head as string).slice(0, 12)}</code>
+                <Show when={integration.supersedes}> · supersedes <code>{integration.supersedes}</code></Show>
+              </p>
+            </Show>
+            <Show when={integration.error}>
+              <p class="muted">error: {integration.error}</p>
+            </Show>
+            <Show when={(state.integrationCommits[integration.id] ?? []).length > 0}>
+              <details>
+                <summary>Commits ({(state.integrationCommits[integration.id] ?? []).length})</summary>
+                <ul>
+                  <For each={state.integrationCommits[integration.id] ?? []}>
+                    {(c) => (
+                      <li>
+                        <code>{c.taskId}</code> #{c.attempt} <code>{c.kind}</code> {c.originalSha.slice(0, 8)}→{c.integratedSha.slice(0, 8)}
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </Show>
+            <Show when={(state.integrationValidations[integration.id] ?? []).length > 0}>
+              <details>
+                <summary>Validations ({(state.integrationValidations[integration.id] ?? []).length})</summary>
+                <ul>
+                  <For each={state.integrationValidations[integration.id] ?? []}>
+                    {(v) => (
+                      <li>
+                        <code>{v.kind}{v.entryId ? `:${v.entryId}` : ""}</code> {v.status}
+                        <Show when={v.detail != null}> · {(v.detail as string).slice(0, 160)}</Show>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </Show>
+            <Show when={(state.integrationReviews[integration.id] ?? []).length > 0}>
+              <details>
+                <summary>Reviews ({(state.integrationReviews[integration.id] ?? []).length})</summary>
+                <ul>
+                  <For each={state.integrationReviews[integration.id] ?? []}>
+                    {(r) => (
+                      <li>
+                        <code>{r.verdict}</code> @ {r.sha.slice(0, 8)}
+                        <Show when={r.summary != null}> · {(r.summary as string).slice(0, 160)}</Show>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </Show>
+            <Show when={state.integrationConflicts.filter((c) => c.scopeRef === integration.id).length > 0}>
+              <details open>
+                <summary>Conflicts ({state.integrationConflicts.filter((c) => c.scopeRef === integration.id).length})</summary>
+                <ul>
+                  <For each={state.integrationConflicts.filter((c) => c.scopeRef === integration.id)}>
+                    {(conflict) => (
+                      <li>
+                        <code>{conflict.status}</code> {conflict.files.join(", ")}
+                        <div class="row">
+                          <Show when={conflict.status === "open"}>
+                            <button class="primary" onClick={() => void requestConflictResolution(conflict.id)}>
+                              Request assisted resolution
+                            </button>
+                          </Show>
+                          <Show when={conflict.status === "resolving" && conflict.resolutionInstanceId}>
+                            <button class="primary" onClick={() => void finalizeConflictResolution(conflict.id, conflict.resolutionInstanceId!)}>
+                              Finalize resolution
+                            </button>
+                          </Show>
+                          <Show when={conflict.status === "resolved"}>
+                            <button class="primary" onClick={() => void incorporateConflictResolution(integration.id, conflict.id)}>
+                              Incorporate resolution
+                            </button>
+                            <button onClick={() => void cleanupConflictResolution(conflict.id)}>Clean up workspace</button>
+                          </Show>
+                          <Show when={conflict.status === "open" || conflict.status === "resolving"}>
+                            <button class="danger" onClick={() => void abortConflict(conflict.id)}>
+                              Abort conflict
+                            </button>
+                          </Show>
+                        </div>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </Show>
+            <Show when={(state.previews[integration.id] ?? []).length > 0}>
+              <details>
+                <summary>Previews ({(state.previews[integration.id] ?? []).length})</summary>
+                <ul>
+                  <For each={state.previews[integration.id] ?? []}>
+                    {(preview) => (
+                      <li>
+                        <code>{preview.status}</code>{" "}
+                        <Show when={preview.url} fallback={<span class="muted">no url yet</span>}>
+                          <a href={preview.url} target="_blank" rel="noreferrer">{preview.url}</a>
+                        </Show>{" "}
+                        @ {preview.sha.slice(0, 8)}
+                        <div class="row">
+                          <Show when={["starting", "stopped", "failed", "completed"].includes(preview.status)}>
+                            <button class="primary" onClick={() => void startPreview(preview.id)}>
+                              Start
+                            </button>
+                          </Show>
+                          <Show when={["running", "reachable"].includes(preview.status)}>
+                            <button class="danger" onClick={() => void stopPreview(preview.id)}>
+                              Stop
+                            </button>
+                          </Show>
+                          <button onClick={() => void (async () => { await inspectPreview(preview.id); await loadPreviewLogs(preview.id); })()}>Inspect</button>
+                          <button onClick={() => void cleanupPreview(preview.id)}>Clean up</button>
+                        </div>
+                        <Show when={state.previewLogs[preview.id]}>
+                          <pre>{(state.previewLogs[preview.id] ?? "").slice(-4000)}</pre>
+                        </Show>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </Show>
+            <Show when={(state.integrationApprovals[integration.id] ?? []).length > 0}>
+              <p class="muted">
+                approval: {(state.integrationApprovals[integration.id] ?? []).map((a) => `${a.decision}@${a.candidateSha.slice(0, 8)}`).join(", ")}
+              </p>
+            </Show>
+            <Show when={(state.promotions[integration.id] ?? []).length > 0}>
+              <p class="muted">
+                promotions: {(state.promotions[integration.id] ?? []).map((p) => `${p.status}@${p.newSha.slice(0, 8)}`).join(", ")}
+              </p>
+            </Show>
+            <div class="row">
+              <Show when={["building", "conflicted", "validating"].includes(integration.status)}>
+                <button class="primary" onClick={() => void incorporateIntegration(integration.id)}>
+                  Incorporate
+                </button>
+                <button onClick={() => void rerunValidations(integration.id)}>Re-run validations</button>
+                <button onClick={() => void createPreview(integration.id)}>Create preview</button>
+              </Show>
+              <button
+                onClick={() =>
+                  void (async () => {
+                    const instanceId = await spawnIntegrationReviewer(integration.id);
+                    if (instanceId) setReviewerInstance((prev) => ({ ...prev, [integration.id]: instanceId }));
+                  })()
+                }
+              >
+                Spawn reviewer
+              </button>
+              <Show when={reviewerInstance()[integration.id]}>
+                <button class="primary" onClick={() => void recordIntegrationReview(integration.id, reviewerInstance()[integration.id]!, "accept")}>
+                  Accept review
+                </button>
+                <button class="danger" onClick={() => void recordIntegrationReview(integration.id, reviewerInstance()[integration.id]!, "request-changes")}>
+                  Request changes
+                </button>
+              </Show>
+              <Show when={["validating", "preview_ready"].includes(integration.status)}>
+                <input
+                  placeholder="waiver reason (no server to preview)"
+                  value={waiver()[integration.id] ?? ""}
+                  onInput={(e) => setWaiver((prev) => ({ ...prev, [integration.id]: e.currentTarget.value }))}
+                />
+                <button
+                  class="primary"
+                  onClick={() =>
+                    void approveIntegration(integration.id, {
+                      previewId: (state.previews[integration.id] ?? []).find((p) => p.sha === integration.head && p.status === "reachable")?.id,
+                      waiverReason: (state.previews[integration.id] ?? []).some((p) => p.sha === integration.head && p.status === "reachable") ? undefined : waiver()[integration.id],
+                    })
+                  }
+                >
+                  Approve
+                </button>
+                <button class="danger" onClick={() => void rejectIntegration(integration.id)}>
+                  Reject
+                </button>
+              </Show>
+              <Show when={integration.status === "approved"}>
+                <button class="primary" onClick={() => void promoteIntegration(integration.id)}>
+                  Promote
+                </button>
+              </Show>
+              <Show when={["stale", "failed", "aborted"].includes(integration.status)}>
+                <button class="primary" onClick={() => void rebuildIntegration(integration.id)}>
+                  Rebuild
+                </button>
+              </Show>
+              <Show when={["building", "conflicted", "validating"].includes(integration.status)}>
+                <button class="danger" onClick={() => void abortIntegration(integration.id)}>
+                  Abort
+                </button>
+              </Show>
+              <button onClick={() => void reloadIntegrations()}>Refresh</button>
+            </div>
+          </div>
+        )}
+      </For>
+    </details>
+  );
+}
+
 function AgentsSection() {  const active = () => state.agentInstances.filter((i) => ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
   return (
     <details class="stage2">
@@ -725,6 +976,7 @@ function ChatView() {
       <PlansSection />
       <TasksSection />
       <WorktreesSection />
+      <IntegrationsSection />
       <AgentsSection />
       <Composer />
       <details>

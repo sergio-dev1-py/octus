@@ -21,6 +21,7 @@ import { isUncPath, sameOrInside } from "../tools/path-scope.js";
 import { now } from "../util.js";
 import { RepositoryManager } from "../repositories/repository-manager.js";
 import { assertValidBranchName, resolveCommitSha, runGit } from "../repositories/git-exec.js";
+import type { IntegrationPort } from "../integration/integration-port.js";
 import type { WorktreeAssignment, WorktreePort } from "./worktree-port.js";
 
 export interface EnsureInput {
@@ -44,6 +45,7 @@ export class WorktreeManager implements WorktreePort {
     private readonly bus: EventBus,
     private readonly repos: RepositoryManager,
     private readonly dataDir: string,
+    private readonly integrations?: () => IntegrationPort | undefined,
   ) {}
 
   // ------------------------------------------------------------------ puerto
@@ -589,7 +591,9 @@ export class WorktreeManager implements WorktreePort {
       } catch {
         continue;
       }
-      // Físico sin fila: solo ramas harness/* bajo worktrees_root.
+      // Físico sin fila: solo ramas harness/* bajo worktrees_root, EXCEPTO las
+      // gestionadas por IntegrationManager/ConflictManager (harness/integration/,
+      // harness/workbase/, harness/resolution/).
       for (const e of entries) {
         let real = e.path;
         try {
@@ -599,6 +603,7 @@ export class WorktreeManager implements WorktreePort {
         }
         if (!sameOrInside(workRootReal, real)) continue;
         if (!e.branch || !e.branch.startsWith("harness/")) continue;
+        if (e.branch.startsWith("harness/integration/") || e.branch.startsWith("harness/workbase/") || e.branch.startsWith("harness/resolution/")) continue;
         const known = await this.db.queryOne<{ id: string }>("SELECT id FROM worktrees WHERE canonical_path = ?", [real]);
         if (known) continue;
         const id = createId("wt");
@@ -684,10 +689,11 @@ export class WorktreeManager implements WorktreePort {
   }
 
   /**
-   * Base del worktree (§G): HEAD o produced_commit del único writer-predecesor.
-   * Cero predecesores → HEAD. ≥2 writers → blocked deps-unavailable (sin merges).
+   * Base del worktree (§G Etapa 4, §B Etapa 5): HEAD o produced_commit del único
+   * writer-predecesor; con ≥2 writers, tip de la workbase integrada (o blocked
+   * deps-unavailable si aún no está lista o hay conflicto abierto).
    */
-  private async resolveBase(taskId: string, repoRoot: string): Promise<{ ok: true; sha: string; source: string } | { ok: false; blockedReason: "deps-unavailable" | "repo-blocked"; details: Record<string, unknown> }> {
+  private async resolveBase(taskId: string, repoRoot: string): Promise<{ ok: true; sha: string; source: string } | { ok: false; blockedReason: "deps-unavailable" | "repo-blocked" | "no-capacity"; details: Record<string, unknown> }> {
     const deps = await this.db.query<{ depends_on: string }>("SELECT depends_on FROM task_dependencies WHERE task_id = ?", [taskId]);
     if (deps.length === 0) {
       const head = await this.repos.getHead(repoRoot).catch((e) => {
@@ -700,11 +706,24 @@ export class WorktreeManager implements WorktreePort {
     const rows = await this.db.query<Record<string, string | number | null>>(`SELECT id, agent_role, status FROM tasks WHERE id IN (${placeholders})`, depIds as unknown as import("../persistence/protocol.js").SqlParam[]);
     const writers = rows.filter((r) => String(r.agent_role) === "implementer");
     if (writers.length > 1) {
-      return {
-        ok: false,
-        blockedReason: "deps-unavailable",
-        details: { reason: "multiple writer predecessors require a merge (Stage 5); task stays blocked", predecessors: writers.map((r) => String(r.id)) },
-      };
+      // Etapa 5 (§B): base de trabajo integrada en vez de bloqueo estructural.
+      const port = this.integrations?.();
+      if (!port) {
+        return {
+          ok: false,
+          blockedReason: "deps-unavailable",
+          details: { reason: "multiple writer predecessors require a merge (Stage 5); task stays blocked", predecessors: writers.map((r) => String(r.id)) },
+        };
+      }
+      const taskRow = await this.db.queryOne<{ run_id: string }>("SELECT run_id FROM tasks WHERE id = ?", [taskId]);
+      const runRow = taskRow ? await this.db.queryOne<{ session_id: string }>("SELECT session_id FROM runs WHERE id = ?", [String(taskRow.run_id)]) : undefined;
+      const sessionRow = runRow ? await this.db.queryOne<{ project_id: string }>("SELECT project_id FROM sessions WHERE id = ?", [String(runRow.session_id)]) : undefined;
+      if (!taskRow || !sessionRow) {
+        return { ok: false, blockedReason: "deps-unavailable", details: { reason: "cannot resolve task run/session for work base" } };
+      }
+      const wb = await port.ensureWorkBaseForTask({ projectId: String(sessionRow.project_id), runId: String(taskRow.run_id), taskId, predecessorIds: writers.map((r) => String(r.id)) });
+      if (!wb.ok) return wb;
+      return { ok: true, sha: wb.tipSha, source: `workbase:${wb.workBaseId}` };
     }
     if (writers.length === 0) {
       // Solo predecesores lectores: la base es HEAD (no producen código).
@@ -714,7 +733,8 @@ export class WorktreeManager implements WorktreePort {
     const writer = writers[0]!;
     const writerId = String(writer.id);
     const writerStatus = String(writer.status);
-    if (writerStatus !== "completed" && writerStatus !== "reviewed") {
+    // integrated implica reviewed + produced asentado: sirve como base igual.
+    if (writerStatus !== "completed" && writerStatus !== "reviewed" && writerStatus !== "integrated") {
       return { ok: false, blockedReason: "deps-unavailable", details: { reason: `writer predecessor ${writerId} is ${writerStatus}, not ready`, predecessor: writerId } };
     }
     const wt = await this.getByTask(writerId);

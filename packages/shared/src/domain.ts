@@ -502,28 +502,229 @@ export interface WorktreeOperation {
   updatedAt: Milliseconds;
 }
 
-export type IntegrationStatus = "building" | "validating" | "preview_ready" | "approved" | "promoted" | "invalidated" | "failed";
+export type IntegrationStatus =
+  | "building"
+  | "conflicted"
+  | "validating"
+  | "preview_ready"
+  | "approved"
+  | "rejected"
+  | "promoted"
+  | "stale"
+  | "aborted"
+  | "invalidated"
+  | "failed"
+  | "interrupted";
 
 export interface Integration {
   id: string;
+  projectId: string;
+  repositoryId: string;
   runId: string;
-  repoRoot: string;
+  /** Rama destino observada al crear la integración (p. ej. main). */
   targetBranch: string;
+  /** SHA del destino observado al crear la integración (base de validez). */
+  targetBaseCommit: string;
+  /** Rama intermedia gestionada: harness/integration/run-<runId>[-rN]. */
   integrationBranch: string;
-  candidateSha?: string;
+  /** Worktree de integración (ruta canónica). */
+  canonicalPath: string;
+  /** SHA candidato exacto (tip integrado + validado). */
+  head?: string;
+  /** Intento de integración dentro del run (rebuild = attempt+1, fila nueva). */
+  attempt: number;
+  /** Integración anterior que esta fila reemplaza (rebuild). */
+  supersedes?: string;
   status: IntegrationStatus;
+  error?: string;
   createdAt: Milliseconds;
   updatedAt: Milliseconds;
 }
 
+export type IntegrationCommitKind = "original" | "resolution";
+
+export interface IntegrationCommit {
+  id: string;
+  integrationId: string;
+  taskId: string;
+  attempt: number;
+  instanceId?: string;
+  worktreeId?: string;
+  /** SHA producido por el worker (inmutable, verificado). */
+  originalSha: string;
+  /** SHA resultante dentro de la rama de integración (== original si FF). */
+  integratedSha: string;
+  kind: IntegrationCommitKind;
+  createdAt: Milliseconds;
+}
+
+export type IntegrationOpKind = "create" | "incorporate" | "rebuild" | "abort" | "reconcile";
+export type IntegrationOpStatus = "started" | "done" | "failed";
+
+export interface IntegrationOperation {
+  id: string;
+  integrationId?: string;
+  op: IntegrationOpKind;
+  status: IntegrationOpStatus;
+  step?: string;
+  detail?: string;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+/** Base de trabajo para una task con múltiples predecesores escritores. */
+export type WorkBaseStatus = "building" | "ready" | "conflicted" | "stale";
+
+export interface WorkBase {
+  id: string;
+  projectId: string;
+  repositoryId: string;
+  runId: string;
+  /** Task dependiente (una workbase por task). */
+  taskId: string;
+  /** SHAs predecesores combinados, en orden determinista. */
+  predecessorShas: string[];
+  /** Tip de la rama workbase (merge de predecesores). */
+  tipSha: string;
+  branchName: string;
+  canonicalPath: string;
+  status: WorkBaseStatus;
+  error?: string;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+export type ConflictScope = "integration" | "work_base";
+export type ConflictStatus = "open" | "resolving" | "resolved" | "aborted";
+
+export interface IntegrationConflict {
+  id: string;
+  scope: ConflictScope;
+  /** integrationId o workBaseId según scope. */
+  scopeRef: string;
+  files: string[];
+  oursSha: string;
+  theirsSha: string;
+  baseSha?: string;
+  /** Task cuyo incorporate abrió el conflicto (workbase: la dependiente). */
+  taskId?: string;
+  attempt?: number;
+  status: ConflictStatus;
+  resolutionSha?: string;
+  /** Instancia implementer asignada a la resolución (una activa cada vez). */
+  resolutionInstanceId?: string;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+export interface ConflictResolution {
+  id: string;
+  conflictId: string;
+  /** Instancia que resolvió (ausente si se reutilizó o resolvió el harness). */
+  instanceId?: string;
+  /** Merge commit creado por el harness en el worktree de resolución. */
+  resolutionSha: string;
+  /** true si se reutilizó una resolución previa con los mismos padres. */
+  reused: boolean;
+  createdAt: Milliseconds;
+}
+
+export type ValidationKind = "command" | "review" | "suite";
+export type ValidationStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "blocked";
+
+export interface Validation {
+  id: string;
+  integrationId: string;
+  /** SHA exacto evaluado (pinneado). */
+  sha: string;
+  kind: ValidationKind;
+  /** Id de la entrada allowlist (kind command) o marcador. */
+  entryId?: string;
+  status: ValidationStatus;
+  /** Salida truncada o motivo del skip/bloqueo. */
+  detail?: string;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+export interface IntegrationReview {
+  id: string;
+  integrationId: string;
+  /** SHA exacto revisado. */
+  sha: string;
+  instanceId: string;
+  verdict: "accept" | "request-changes";
+  summary?: string;
+  createdAt: Milliseconds;
+}
+
+export type PreviewStatus = "starting" | "running" | "reachable" | "stopped" | "completed" | "failed" | "orphaned";
+
+export interface Preview {
+  id: string;
+  integrationId: string;
+  /** SHA exacto en preview (detached). */
+  sha: string;
+  /** Worktree detached de solo-preview (ruta canónica). */
+  canonicalPath: string;
+  /** argv exactos ejecutados (fases install/start de la allowlist). */
+  argv: string[];
+  port: number;
+  url: string;
+  pid?: number;
+  status: PreviewStatus;
+  logPath: string;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+export type ApprovalDecision = "approved" | "rejected";
+
 export interface Approval {
   id: string;
   integrationId: string;
+  /** SHA exacto aprobado (pin inmutable). */
   candidateSha: string;
+  /** Preview verificado, o ausente con waiver explícito y motivo. */
+  previewId?: string;
+  waiverReason?: string;
   targetBranch: string;
   targetShaObserved: string;
-  granted: boolean;
-  grantedAt?: Milliseconds;
+  /** Hash del informe de validaciones vigente al aprobar. */
+  validationsHash: string;
+  decision: ApprovalDecision;
+  /** Solo el usuario aprueba (actor fijo). */
+  actor: "user";
+  grantedAt: Milliseconds;
+  createdAt: Milliseconds;
+}
+
+export type PromotionStatus = "started" | "completed" | "failed" | "diverged";
+
+export interface Promotion {
+  id: string;
+  integrationId: string;
+  approvalId: string;
+  targetBranch: string;
+  /** Valor esperado del destino (CAS); si difiere → diverged. */
+  expectedOldSha: string;
+  newSha: string;
+  status: PromotionStatus;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+export type PromotionOpStatus = "started" | "done" | "failed";
+
+export interface PromotionOperation {
+  id: string;
+  promotionId: string;
+  op: "promote" | "reconcile";
+  status: PromotionOpStatus;
+  step?: string;
+  detail?: string;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
 }
 
 export interface MemoryItem {

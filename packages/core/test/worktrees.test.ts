@@ -476,7 +476,7 @@ describe("etapa 4 — scheduler + agentmanager con worktrees", () => {
         return c.status === "blocked" && c.blockedReason === "deps-unavailable";
       });
       const c = await t.core.tasks.getTask(cId);
-      expect(String(JSON.stringify(c.blockedDetails))).toMatch(/merge|Etapa 5/i);
+      expect(String(JSON.stringify(c.blockedDetails))).toMatch(/predecessor|not reviewed|work base/i);
       await sweepWorktrees(t, project.id);
     } finally {
       await t.cleanup();

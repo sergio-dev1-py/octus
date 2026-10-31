@@ -48,6 +48,12 @@ import { TaskPlanner } from "../tasks/task-planner.js";
 import { TaskScheduler } from "../tasks/task-scheduler.js";
 import { RepositoryManager } from "../repositories/repository-manager.js";
 import { WorktreeManager } from "../worktrees/worktree-manager.js";
+import { IntegrationManager } from "../integration/integration-manager.js";
+import { ValidationService } from "../integration/validation-service.js";
+import { PreviewManager } from "../integration/preview-manager.js";
+import { ApprovalService } from "../integration/approval-service.js";
+import { PromotionManager } from "../integration/promotion-manager.js";
+import { ConflictManager } from "../integration/conflict-manager.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
 import { MetaAdapter } from "../providers/meta-adapter.js";
@@ -108,6 +114,12 @@ export class OctusCore {
   readonly scheduler: TaskScheduler;
   readonly repositories: RepositoryManager;
   readonly worktrees: WorktreeManager;
+  readonly integrations: IntegrationManager;
+  readonly validations: ValidationService;
+  readonly previews: PreviewManager;
+  readonly approvals: ApprovalService;
+  readonly promotions: PromotionManager;
+  readonly conflicts: ConflictManager;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -183,8 +195,10 @@ export class OctusCore {
     this.plans = new PlanManager(db, this.events, this.bus);
     this.directories = new DirectoryRegistry(db);
     this.repositories = new RepositoryManager(db);
-    this.worktrees = new WorktreeManager(db, this.events, this.bus, this.repositories, options.dataDir);
+    this.worktrees = new WorktreeManager(db, this.events, this.bus, this.repositories, options.dataDir, () => this.integrations);
     this.tests = new TestRunner(db);
+    this.validations = new ValidationService(db, this.events, this.bus, this.tests);
+    this.integrations = new IntegrationManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir, this.validations);
     this.runtime = new AgentRuntime(db, this.events, this.bus, this.router, this.gateway, this.context, {
       ...(options.runtimeOptions ?? {}),
       sessionProviders: {
@@ -204,6 +218,8 @@ export class OctusCore {
       () => this.config.get().agentLimits ?? DEFAULT_AGENT_LIMITS,
       (event) => this.streamHandlers.get(event.sessionId)?.(event),
       () => this.worktrees,
+      () => this.conflicts,
+      () => this.integrations,
     );
     toolServices.agents = this.agents;
     toolServices.plans = this.plans;
@@ -239,7 +255,12 @@ export class OctusCore {
       () => this.config.get().scheduler,
       () => this.config.get().agentLimits,
       () => this.worktrees,
+      () => this.integrations,
     );
+    this.conflicts = new ConflictManager(db, this.events, this.bus, this.repositories, this.worktrees, () => this.agents, options.dataDir);
+    this.previews = new PreviewManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir);
+    this.approvals = new ApprovalService(db, this.events, this.bus, this.validations, this.previews);
+    this.promotions = new PromotionManager(db, this.events, this.bus, this.repositories, this.approvals, () => this.integrations);
     toolServices.tasks = {
       plan: async (input) => {
         const out = await this.planner.planTasks(input.coordinatorInstanceId, input);
@@ -839,10 +860,191 @@ export class OctusCore {
     return this.worktrees.setWorktreesRoot(projectId, path);
   }
 
+  // ------------------------------------------------- integraciones (Etapa 5)
+  async createIntegration(input: { projectId: string; runId: string; targetBranch?: string }) {
+    return this.integrations.createForRun(input);
+  }
+
+  async getIntegration(integrationId: string) {
+    const integration = await this.integrations.getIntegration(integrationId);
+    const commits = await this.integrations.getCommits(integrationId);
+    const operations = await this.integrations.listOperations(integrationId);
+    return { integration, commits, operations };
+  }
+
+  async listRunIntegrations(runId: string) {
+    return this.integrations.listByRun(runId);
+  }
+
+  async rebuildIntegration(integrationId: string) {
+    return this.promotions.rebuildIntegration(integrationId);
+  }
+
+  async abortIntegration(integrationId: string, reason?: string) {
+    await this.integrations.abortIntegration(integrationId, reason ?? "aborted by user");
+    return { ok: true };
+  }
+
+  async incorporateIntegration(integrationId: string) {
+    const results = await this.integrations.incorporateRun(integrationId);
+    return { incorporated: results.length };
+  }
+
+  async listIntegrationConflicts(filter?: { scope?: "integration" | "work_base"; scopeRef?: string; status?: string }) {
+    return this.conflicts.listConflicts(filter);
+  }
+
+  async getConflict(conflictId: string) {
+    const conflict = await this.conflicts.getConflict(conflictId);
+    const rows = await this.db.query<Record<string, string | number | null>>("SELECT * FROM conflict_resolutions WHERE conflict_id = ? ORDER BY created_at ASC", [conflictId]);
+    return {
+      conflict,
+      resolutions: rows.map((r) => ({
+        id: String(r.id),
+        conflictId: String(r.conflict_id),
+        instanceId: r.instance_id ? String(r.instance_id) : undefined,
+        resolutionSha: String(r.resolution_sha),
+        reused: Number(r.reused ?? 0) === 1,
+        createdAt: Number(r.created_at),
+      })),
+    };
+  }
+
+  async requestConflictResolution(conflictId: string, opts?: { briefSuffix?: string }) {
+    return this.conflicts.requestResolution(conflictId, opts);
+  }
+
+  async finalizeConflictResolution(conflictId: string, instanceId: string) {
+    return this.conflicts.finalizeResolution(conflictId, instanceId);
+  }
+
+  async incorporateConflictResolution(integrationId: string, conflictId: string) {
+    return this.conflicts.incorporateResolution(integrationId, conflictId);
+  }
+
+  async abortConflict(conflictId: string, reason?: string) {
+    await this.conflicts.abortResolution(conflictId, reason);
+    return { ok: true };
+  }
+
+  async cleanupConflictResolution(conflictId: string) {
+    return this.conflicts.cleanupResolutionWorkspace(conflictId);
+  }
+
+  async listValidations(integrationId: string, sha?: string) {
+    const validations = await this.validations.listValidations(integrationId, sha);
+    const reviews = await this.validations.listReviews(integrationId);
+    return { validations, reviews };
+  }
+
+  async rerunValidations(integrationId: string, sha?: string) {
+    const head = sha ?? (await this.integrations.getIntegration(integrationId)).head;
+    if (!head) throw new Error("Integration has no head to validate");
+    const validations = await this.validations.runSuiteValidation(integrationId, head, { force: true });
+    return { validations };
+  }
+
+  /** Spawnea un reviewer sobre el worktree de la integración (acción de app). */
+  async spawnIntegrationReview(integrationId: string, brief?: string) {
+    const integration = await this.integrations.getIntegration(integrationId);
+    const run = await this.db.queryOne<{ session_id: string }>("SELECT session_id FROM runs WHERE id = ?", [integration.runId]);
+    if (!run) throw new Error(`Run not found: ${integration.runId}`);
+    const coord = await this.db.queryOne<{ id: string }>(
+      `SELECT i.id AS id FROM agent_instances i JOIN agent_definitions d ON d.id = i.definition_id
+       WHERE i.run_id = ? AND d.kind = 'coordinator' ORDER BY i.created_at DESC LIMIT 1`,
+      [integration.runId],
+    );
+    if (!coord) throw new Error(`No coordinator instance for run ${integration.runId}`);
+    const spawned = await this.agents.spawn({
+      parentInstanceId: String(coord.id),
+      definitionId: "reviewer",
+      brief: brief ?? `Review the integration worktree at ${integration.head?.slice(0, 12) ?? "unknown"} against the task acceptance criteria. Report findings with file and line. Never modify files.`,
+      mode: "background",
+      integrationId,
+    });
+    return { instanceId: spawned.instanceId };
+  }
+
+  async recordIntegrationReview(integrationId: string, input: { instanceId: string; verdict: "accept" | "request-changes"; summary?: string }) {
+    await this.validations.recordIntegrationReview(integrationId, input);
+    return { ok: true };
+  }
+
+  async createPreview(integrationId: string) {
+    return this.previews.createPreview(integrationId);
+  }
+
+  async listPreviews(integrationId: string) {
+    return this.previews.listPreviews(integrationId);
+  }
+
+  async startPreview(previewId: string, opts?: { startEntryId?: string }) {
+    return this.previews.startPreview(previewId, opts);
+  }
+
+  async stopPreview(previewId: string) {
+    return this.previews.stopPreview(previewId);
+  }
+
+  async restartPreview(previewId: string, opts?: { startEntryId?: string }) {
+    return this.previews.restartPreview(previewId, opts);
+  }
+
+  async inspectPreview(previewId: string) {
+    return this.previews.inspectPreview(previewId);
+  }
+
+  async getPreviewLogs(previewId: string, tailChars?: number) {
+    return { logs: await this.previews.getPreviewLogs(previewId, tailChars) };
+  }
+
+  async cleanupPreview(previewId: string) {
+    return this.previews.cleanupPreview(previewId);
+  }
+
+  async previewAllowlist(projectId: string) {
+    return this.previews.listAllowlist(projectId);
+  }
+
+  async savePreviewAllowlist(projectId: string, entries: Array<{ id: string; name: string; phase: "install" | "start"; argv: string[]; timeoutMs?: number }>) {
+    return this.previews.saveAllowlist(projectId, entries as never);
+  }
+
+  async approveIntegration(integrationId: string, input: { previewId?: string; waiverReason?: string }) {
+    return this.approvals.approveIntegration(integrationId, input);
+  }
+
+  async rejectIntegration(integrationId: string, reason?: string) {
+    return this.approvals.rejectIntegration(integrationId, reason);
+  }
+
+  async approvalStatus(integrationId: string) {
+    return this.approvals.getApprovalStatus(integrationId);
+  }
+
+  async promoteIntegration(integrationId: string) {
+    return this.promotions.promoteIntegration(integrationId);
+  }
+
+  async listPromotions(integrationId: string) {
+    const rows = await this.db.query<Record<string, string | number | null>>("SELECT * FROM promotions WHERE integration_id = ? ORDER BY created_at ASC", [integrationId]);
+    return rows.map((row) => ({
+      id: String(row.id),
+      integrationId: String(row.integration_id),
+      approvalId: String(row.approval_id),
+      targetBranch: String(row.target_branch),
+      expectedOldSha: String(row.expected_old_sha),
+      newSha: String(row.new_sha),
+      status: row.status as "started" | "completed" | "failed" | "diverged",
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }));
+  }
+
   private async cancelSessionTasks(sessionId: string): Promise<void> {
     const tasks = await this.tasks.listTasks({ sessionId });
     for (const task of tasks) {
-      if (!["completed", "reviewed", "cancelled"].includes(task.status)) {
+      if (!["completed", "reviewed", "integrated", "cancelled"].includes(task.status)) {
         await this.tasks.cancelTask(task.id).catch(() => undefined);
       }
     }
@@ -1082,13 +1284,27 @@ export class OctusCore {
   /** Liquidación tras cierre/caída: nada queda en `running` para siempre. */
   private async settleInterrupted(): Promise<void> {
     const timestamp = now();
+    // Etapa 5: los runs con integración abierta sobreviven (su reconcile es propio).
+    const openInt = await this.db.query<{ run_id: string }>("SELECT DISTINCT run_id FROM integrations WHERE status IN ('building','conflicted','validating','preview_ready','approved')").catch(() => [] as Array<{ run_id: string }>);
+    const protectedRuns = new Set((openInt ?? []).map((r) => String(r.run_id)));
     const runs = await this.db.query<{ id: string }>(
       "SELECT id FROM runs WHERE status IN ('planning', 'executing', 'integrating', 'awaiting_approval', 'promoting')",
     );
-    await this.db.exec(
-      "UPDATE runs SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', updated_at = ?, completed_at = ? WHERE status IN ('planning', 'executing', 'integrating', 'awaiting_approval', 'promoting')",
-      [timestamp, timestamp],
-    );
+    const doomed = runs.filter((r) => !protectedRuns.has(r.id));
+    if (protectedRuns.size === 0) {
+      await this.db.exec(
+        "UPDATE runs SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', updated_at = ?, completed_at = ? WHERE status IN ('planning', 'executing', 'integrating', 'awaiting_approval', 'promoting')",
+        [timestamp, timestamp],
+      );
+    } else {
+      for (const run of doomed) {
+        await this.db.exec("UPDATE runs SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', updated_at = ?, completed_at = ? WHERE id = ?", [
+          timestamp,
+          timestamp,
+          run.id,
+        ]);
+      }
+    }
     await this.db.exec(
       "UPDATE agent_instances SET status = 'interrupted', error = 'Interrupted by shutdown or restart (explicit resume required)', updated_at = ?, completed_at = ? WHERE task_id IS NOT NULL AND status IN ('created','running','waiting_permission','waiting_input')",
       [timestamp, timestamp],
@@ -1101,7 +1317,7 @@ export class OctusCore {
       "UPDATE tool_invocations SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', completed_at = ? WHERE status IN ('pending', 'running')",
       [timestamp],
     );
-    for (const run of runs) {
+    for (const run of doomed) {
       const event = await this.events.append({
         type: "run.cancelled",
         aggregate: { kind: "run", id: run.id },
@@ -1112,6 +1328,8 @@ export class OctusCore {
     }
     await this.tasks.reconcile().catch(() => undefined);
     await this.worktrees.reconcile().catch(() => undefined);
+    await this.integrations.reconcile().catch(() => undefined);
+    await this.promotions.reconcile().catch(() => undefined);
     await this.plans.orphanSweep().catch(() => 0);
   }
 }
