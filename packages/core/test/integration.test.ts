@@ -124,6 +124,18 @@ async function settlePairs(t: TestCore, sessionId: string, pairs: Array<{ writer
   }
 }
 
+/** Espera al auto-build P1 (con ticks: la sesión quieta no despierta sola). */
+async function untilAutoBuilt(t: TestCore, sessionId: string, runId: string, n: number, ms = 30000): Promise<void> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const list = await t.core.integrations.listByRun(runId);
+    if (list[0] && (await t.core.integrations.getCommits(list[0].id)).length === n) return;
+    if (Date.now() > deadline) throw new Error("Timed out waiting for auto-build");
+    await t.core.scheduler.tick({ sessionId }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 /** Limpieza best-effort de worktrees de tasks + worktrees de integración. */
 async function sweepAll(t: TestCore, projectId: string, repoRoot: string): Promise<void> {
   for (const w of await t.core.worktrees.listProjectWorktrees(projectId).catch(() => [])) {
@@ -197,15 +209,16 @@ describe("etapa 5.1 — incorporación (J1–J3)", () => {
       const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
       try {
         await settlePairs(t, session.id, [{ writer: aId, reviewer: raId }, { writer: bId, reviewer: rbId }]);
-        const integration = await t.core.integrations.createForRun({ projectId: project.id, runId });
-        const results = await t.core.integrations.incorporateRun(integration.id);
-        expect(results).toHaveLength(2);
-        expect(results.map((r) => r.strategy).sort()).toEqual(["fast-forward", "merge"]);
+        // P1: el auto-build ya incorporó (createForRun + incorporateRun corren en el tick).
+        await untilAutoBuilt(t, session.id, runId, 2);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const commits = await t.core.integrations.getCommits(integration.id);
+        expect(commits.map((c) => c.kind).sort()).toEqual(["original", "resolution"]);
         const after = await t.core.integrations.getIntegration(integration.id);
         expect(after.head).toMatch(/^[0-9a-f]{40}$/);
         expect(readFileSync(path.join(after.canonicalPath, "file-a.txt"), "utf8")).toContain("content-a");
         expect(readFileSync(path.join(after.canonicalPath, "file-b.txt"), "utf8")).toContain("content-b");
-        expect((await t.core.integrations.getCommits(integration.id)).map((c) => c.kind).sort()).toEqual(["original", "resolution"]);
+        expect((await t.core.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]))!.status).toBe("integrating");
         await sweepAll(t, project.id, root);
       } finally {
         stop();
@@ -231,9 +244,8 @@ describe("etapa 5.1 — incorporación (J1–J3)", () => {
       const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
       try {
         await settlePairs(t, session.id, [{ writer: aId, reviewer: raId }, { writer: bId, reviewer: rbId }]);
-        const integration = await t.core.integrations.createForRun({ projectId: project.id, runId });
-        const results = await t.core.integrations.incorporateRun(integration.id);
-        expect(results).toHaveLength(2);
+        await untilAutoBuilt(t, session.id, runId, 2);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
         const merged = readFileSync(path.join((await t.core.integrations.getIntegration(integration.id)).canonicalPath, "shared.txt"), "utf8");
         expect(merged).toContain("line-02-A");
         expect(merged).toContain("line-19-B");
@@ -270,9 +282,9 @@ describe("etapa 5.1 — incorporación (J1–J3)", () => {
         await t.core.scheduler.tick({ sessionId: session.id });
         await until(async () => (await t.core.tasks.getTask(rbId)).status === "completed", 30000);
         await t.core.recordTaskReview(rbId, bId, "accept", { note: "chain-b" });
-        const integration = await t.core.integrations.createForRun({ projectId: project.id, runId });
-        const results = await t.core.integrations.incorporateRun(integration.id);
-        expect(results.map((r) => r.strategy)).toEqual(["fast-forward", "fast-forward"]);
+        await untilAutoBuilt(t, session.id, runId, 2);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        expect((await t.core.integrations.getCommits(integration.id)).map((c) => c.kind)).toEqual(["original", "original"]);
         const after = await t.core.integrations.getIntegration(integration.id);
         expect(existsSync(path.join(after.canonicalPath, "chain-a.txt"))).toBe(true);
         expect(existsSync(path.join(after.canonicalPath, "chain-b.txt"))).toBe(true);
@@ -341,9 +353,11 @@ describe("etapa 5.1 — rechazos (J7–J9)", () => {
       const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
       try {
         await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
-        const integration = await t.core.integrations.createForRun({ projectId: project.id, runId });
+        // P1: el auto-build ya incorporó; las llamadas explícitas son idempotentes.
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
         const first = await t.core.integrations.incorporateCommit(integration.id, wId, 1);
-        expect(first.reused).toBe(false);
+        expect(first.reused).toBe(true);
         const second = await t.core.integrations.incorporateCommit(integration.id, wId, 1);
         expect(second.reused).toBe(true);
         expect(second.integratedSha).toBe(first.integratedSha);
@@ -358,6 +372,138 @@ describe("etapa 5.1 — rechazos (J7–J9)", () => {
   });
 });
 
+describe("etapa 5.2 — workbase multi-predecesor (J4)", () => {
+  test("J4: task con dos predecesores escritores usa workbase y se incorpora tras ambos", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["a", "b", "c"], (key) => ({ name: "write", args: { path: `file-${key}.txt`, content: `content-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      t.core.setAgentLimits({ maxPerSession: 4, maxPerProject: 6, maxDepth: 2, maxImplementers: 1, maxReaders: 2, maxReviewers: 1 });
+      const { project, session, root } = await gitProject(t, "WB");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-wb", [IMPL("a"), IMPL("b"), IMPL("c"), REVIEWER_OF("ra", "a"), REVIEWER_OF("rb", "b"), REVIEWER_OF("rc", "c")]);
+      const [aId, bId, cId, raId, rbId, rcId] = dag.taskIds as [string, string, string, string, string, string];
+      await t.core.db.exec("INSERT INTO task_dependencies (task_id, depends_on, kind) VALUES (?, ?, 'requires')", [cId, aId]);
+      await t.core.db.exec("INSERT INTO task_dependencies (task_id, depends_on, kind) VALUES (?, ?, 'requires')", [cId, bId]);
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        // A completa y se revisa con B aún pendiente: C queda bloqueada (re-evaluable).
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(aId)).status === "completed", 30000);
+        await untilWorktreesFinished(t, [aId]);
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(raId)).status === "completed", 30000);
+        await t.core.recordTaskReview(raId, aId, "accept", { note: "wb-a" });
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => {
+          const c = await t.core.tasks.getTask(cId);
+          return c.status === "blocked" && c.blockedReason === "deps-unavailable";
+        }, 30000);
+        // B completa y se revisa: C se desbloquea sobre la workbase A+B.
+        t.core.setAgentLimits({ maxPerSession: 4, maxPerProject: 6, maxDepth: 2, maxImplementers: 2, maxReaders: 2, maxReviewers: 1 });
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(bId)).status === "completed", 30000);
+        await untilWorktreesFinished(t, [bId]);
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(rbId)).status === "completed", 30000);
+        await t.core.recordTaskReview(rbId, bId, "accept", { note: "wb-b" });
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(cId)).status === "completed", 30000);
+        await untilWorktreesFinished(t, [cId]);
+        // La workbase existe y el worktree de C deriva de ella con ambos ficheros.
+        const wb = await t.core.integrations.getWorkBase(cId);
+        expect(wb).toBeDefined();
+        expect(wb!.status).toBe("ready");
+        expect(wb!.tipSha).toMatch(/^[0-9a-f]{40}$/);
+        const cWt = await t.core.worktrees.getByTask(cId);
+        expect(cWt!.baseSource.startsWith("workbase:")).toBe(true);
+        expect(cWt!.baseCommit).toBe(wb!.tipSha);
+        expect(readFileSync(path.join(cWt!.canonicalPath, "file-a.txt"), "utf8")).toContain("content-a");
+        expect(readFileSync(path.join(cWt!.canonicalPath, "file-b.txt"), "utf8")).toContain("content-b");
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(rcId)).status === "completed", 30000);
+        await t.core.recordTaskReview(rcId, cId, "accept", { note: "wb-c" });
+        await untilAutoBuilt(t, session.id, runId, 3);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const commits = await t.core.integrations.getCommits(integration.id);
+        expect(commits.map((c) => c.kind).sort()).toEqual(["original", "resolution", "resolution"]);
+        const byTask = new Map(commits.map((c) => [c.taskId, c]));
+        expect(byTask.get(cId)!.kind).toBe("resolution");
+        const after = await t.core.integrations.getIntegration(integration.id);
+        for (const f of ["file-a.txt", "file-b.txt", "file-c.txt"]) {
+          expect(existsSync(path.join(after.canonicalPath, f))).toBe(true);
+        }
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("ensureWorkBase bloquea mientras los predecesores no están revisados", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "WU");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-wu", [IMPL("a"), IMPL("b"), IMPL("c")]);
+      const [aId, bId, cId] = dag.taskIds as [string, string, string];
+      const blocked = await t.core.integrations.ensureWorkBaseForTask({ projectId: project.id, runId, taskId: cId, predecessorIds: [aId, bId] });
+      expect(blocked.ok).toBe(false);
+      if (!blocked.ok) expect(blocked.blockedReason).toBe("deps-unavailable");
+      await sweepAll(t, project.id, root);
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
+
+describe("etapa 5.2 — auto-build del run (P1)", () => {
+  test("run con escritores revisados se integra solo y pasa a integrating", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `auto-${key}.txt`, content: `auto-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "AB");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-ab", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        // El veredicto (vía settlePairs) ya disparó ticks: la integración existe sin crearla a mano.
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const run = await t.core.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]);
+        expect(run!.status).toBe("integrating");
+        expect(existsSync(path.join(integration.canonicalPath, "auto-w.txt"))).toBe(true);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("run sin escritores git conserva done directo (legacy intacto)", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session } = await gitProject(t, "LG");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-lg", [REVIEWER_OF("r", "w"), IMPL("w")]);
+      void dag;
+      // Sin writers ejecutados no hay worktrees: el run puede cerrarse en done.
+      await t.core.db.exec("UPDATE runs SET status = 'done', updated_at = 1, completed_at = 1 WHERE id = ?", [runId]);
+      const run = await t.core.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]);
+      expect(run!.status).toBe("done");
+      expect(await t.core.integrations.listByRun(runId)).toHaveLength(0);
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
 describe("etapa 5.1 — conflicto detectado (anticipa §C)", () => {
   test("merge con conflicto: abort + fila abierta + rama preservada", async () => {
     const t = await makeTestCore({
@@ -372,21 +518,30 @@ describe("etapa 5.1 — conflicto detectado (anticipa §C)", () => {
       const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
       try {
         await settlePairs(t, session.id, [{ writer: aId, reviewer: raId }, { writer: bId, reviewer: rbId }]);
-        const integration = await t.core.integrations.createForRun({ projectId: project.id, runId });
-        const first = await t.core.integrations.incorporateCommit(integration.id, aId, 1);
-        expect(first.strategy).toBe("fast-forward");
-        await expectRejects(t.core.integrations.incorporateCommit(integration.id, bId, 1), /conflict/i);
-        const conflicted = await t.core.integrations.getIntegration(integration.id);
-        expect(conflicted.status).toBe("conflicted");
-        const conflicts = await t.core.db.query<{ files: string; status: string }>("SELECT files, status FROM integration_conflicts WHERE scope_ref = ?", [integration.id]);
+        // P1: el auto-build incorpora A y abre el conflicto con B (una sola fila).
+        const deadline = Date.now() + 30000;
+        let conflicted = await t.core.integrations.listByRun(runId).then((l) => l[0]).then((i) => (i ? t.core.integrations.getIntegration(i.id) : undefined));
+        for (;;) {
+          if (conflicted && conflicted.status === "conflicted") break;
+          if (Date.now() > deadline) throw new Error("Timed out waiting for conflicted integration");
+          await t.core.scheduler.tick({ sessionId: session.id }).catch(() => undefined);
+          await new Promise((r) => setTimeout(r, 500));
+          conflicted = await t.core.integrations.listByRun(runId).then((l) => l[0]).then((i) => (i ? t.core.integrations.getIntegration(i.id) : undefined));
+        }
+        expect(conflicted!.status).toBe("conflicted");
+        const conflicts = await t.core.db.query<{ files: string; status: string }>("SELECT files, status FROM integration_conflicts WHERE scope_ref = ?", [conflicted!.id]);
         expect(conflicts).toHaveLength(1);
         expect(JSON.parse(conflicts[0]!.files)).toEqual(["conflict.txt"]);
         expect(conflicts[0]!.status).toBe("open");
+        // Uno quedó incorporado (FF); el otro abrió el conflicto (orden no determinista).
+        const incorporated = (await t.core.integrations.getCommits(conflicted!.id)).map((c) => c.taskId);
+        expect(incorporated).toHaveLength(1);
+        expect([aId, bId]).toContain(incorporated[0]!);
         // La rama de integración nunca queda con MERGE_HEAD.
-        const porcelain = git(conflicted.canonicalPath, ["status", "--porcelain=v1"]);
+        const porcelain = git(conflicted!.canonicalPath, ["status", "--porcelain=v1"]);
         expect(porcelain.split("\n").some((l) => l.startsWith("UU"))).toBe(false);
         await expectRejects(
-          Promise.resolve().then(() => git(conflicted.canonicalPath, ["rev-parse", "--verify", "MERGE_HEAD"])),
+          Promise.resolve().then(() => git(conflicted!.canonicalPath, ["rev-parse", "--verify", "MERGE_HEAD"])),
           /fatal|needed a single revision/i,
         );
         await sweepAll(t, project.id, root);

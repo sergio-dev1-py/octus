@@ -14,6 +14,7 @@ import type { AgentRegistry } from "../agents/agent-registry.js";
 import type { DirectoryRegistry } from "../orchestration/directory-registry.js";
 import type { AgentManager } from "../orchestration/agent-manager.js";
 import type { WorktreeManager } from "../worktrees/worktree-manager.js";
+import type { IntegrationManager } from "../integration/integration-manager.js";
 import { cascadeCancelSet, isDependencySatisfied, orderTasks } from "./task-graph.js";
 import { deserializeTask, type RoleLimits, type TaskManager } from "./task-manager.js";
 
@@ -74,6 +75,7 @@ export class TaskScheduler {
     private readonly getSchedulerConfig: () => { maxAttemptsPerTask: number; backoffBaseMs: number },
     private readonly getGlobalLimits: () => { maxPerSession: number; maxPerProject: number; maxDepth: number },
     private readonly worktrees?: () => WorktreeManager,
+    private readonly integrations?: () => IntegrationManager,
   ) {}
 
   async tick(filter?: { sessionId?: string }): Promise<Assignment[]> {
@@ -94,6 +96,10 @@ export class TaskScheduler {
       const progressed = await this.supervise(filter?.sessionId);
       if (!progressed) break;
     }
+    // P1 (Etapa 5): auto-build de runs con escritores ya revisados. El veredicto
+    // llega por acción explícita (recordReview), fuera de supervise: sin esta
+    // pasada el run quedaría en executing eternamente en sesión quieta.
+    await this.settleIntegratingRuns(filter?.sessionId).catch(() => undefined);
     return assigned;
   }
 
@@ -179,16 +185,17 @@ export class TaskScheduler {
         await this.tasks().setStatus(task.id, "ready");
         continue;
       }
-      // Estructural Etapa 4 (§G): ≥2 predecesores escritores directos exigen
-      // combinar cambios (= merge, Etapa 5). Sin combinación segura, bloqueo
-      // explícito en vez de draft eterno. Re-evaluable si el DAG cambia.
+      // Estructural Etapa 5 (§B): ≥2 predecesores escritores directos exigen
+      // una workbase integrada (los produce se combinan, sin merges a main).
+      // Sin predecesores revisados no hay base segura: bloqueo explícito en
+      // vez de draft eterno. Re-evaluable si el DAG o las revisiones cambian.
       if (task.agentRole === "implementer") {
         const depIds = deps.filter((d) => d.taskId === task.id).map((d) => d.dependsOn);
         const writers = depIds.filter((id) => byId.get(id)?.agentRole === "implementer");
         if (writers.length > 1) {
           await this.tasks().setStatus(task.id, "blocked", {
             reason: "deps-unavailable",
-            details: { reason: "multiple writer predecessors require a merge (Stage 5); task stays blocked", predecessors: writers },
+            details: { reason: "multiple writer predecessors: task waits for reviewed predecessors to build an integrated work base", predecessors: writers },
           });
         }
       }
@@ -627,6 +634,18 @@ export class TaskScheduler {
     );
     if (open.length > 0) return;
     const failed = tasks.some((t) => t.status === "failed");
+    // Etapa 5 (P1): runs con escritores git no terminan en done; se integran.
+    // Legacy (sin worktrees: no-git o solo lectores) conserva done directo.
+    if (!failed && tasks.some((t) => t.agentRole === "implementer")) {
+      const gitWriters = await this.db.queryOne<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM worktrees w JOIN tasks t ON t.id = w.task_id WHERE t.run_id = ?",
+        [runId],
+      );
+      if ((gitWriters?.n ?? 0) > 0) {
+        await this.buildIntegrationForRun(runId).catch(() => undefined);
+        return;
+      }
+    }
     const timestamp = now();
     await this.db.exec("UPDATE runs SET status = ?, updated_at = ?, completed_at = ? WHERE id = ? AND status IN ('planning','executing')", [
       failed ? "failed" : "done",
@@ -641,6 +660,53 @@ export class TaskScheduler {
       payload: { tasks: tasks.length },
     });
     this.bus.publish(event);
+  }
+
+  /**
+   * P1 (Etapa 5): auto-build. Con todos los escritores revisados, crea el
+   * espacio de integración y lo incorpora. Idempotente; solo avanza runs
+   * en 'executing'. El run pasa a 'integrating' (preview/aprobación/promoción
+   * quedan para acciones explícitas posteriores).
+   */
+  private async buildIntegrationForRun(runId: string): Promise<void> {
+    const integrations = this.integrations?.();
+    if (!integrations) return;
+    const runRow = await this.db.queryOne<{ status: string; session_id: string }>("SELECT status, session_id FROM runs WHERE id = ?", [runId]);
+    if (!runRow || runRow.status !== "executing") return;
+    const session = await this.db.queryOne<{ project_id: string }>("SELECT project_id FROM sessions WHERE id = ?", [String(runRow.session_id)]);
+    if (!session) return;
+    const tasks = await this.tasks().listTasks({ runId });
+    const writers = tasks.filter((t) => t.agentRole === "implementer");
+    if (writers.length === 0) return;
+    if (writers.some((w) => w.status === "failed")) return;
+    const ready = writers.every((w) => w.status === "reviewed" || (!w.needsReview && w.status === "completed"));
+    if (!ready) return;
+    const integration = await integrations.createForRun({ projectId: String(session.project_id), runId });
+    try {
+      await integrations.incorporateRun(integration.id);
+    } catch (error) {
+      const conflict = (error as OctusError & { details?: { conflict?: boolean } }).details?.conflict === true;
+      if (!conflict) return; // error técnico: reintento en el próximo tick
+    }
+    const timestamp = now();
+    await this.db.exec("UPDATE runs SET status = 'integrating', updated_at = ? WHERE id = ? AND status = 'executing'", [timestamp, runId]);
+    const event = await this.events.append({ type: "run.status_changed", aggregate: { kind: "run", id: runId }, correlationId: createId("cor"), payload: { from: "executing", to: "integrating", integrationId: integration.id } });
+    this.bus.publish(event);
+  }
+
+  /** Runs en executing con escritores git que ya terminaron de revisarse. */
+  private async settleIntegratingRuns(sessionId?: string): Promise<void> {
+    if (!this.integrations) return;
+    const rows = await this.db.query<{ id: string }>(
+      `SELECT DISTINCT r.id AS id FROM runs r
+       JOIN tasks t ON t.run_id = r.id
+       JOIN worktrees w ON w.task_id = t.id
+       WHERE r.status = 'executing' ${sessionId ? "AND r.session_id = ?" : ""}`,
+      sessionId ? [sessionId] : [],
+    );
+    for (const r of rows) {
+      await this.buildIntegrationForRun(r.id).catch(() => undefined);
+    }
   }
 
   /** Reconciliación post-reinicio (la llama OctusCore.settleInterrupted). */

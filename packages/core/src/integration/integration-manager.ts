@@ -13,7 +13,7 @@
  */
 import { mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { createId, type Integration, type IntegrationCommit, type IntegrationOperation, type IntegrationStatus } from "@octus/shared";
+import { createId, type Integration, type IntegrationCommit, type IntegrationOperation, type IntegrationStatus, type WorkBase, type WorkBaseStatus } from "@octus/shared";
 import { OctusError } from "../errors.js";
 import type { EventBus, EventStore } from "../events/event-store.js";
 import type { PersistenceService } from "../persistence/persistence-service.js";
@@ -23,6 +23,7 @@ import { assertValidBranchName, runGit } from "../repositories/git-exec.js";
 import type { RepositoryManager } from "../repositories/repository-manager.js";
 import { deserializeTask } from "../tasks/task-manager.js";
 import type { WorktreeManager } from "../worktrees/worktree-manager.js";
+import type { EnsureWorkBaseResult, IntegrationPort, WorkBaseAssignment } from "./integration-port.js";
 
 export interface IncorporateResult {
   integrationId: string;
@@ -34,7 +35,7 @@ export interface IncorporateResult {
   strategy: "contained" | "fast-forward" | "merge";
 }
 
-export class IntegrationManager {
+export class IntegrationManager implements IntegrationPort {
   constructor(
     private readonly db: PersistenceService,
     private readonly events: EventStore,
@@ -155,6 +156,13 @@ export class IntegrationManager {
     );
     if (prior) {
       return { integrationId, taskId, attempt, originalSha: String(prior.original_sha), integratedSha: String(prior.integrated_sha), reused: true, strategy: "contained" };
+    }
+    // Conflicto abierto: no re-fusionar en cada tick (la resolución lo reintentará).
+    const openConflict = await this.db.queryOne<{ id: string }>("SELECT id FROM integration_conflicts WHERE scope = 'integration' AND scope_ref = ? AND status IN ('open','resolving') ORDER BY created_at DESC LIMIT 1", [integrationId]);
+    if (openConflict) {
+      throw new OctusError("invalid_state", `Integration ${integrationId} has an open conflict (${String(openConflict.id).slice(-6)}); resolve it before incorporating`, {
+        details: { conflictId: String(openConflict.id) },
+      });
     }
 
     // ---- verificaciones 1–6: procedencia en la DB ----
@@ -281,6 +289,11 @@ export class IntegrationManager {
     const writers = rows.map(deserializeTask);
     const out: IncorporateResult[] = [];
     const done = new Set((await this.getCommits(integrationId)).map((c) => c.taskId));
+    // Estricto: sin escritores pendientes de revisión no hay nada que asentar.
+    const notReady = writers.filter((w) => !done.has(w.id) && !(w.status === "reviewed" || (!w.needsReview && w.status === "completed")));
+    if (notReady.length > 0) {
+      throw new OctusError("invalid_state", `Cannot incorporate: ${notReady.length} writer(s) not reviewed yet (${notReady.map((w) => w.id.slice(-6)).join(",")})`);
+    }
     let progressed = true;
     while (progressed) {
       progressed = false;
@@ -309,6 +322,8 @@ export class IntegrationManager {
     if (pending.length > 0) {
       throw new OctusError("invalid_state", `Cannot incorporate ${pending.length} writer(s): predecessors not incorporated or attempts not completed (${pending.map((w) => w.id.slice(-6)).join(",")})`);
     }
+    // Idempotente: todo asentado y nada nuevo → sin evento duplicado.
+    if (out.length === 0) return out;
     const head = (await this.getIntegration(integrationId)).head;
     const event = await this.events.append({ type: "integration.completed", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { commits: out.length, head } });
     this.bus.publish(event);
@@ -332,9 +347,10 @@ export class IntegrationManager {
 
   /**
    * Reconciliación post-reinicio: resuelve ops 'started', marca integraciones
-   * de runs liquidados como interrupted. Nunca genera agentes (ADR-040).
+   * de runs liquidados como interrupted y workbases sin físico como stale
+   * (rebuild en el próximo ensure). Nunca genera agentes (ADR-040).
    */
-  async reconcile(): Promise<{ resolved: number; interrupted: number }> {
+  async reconcile(): Promise<{ resolved: number; interrupted: number; stale: number }> {
     let resolved = 0;
     let interrupted = 0;
     const pending = await this.db.query<Record<string, string | number | null>>("SELECT * FROM integration_ops WHERE status = 'started' ORDER BY created_at ASC");
@@ -361,10 +377,226 @@ export class IntegrationManager {
       this.bus.publish(event);
       interrupted++;
     }
-    return { resolved, interrupted };
+    // Workbases sin físico → stale (el próximo ensure reconstruye).
+    let staleCount = 0;
+    const wbs = await this.db.query<{ id: string; canonical_path: string; status: string; repository_id: string }>("SELECT id, canonical_path, status, repository_id FROM work_bases WHERE status IN ('building','ready')");
+    for (const wb of wbs) {
+      const repo = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM repositories WHERE id = ?", [wb.repository_id]).catch(() => null);
+      let physical = false;
+      if (repo) {
+        try {
+          const entries = await this.repos.listWorktrees(String(repo.root_path));
+          physical = entries.some((e) => this.samePath(e.path, wb.canonical_path));
+        } catch {
+          physical = false;
+        }
+      }
+      if (!physical) {
+        await this.db.exec("UPDATE work_bases SET status = 'stale', error = 'physical worktree missing', updated_at = ? WHERE id = ?", [now(), wb.id]);
+        const event = await this.events.append({ type: "workbase.status_changed", aggregate: { kind: "work_base", id: wb.id }, correlationId: createId("cor"), payload: { from: wb.status, to: "stale", reason: "record-without-physical" } });
+        this.bus.publish(event);
+        staleCount++;
+      }
+    }
+    return { resolved, interrupted, stale: staleCount };
   }
 
-  // ---------------------------------------------------------------- internas
+  // ---------------------------------------------------------- bases de trabajo
+  async getWorkBase(taskId: string): Promise<WorkBaseAssignment | undefined> {
+    const row = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM work_bases WHERE task_id = ?", [taskId]);
+    if (!row) return undefined;
+    return {
+      id: String(row.id),
+      projectId: String(row.project_id),
+      taskId: String(row.task_id),
+      tipSha: String(row.tip_sha),
+      branchName: String(row.branch_name),
+      path: String(row.canonical_path),
+      status: row.status as WorkBaseStatus,
+      reused: true,
+    };
+  }
+
+  /**
+   * Base de trabajo para una task con ≥2 predecesores escritores (§B): rama
+   * `harness/workbase/...` con el merge de los produced. Idempotente por
+   * task (mismos SHAs → reused). Nunca lanza: devuelve blocked re-evaluable.
+   * Conflicto entre predecesores → fila abierta + blocked con {conflict:true}.
+   */
+  async ensureWorkBaseForTask(input: { projectId: string; runId: string; taskId: string; predecessorIds: string[] }): Promise<EnsureWorkBaseResult> {
+    try {
+      return await this.ensureWorkBaseInner(input);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const details = (error as OctusError & { details?: Record<string, unknown> }).details;
+      if (details?.conflict === true) {
+        return { ok: false, blockedReason: "deps-unavailable", details: { ...details, reason: msg.slice(0, 500) } };
+      }
+      const code = error instanceof OctusError ? error.code : "tool_failed";
+      const reason = code === "invalid_state" ? "deps-unavailable" : code === "not_found" || code === "scope_violation" ? "repo-blocked" : "no-capacity";
+      return { ok: false, blockedReason: reason, details: { reason: msg.slice(0, 500) } };
+    }
+  }
+
+  private async ensureWorkBaseInner(input: { projectId: string; runId: string; taskId: string; predecessorIds: string[] }): Promise<EnsureWorkBaseResult> {
+    const predecessors = [...new Set(input.predecessorIds)].sort();
+    if (predecessors.length < 2) throw new OctusError("invalid_tool_args", "A work base requires at least two writer predecessors");
+    const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [input.projectId]);
+    if (!project) throw new OctusError("not_found", `Project not found: ${input.projectId}`);
+    const repoRoot = realpathSync((await runGit(String(project.root_path), ["rev-parse", "--show-toplevel"])).stdout.trim());
+    await this.repos.validateRepository(repoRoot);
+    const repoId = await this.repos.ensureRepositoryRow(input.projectId, repoRoot, await this.worktrees.effectiveWorktreesRoot(input.projectId));
+    // Todos los predecesores revisados con produced (sin contenido rancio).
+    const produced: string[] = [];
+    for (const predId of predecessors) {
+      const pred = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM tasks WHERE id = ?", [predId]);
+      if (!pred) throw new OctusError("not_found", `Predecessor task not found: ${predId}`);
+      const t = deserializeTask(pred);
+      if (t.needsReview && t.status !== "reviewed") {
+        throw new OctusError("invalid_state", `Writer predecessor ${predId.slice(-6)} is ${t.status}, not reviewed`);
+      }
+      if (!t.needsReview && t.status !== "completed" && t.status !== "reviewed") {
+        throw new OctusError("invalid_state", `Writer predecessor ${predId.slice(-6)} is ${t.status}, not completed`);
+      }
+      const wt = await this.worktrees.getByTask(predId);
+      if (!wt?.producedCommit) throw new OctusError("invalid_state", `Writer predecessor ${predId.slice(-6)} has no produced_commit`);
+      if (!(await this.repos.commitExists(repoRoot, wt.producedCommit))) {
+        throw new OctusError("invalid_state", `produced commit ${wt.producedCommit.slice(0, 12)} of ${predId.slice(-6)} not found in repo`);
+      }
+      produced.push(wt.producedCommit);
+    }
+    produced.sort();
+    const expected = JSON.stringify(produced);
+
+    const existing = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM work_bases WHERE task_id = ?", [input.taskId]);
+    if (existing) {
+      if (String(existing.status) === "conflicted") {
+        const conflict = await this.db.queryOne<{ id: string; files: string }>("SELECT id, files FROM integration_conflicts WHERE scope = 'work_base' AND scope_ref = ? AND status IN ('open','resolving') ORDER BY created_at DESC LIMIT 1", [String(existing.id)]);
+        return { ok: false, blockedReason: "deps-unavailable", details: { conflict: true, conflictId: conflict?.id, files: conflict ? JSON.parse(String(conflict.files)) : [], reason: "predecessors conflict; resolution required" } };
+      }
+      if (String(existing.status) === "ready" && String(existing.predecessor_shas) === expected) {
+        const physical = await this.physicalRefExists(repoRoot, String(existing.canonical_path));
+        const tipOk = physical && (await runGit(String(existing.canonical_path), ["rev-parse", "HEAD"]).then((r) => r.stdout.trim(), () => "")) === String(existing.tip_sha);
+        if (tipOk) {
+          return { ok: true, workBaseId: String(existing.id), tipSha: String(existing.tip_sha), branch: String(existing.branch_name), path: String(existing.canonical_path), reused: true };
+        }
+      }
+      // Stale, mismatch o físico ausente: reconstruir (contenido derivado, reproducible).
+      try {
+        await runGit(repoRoot, ["worktree", "remove", "--force", String(existing.canonical_path)]);
+      } catch {
+        // best effort
+      }
+      await this.db.exec("DELETE FROM work_bases WHERE id = ?", [String(existing.id)]);
+    }
+
+    const branch = await this.uniqueWorkBaseBranch(repoRoot, repoId, input.runId, input.taskId);
+    const root = await this.worktrees.effectiveWorktreesRoot(input.projectId);
+    if (isUncPath(root)) throw new OctusError("scope_violation", "UNC paths are not allowed for work bases");
+    const candidate = path.join(root, "workbases", input.taskId);
+    const id = createId("wb");
+    const timestamp = now();
+    await this.db.batch([
+      {
+        sql: "INSERT INTO work_bases (id, project_id, repository_id, run_id, task_id, predecessor_shas, tip_sha, branch_name, canonical_path, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, 'building', ?, ?)",
+        params: [id, input.projectId, repoId, input.runId, input.taskId, expected, branch, candidate, timestamp, timestamp],
+      },
+      {
+        sql: "INSERT INTO integration_ops (id, op, status, step, detail, created_at, updated_at) VALUES (?, 'workbase', 'started', 'begin', ?, ?, ?)",
+        params: [createId("iop"), `workbase ${id.slice(-6)} from ${produced.map((s) => s.slice(0, 8)).join("+")}`, timestamp, timestamp],
+      },
+    ]);
+    const created = await this.events.append({ type: "workbase.created", aggregate: { kind: "work_base", id }, correlationId: createId("cor"), payload: { taskId: input.taskId, predecessors } });
+    this.bus.publish(created);
+    try {
+      mkdirSync(path.dirname(candidate), { recursive: true });
+      await runGit(repoRoot, ["worktree", "add", "-b", branch, candidate, produced[0]!]);
+      let tip = produced[0]!;
+      for (const sha of produced.slice(1)) {
+        if (await this.isAncestor(candidate, tip, sha)) continue; // ya contenido
+        if (await this.isAncestor(candidate, sha, tip)) {
+          tip = sha; // fast-forward local: mover la rama
+          await runGit(candidate, ["merge", "--ff-only", sha]);
+          continue;
+        }
+        tip = await this.mergeBranchInto(candidate, sha, `harness: work base for task ${input.taskId} (run ${input.runId})`, `predecessor ${sha.slice(0, 12)}`);
+      }
+      tip = (await runGit(candidate, ["rev-parse", "HEAD"])).stdout.trim();
+      const real = realpathSync(candidate);
+      await this.db.batch([
+        { sql: "UPDATE work_bases SET tip_sha = ?, canonical_path = ?, status = 'ready', updated_at = ? WHERE id = ?", params: [tip, real, now(), id] },
+        { sql: "UPDATE integration_ops SET status = 'done', step = 'ready', updated_at = ? WHERE detail LIKE ? AND status = 'started'", params: [now(), `workbase ${id.slice(-6)}%`] },
+      ]);
+      const event = await this.events.append({ type: "workbase.status_changed", aggregate: { kind: "work_base", id }, correlationId: createId("cor"), payload: { from: "building", to: "ready", tip } });
+      this.bus.publish(event);
+      return { ok: true, workBaseId: id, tipSha: tip, branch, path: real, reused: false };
+    } catch (error) {
+      const details = (error as OctusError & { details?: { conflict?: boolean; files?: unknown; ours?: unknown; theirs?: unknown } }).details;
+      if (details?.conflict === true && Array.isArray(details.files) && typeof details.ours === "string" && typeof details.theirs === "string") {
+        await this.markWorkBaseConflicted(id, { files: details.files as string[], ours: details.ours, theirs: details.theirs });
+      } else {
+        const msg = error instanceof Error ? error.message : String(error);
+        await this.db.exec("UPDATE work_bases SET status = 'stale', error = ?, updated_at = ? WHERE id = ?", [msg.slice(0, 1000), now(), id]);
+        try {
+          await runGit(repoRoot, ["worktree", "remove", "--force", candidate]);
+        } catch {
+          // queda para reconcile
+        }
+      }
+      throw error;
+    }
+  }
+
+  private async markWorkBaseConflicted(workbaseId: string, conflict: { files: string[]; ours: string; theirs: string }): Promise<void> {
+    const timestamp = now();
+    const conflictId = createId("cf");
+    const wb = await this.db.queryOne<{ canonical_path: string; task_id: string }>("SELECT canonical_path, task_id FROM work_bases WHERE id = ?", [workbaseId]);
+    const base = wb ? await this.mergeBase(String(wb.canonical_path), conflict.ours, conflict.theirs).catch(() => undefined) : undefined;
+    await this.db.batch([
+      {
+        sql: "INSERT INTO integration_conflicts (id, scope, scope_ref, files, ours_sha, theirs_sha, base_sha, status, created_at, updated_at) VALUES (?, 'work_base', ?, ?, ?, ?, ?, 'open', ?, ?)",
+        params: [conflictId, workbaseId, JSON.stringify(conflict.files.slice(0, 200)), conflict.ours, conflict.theirs, base ?? null, timestamp, timestamp],
+      },
+      { sql: "UPDATE work_bases SET status = 'conflicted', error = 'predecessors conflict; resolution required', updated_at = ? WHERE id = ?", params: [timestamp, workbaseId] },
+    ]);
+    const event = await this.events.append({ type: "integration.conflict_opened", aggregate: { kind: "work_base", id: workbaseId }, correlationId: createId("cor"), payload: { conflictId, scope: "work_base", files: conflict.files.slice(0, 20), taskId: wb ? String(wb.task_id) : undefined } });
+    this.bus.publish(event);
+  }
+
+  private async uniqueWorkBaseBranch(repoRoot: string, repoId: string, runId: string, taskId: string): Promise<string> {
+    void repoId;
+    const base = `harness/workbase/run-${runId}/task-${taskId}`;
+    await assertValidBranchName(repoRoot, base);
+    const taken = new Set(await this.repos.listBranches(repoRoot).catch(() => [] as string[]));
+    if (!taken.has(base)) return base;
+    for (let n = 2; n <= 50; n++) {
+      const candidate = `${base}-r${n}`;
+      await assertValidBranchName(repoRoot, candidate);
+      if (!taken.has(candidate)) return candidate;
+    }
+    throw new OctusError("invalid_state", `No free workbase branch for task ${taskId} after 50 attempts`);
+  }
+
+  private async physicalRefExists(repoRoot: string, canonicalPath: string): Promise<boolean> {
+    let entries: Array<{ path: string }> = [];
+    try {
+      entries = await this.repos.listWorktrees(repoRoot);
+    } catch {
+      return false;
+    }
+    return entries.some((e) => this.samePath(e.path, canonicalPath));
+  }
+
+  private samePath(a: string, b: string): boolean {
+    const norm = (p: string): string => {
+      let out = p.replaceAll("\\", "/");
+      if (process.platform === "win32") out = out.toLowerCase();
+      return out.replace(/\/+$/, "");
+    };
+    return norm(a) === norm(b);
+  }
+
+  // ---------------------------------------------------------------- internas (resto)
   private async markConflicted(integrationId: string, opId: string, conflict: { files: string[]; ours: string; theirs: string }, taskId: string): Promise<void> {
     const timestamp = now();
     const conflictId = createId("cf");
@@ -447,25 +679,29 @@ export class IntegrationManager {
   }
 
   /**
-   * Merge real. En conflicto: captura archivos, aborta (la rama de integración
+   * Merge real en la rama actual. En conflicto: captura archivos, aborta (la rama
    * nunca queda con MERGE_HEAD) y lanza error estructurado {conflict:true}.
    */
-  private async mergeNoFf(intPath: string, produced: string, taskId: string, attempt: number, integration: Integration): Promise<string> {
+  private async mergeBranchInto(cwd: string, produced: string, message: string, refForError: string): Promise<string> {
     try {
-      await runGit(intPath, ["-c", "user.name=Octus Harness", "-c", "user.email=octus-harness@localhost", "merge", "--no-ff", "--no-edit", "-m", `harness: integrate task ${taskId} attempt ${attempt} (run ${integration.runId})`, produced]);
+      await runGit(cwd, ["-c", "user.name=Octus Harness", "-c", "user.email=octus-harness@localhost", "merge", "--no-ff", "--no-edit", "-m", message, produced]);
     } catch (error) {
-      const files = await this.conflictedFiles(intPath).catch(() => [] as string[]);
+      const files = await this.conflictedFiles(cwd).catch(() => [] as string[]);
       try {
-        await runGit(intPath, ["merge", "--abort"]);
+        await runGit(cwd, ["merge", "--abort"]);
       } catch {
         // si el abort falla, el reconcile lo detecta (MERGE_HEAD presente)
       }
-      const head = await runGit(intPath, ["rev-parse", "HEAD"]).then((r) => r.stdout.trim(), () => "");
-      throw new OctusError("tool_failed", `Merge conflict incorporating task ${taskId.slice(-6)} (${files.length} file(s)); integration preserved, resolution required`, {
+      const head = await runGit(cwd, ["rev-parse", "HEAD"]).then((r) => r.stdout.trim(), () => "");
+      throw new OctusError("tool_failed", `Merge conflict incorporating ${refForError} (${files.length} file(s)); workspace preserved, resolution required`, {
         details: { conflict: true, files, ours: head, theirs: produced },
       });
     }
-    return (await runGit(intPath, ["rev-parse", "HEAD"])).stdout.trim();
+    return (await runGit(cwd, ["rev-parse", "HEAD"])).stdout.trim();
+  }
+
+  private async mergeNoFf(intPath: string, produced: string, taskId: string, attempt: number, integration: Integration): Promise<string> {
+    return this.mergeBranchInto(intPath, produced, `harness: integrate task ${taskId} attempt ${attempt} (run ${integration.runId})`, `task ${taskId.slice(-6)}`);
   }
 
   private async conflictedFiles(intPath: string): Promise<string[]> {

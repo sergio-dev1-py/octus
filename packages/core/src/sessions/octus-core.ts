@@ -185,7 +185,7 @@ export class OctusCore {
     this.plans = new PlanManager(db, this.events, this.bus);
     this.directories = new DirectoryRegistry(db);
     this.repositories = new RepositoryManager(db);
-    this.worktrees = new WorktreeManager(db, this.events, this.bus, this.repositories, options.dataDir);
+    this.worktrees = new WorktreeManager(db, this.events, this.bus, this.repositories, options.dataDir, () => this.integrations);
     this.integrations = new IntegrationManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir);
     this.tests = new TestRunner(db);
     this.runtime = new AgentRuntime(db, this.events, this.bus, this.router, this.gateway, this.context, {
@@ -242,6 +242,7 @@ export class OctusCore {
       () => this.config.get().scheduler,
       () => this.config.get().agentLimits,
       () => this.worktrees,
+      () => this.integrations,
     );
     toolServices.tasks = {
       plan: async (input) => {
@@ -1085,13 +1086,27 @@ export class OctusCore {
   /** Liquidación tras cierre/caída: nada queda en `running` para siempre. */
   private async settleInterrupted(): Promise<void> {
     const timestamp = now();
+    // Etapa 5: los runs con integración abierta sobreviven (su reconcile es propio).
+    const openInt = await this.db.query<{ run_id: string }>("SELECT DISTINCT run_id FROM integrations WHERE status IN ('building','conflicted','validating')").catch(() => [] as Array<{ run_id: string }>);
+    const protectedRuns = new Set((openInt ?? []).map((r) => String(r.run_id)));
     const runs = await this.db.query<{ id: string }>(
       "SELECT id FROM runs WHERE status IN ('planning', 'executing', 'integrating', 'awaiting_approval', 'promoting')",
     );
-    await this.db.exec(
-      "UPDATE runs SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', updated_at = ?, completed_at = ? WHERE status IN ('planning', 'executing', 'integrating', 'awaiting_approval', 'promoting')",
-      [timestamp, timestamp],
-    );
+    const doomed = runs.filter((r) => !protectedRuns.has(r.id));
+    if (protectedRuns.size === 0) {
+      await this.db.exec(
+        "UPDATE runs SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', updated_at = ?, completed_at = ? WHERE status IN ('planning', 'executing', 'integrating', 'awaiting_approval', 'promoting')",
+        [timestamp, timestamp],
+      );
+    } else {
+      for (const run of doomed) {
+        await this.db.exec("UPDATE runs SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', updated_at = ?, completed_at = ? WHERE id = ?", [
+          timestamp,
+          timestamp,
+          run.id,
+        ]);
+      }
+    }
     await this.db.exec(
       "UPDATE agent_instances SET status = 'interrupted', error = 'Interrupted by shutdown or restart (explicit resume required)', updated_at = ?, completed_at = ? WHERE task_id IS NOT NULL AND status IN ('created','running','waiting_permission','waiting_input')",
       [timestamp, timestamp],
@@ -1104,7 +1119,7 @@ export class OctusCore {
       "UPDATE tool_invocations SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', completed_at = ? WHERE status IN ('pending', 'running')",
       [timestamp],
     );
-    for (const run of runs) {
+    for (const run of doomed) {
       const event = await this.events.append({
         type: "run.cancelled",
         aggregate: { kind: "run", id: run.id },
@@ -1115,6 +1130,7 @@ export class OctusCore {
     }
     await this.tasks.reconcile().catch(() => undefined);
     await this.worktrees.reconcile().catch(() => undefined);
+    await this.integrations.reconcile().catch(() => undefined);
     await this.plans.orphanSweep().catch(() => 0);
   }
 }

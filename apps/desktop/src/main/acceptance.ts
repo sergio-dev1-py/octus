@@ -1026,13 +1026,14 @@ export async function runAcceptancePhase2(): Promise<number> {
 }
 
 /**
- * Corredor de aceptación Etapa 4 (solo harness de pruebas; reutiliza el flujo live).
+ * Corredor de aceptación Etapa 5 (solo harness de pruebas; reutiliza el flujo live).
  * Dos matrices independientes (A: meta/contributor/xhigh, B: go/deepseek-v4.1-flash/max),
  * cada una con sesión y proyecto temporales propios. Flujo por matriz:
  * plan → revisión aprobada (decisión simulada del usuario) → DAG vía TaskPlanner
  * REAL → worktrees auto-aprovisionados → 2 lectoras en paralelo → implementer en su
  * worktree con commit harness → reviewer vinculado que lee el worktree del target →
- * veredicto accept → run done.
+ * veredicto accept → auto-build: integración intermedia auto-creada e incorporada
+ * (run → integrating). Preview/aprobación/promoción llegan en la extensión 5.8.
  * Sin directorios pre-registrados, sin ramas manuales, sin cambiar defaults de
  * producción (solo override de sesión + DB temporal). Presupuestos acotados como en fase 2.
  */
@@ -1435,10 +1436,12 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
       await core.tasks.recordReview(revTask.id, implTask.id, "accept", { live: true, matrix: tag });
       push(`${tag}-verdict`, "accept verdict marks implementer reviewed", (await core.tasks.getTask(implTask.id)).status === "reviewed" ? "PASS" : "FAIL", (await core.tasks.getTask(implTask.id)).status);
 
-      // 7. Run final + entregas de lectoras.
+      // 7. Run auto-integrado (Etapa 5 P1) + entregas de lectoras.
       await core.scheduler.tick({ sessionId: session.id }).catch(() => undefined);
       const run = (await core.getRun(runId)).run;
-      push(`${tag}-rundone`, "run finishes done", run.status === "done" ? "PASS" : "FAIL", run.status);
+      push(`${tag}-rundone`, "run auto-builds into integrating", run.status === "integrating" ? "PASS" : "FAIL", run.status);
+      const autoInts = await core.integrations.listByRun(runId);
+      push(`${tag}-autoint`, "integration auto-created with produced commit", autoInts.length === 1 && !!autoInts[0]!.head ? "PASS" : "FAIL", autoInts[0] ? `${autoInts[0].integrationBranch} @ ${autoInts[0].head?.slice(0, 12) ?? "none"}` : "none");
       for (const r of readerTasks) {
         const marker = r.id === readerTasks[0]!.id ? "alpha-42" : "beta-84";
         const d = await core.tasks.getDelivery(r.id).catch(() => undefined);

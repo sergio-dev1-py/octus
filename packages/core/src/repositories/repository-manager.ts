@@ -213,25 +213,15 @@ export class RepositoryManager {
     return sameOrInside(rootReal, candidateReal);
   }
 
-  /** Registra o actualiza la fila repositories del proyecto (raíz + worktrees_root). */
+  /** Registra o actualiza la fila repositories del proyecto (raíz + worktrees_root). Atómico ante llamadas paralelas (UPSERT). */
   async ensureRepositoryRow(projectId: string, rootPath: string, worktreesRoot: string): Promise<string> {
-    const existing = await this.db.queryOne<{ id: string; worktrees_root: string }>("SELECT id, worktrees_root FROM repositories WHERE project_id = ?", [projectId]);
     const timestamp = Date.now();
-    if (existing) {
-      if (String(existing.worktrees_root) !== worktreesRoot) {
-        await this.db.exec("UPDATE repositories SET worktrees_root = ?, updated_at = ? WHERE id = ?", [worktreesRoot, timestamp, String(existing.id)]);
-      }
-      return String(existing.id);
-    }
-    const id = createId("repo");
-    await this.db.exec("INSERT INTO repositories (id, project_id, root_path, worktrees_root, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [
-      id,
-      projectId,
-      rootPath,
-      worktreesRoot,
-      timestamp,
-      timestamp,
-    ]);
-    return id;
+    await this.db.exec(
+      "INSERT INTO repositories (id, project_id, root_path, worktrees_root, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET root_path = excluded.root_path, worktrees_root = excluded.worktrees_root, updated_at = excluded.updated_at",
+      [createId("repo"), projectId, rootPath, worktreesRoot, timestamp, timestamp],
+    );
+    const row = await this.db.queryOne<{ id: string }>("SELECT id FROM repositories WHERE project_id = ?", [projectId]);
+    if (!row) throw new OctusError("internal", `Repository row missing after upsert: ${projectId}`);
+    return String(row.id);
   }
 }
