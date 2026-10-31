@@ -70,6 +70,8 @@ export type PersistedEventType =
   | "worktree.removed"
   | "workbase.created"
   | "workbase.status_changed"
+  | "resolution.requested"
+  | "resolution.completed"
   | "integration.started"
   | "integration.created"
   | "integration.conflict_opened"

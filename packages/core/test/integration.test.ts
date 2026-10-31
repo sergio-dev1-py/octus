@@ -136,7 +136,7 @@ async function untilAutoBuilt(t: TestCore, sessionId: string, runId: string, n: 
   }
 }
 
-/** Limpieza best-effort de worktrees de tasks + worktrees de integración. */
+/** Limpieza best-effort de worktrees de tasks + worktrees de integración + resolución. */
 async function sweepAll(t: TestCore, projectId: string, repoRoot: string): Promise<void> {
   for (const w of await t.core.worktrees.listProjectWorktrees(projectId).catch(() => [])) {
     await t.core.worktrees.cleanupWorktree(w.id).catch(() => undefined);
@@ -148,6 +148,9 @@ async function sweepAll(t: TestCore, projectId: string, repoRoot: string): Promi
     } catch {
       // best effort
     }
+  }
+  for (const c of await t.core.conflicts.listConflicts().catch(() => [])) {
+    await t.core.conflicts.cleanupResolutionWorkspace(c.id).catch(() => undefined);
   }
 }
 
@@ -499,6 +502,229 @@ describe("etapa 5.2 — auto-build del run (P1)", () => {
       const run = await t.core.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [runId]);
       expect(run!.status).toBe("done");
       expect(await t.core.integrations.listByRun(runId)).toHaveLength(0);
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
+describe("etapa 5.3 — resolución asistida (J5/J6)", () => {
+  /** Turnos: writers (write), reviewers (texto), resolver (write merged). */
+  function resolverTurns(keys: string[]): (callIndex: number, input: never) => { toolCalls?: Array<{ name: string; args: unknown }>; text?: string } {
+    const seen = new Map<string, number>();
+    return (_: number, input: never) => {
+      const text = JSON.stringify((input as unknown as { messages?: unknown[] })?.messages ?? []);
+      if (text.includes("Conflict resolution in an isolated workspace")) {
+        const n = (seen.get("__resolver") ?? 0) + 1;
+        seen.set("__resolver", n);
+        if (n === 1) return { toolCalls: [{ name: "write", args: { path: "conflict.txt", content: "merged-a-b\n" } }] };
+        return { text: "resolution done" };
+      }
+      const m = new RegExp(`area ([${keys.join("")}]) code`).exec(text);
+      if (m) {
+        const key = m[1]!;
+        const n = (seen.get(key) ?? 0) + 1;
+        seen.set(key, n);
+        if (n === 1) return { toolCalls: [{ name: "write", args: { path: "conflict.txt", content: `version-${key}\n` } }] };
+        return { text: `done-${key}` };
+      }
+      return { text: "review-done" };
+    };
+  }
+
+  async function untilConflicted(t: TestCore, sessionId: string, runId: string, ms = 30000) {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const list = await t.core.integrations.listByRun(runId);
+      if (list[0]) {
+        const full = await t.core.integrations.getIntegration(list[0].id);
+        if (full.status === "conflicted") return full;
+      }
+      if (Date.now() > deadline) throw new Error("Timed out waiting for conflicted integration");
+      await t.core.scheduler.tick({ sessionId }).catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  test("J5+J6: el agente resuelve sin tocar la rama de integración; la incorporación la hace el harness", async () => {
+    const t = await makeTestCore({ metaTurns: resolverTurns(["a", "b"]) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "RS");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-rs", [IMPL("a"), IMPL("b"), REVIEWER_OF("ra", "a"), REVIEWER_OF("rb", "b")]);
+      const [aId, bId, raId, rbId] = dag.taskIds as [string, string, string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: aId, reviewer: raId }, { writer: bId, reviewer: rbId }]);
+        const conflicted = await untilConflicted(t, session.id, runId);
+        const headBefore = conflicted.head!;
+        const conflicts = await t.core.conflicts.listConflicts({ scopeRef: conflicted.id, status: "open" });
+        expect(conflicts).toHaveLength(1);
+        const conflict = conflicts[0]!;
+        // Solicitud: workspace de resolución + instancia (la rama de integración no se toca).
+        const req = await t.core.conflicts.requestResolution(conflict.id);
+        expect(req.instanceId).toBeDefined();
+        expect(req.reused).toBe(false);
+        expect(req.branchName).toBe(`harness/resolution/${conflict.id}`);
+        expect(req.branchName).not.toBe(conflicted.integrationBranch);
+        expect(req.workspacePath).not.toBe(conflicted.canonicalPath);
+        await t.core.agents.wait(req.instanceId!, 60000);
+        await t.core.scheduler.tick({ sessionId: session.id }).catch(() => undefined);
+        // Finalización: el harness commitea; la integración sigue en el SHA previo.
+        const { resolutionSha } = await t.core.conflicts.finalizeResolution(conflict.id, req.instanceId!);
+        expect(resolutionSha).toMatch(/^[0-9a-f]{40}$/);
+        expect((await t.core.integrations.getIntegration(conflicted.id)).head).toBe(headBefore);
+        const afterFinalize = await t.core.conflicts.getConflict(conflict.id);
+        expect(afterFinalize.status).toBe("resolved");
+        // Incorporación: FF verificado por padres, fila kind resolution.
+        const inc = await t.core.conflicts.incorporateResolution(conflicted.id, conflict.id);
+        expect(inc.reused).toBe(false);
+        expect(inc.integratedSha).toBe(resolutionSha);
+        const after = await t.core.integrations.getIntegration(conflicted.id);
+        expect(after.head).toBe(resolutionSha);
+        expect(readFileSync(path.join(after.canonicalPath, "conflict.txt"), "utf8")).toBe("merged-a-b\n");
+        const commits = await t.core.integrations.getCommits(conflicted.id);
+        expect(commits.filter((c) => c.kind === "resolution")).toHaveLength(1);
+        // Idempotencia: segunda incorporación reutiliza.
+        const again = await t.core.conflicts.incorporateResolution(conflicted.id, conflict.id);
+        expect(again.reused).toBe(true);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("reutilización: mismos padres ya resueltos no spawnean otro agente", async () => {
+    const t = await makeTestCore({ metaTurns: resolverTurns(["a", "b"]) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "RU");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-ru", [IMPL("a"), IMPL("b"), REVIEWER_OF("ra", "a"), REVIEWER_OF("rb", "b")]);
+      const [aId, bId, raId, rbId] = dag.taskIds as [string, string, string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: aId, reviewer: raId }, { writer: bId, reviewer: rbId }]);
+        const conflicted = await untilConflicted(t, session.id, runId);
+        const conflict = (await t.core.conflicts.listConflicts({ scopeRef: conflicted.id, status: "open" }))[0]!;
+        const req = await t.core.conflicts.requestResolution(conflict.id);
+        await t.core.agents.wait(req.instanceId!, 60000);
+        const { resolutionSha } = await t.core.conflicts.finalizeResolution(conflict.id, req.instanceId!);
+        // Rebobinar la integración al estado previo (fixture temporal) y abrir
+        // un segundo conflicto con la misma pareja (ours, theirs).
+        execFileSync("git", ["reset", "--hard", conflict.oursSha], { cwd: conflicted.canonicalPath, timeout: 30_000, windowsHide: true });
+        await t.core.db.exec(
+          "INSERT INTO integration_conflicts (id, scope, scope_ref, files, ours_sha, theirs_sha, base_sha, task_id, attempt, status, created_at, updated_at) VALUES ('cf_reuse1', 'integration', ?, ?, ?, ?, ?, ?, 2, 'open', 1, 1)",
+          [conflicted.id, JSON.stringify(["conflict.txt"]), conflict.oursSha, conflict.theirsSha, conflict.baseSha ?? null, conflict.taskId ?? null],
+        );
+        const before = (await t.core.agentInstances(session.id)).length;
+        const req2 = await t.core.conflicts.requestResolution("cf_reuse1");
+        expect(req2.reused).toBe(true);
+        expect(req2.resolutionSha).toBe(resolutionSha);
+        expect(req2.instanceId).toBeUndefined();
+        expect((await t.core.agentInstances(session.id)).length).toBe(before);
+        expect((await t.core.conflicts.getConflict("cf_reuse1")).status).toBe("resolved");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("finalize rechaza si el agente commiteó por su cuenta (sin MERGE_HEAD)", async () => {
+    const seen = new Map<string, number>();
+    const t = await makeTestCore({
+      metaTurns: ((_: number, input: never) => {
+        const text = JSON.stringify((input as unknown as { messages?: unknown[] })?.messages ?? []);
+        if (text.includes("Conflict resolution in an isolated workspace")) {
+          const n = (seen.get("r") ?? 0) + 1;
+          seen.set("r", n);
+          if (n === 1) return { toolCalls: [{ name: "write", args: { path: "conflict.txt", content: "rogue\n" } }] };
+          if (n === 2) return { toolCalls: [{ name: "git_stage", args: { paths: ["conflict.txt"] } }] };
+          if (n === 3) return { toolCalls: [{ name: "git_commit", args: { message: "rogue commit" } }] };
+          return { text: "rogue done" };
+        }
+        const m = /area ([ab]) code/.exec(text);
+        if (m) {
+          const key = m[1]!;
+          const n = (seen.get(key) ?? 0) + 1;
+          seen.set(key, n);
+          if (n === 1) return { toolCalls: [{ name: "write", args: { path: "conflict.txt", content: `version-${key}\n` } }] };
+          return { text: `done-${key}` };
+        }
+        return { text: "review-done" };
+      }) as never,
+    });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "RG");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-rg", [IMPL("a"), IMPL("b"), REVIEWER_OF("ra", "a"), REVIEWER_OF("rb", "b")]);
+      const [aId, bId, raId, rbId] = dag.taskIds as [string, string, string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: aId, reviewer: raId }, { writer: bId, reviewer: rbId }]);
+        const conflicted = await untilConflicted(t, session.id, runId);
+        const conflict = (await t.core.conflicts.listConflicts({ scopeRef: conflicted.id, status: "open" }))[0]!;
+        const req = await t.core.conflicts.requestResolution(conflict.id);
+        await t.core.agents.wait(req.instanceId!, 60000);
+        await expectRejects(t.core.conflicts.finalizeResolution(conflict.id, req.instanceId!), /merge state|MERGE_HEAD/i);
+        expect((await t.core.conflicts.getConflict(conflict.id)).status).toBe("resolving");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("finalize rechaza escritura fuera del scope del conflicto", async () => {
+    const seen = new Map<string, number>();
+    const t = await makeTestCore({
+      metaTurns: ((_: number, input: never) => {
+        const text = JSON.stringify((input as unknown as { messages?: unknown[] })?.messages ?? []);
+        if (text.includes("Conflict resolution in an isolated workspace")) {
+          const n = (seen.get("r") ?? 0) + 1;
+          seen.set("r", n);
+          if (n === 1) return { toolCalls: [{ name: "write", args: { path: "conflict.txt", content: "merged\n" } }] };
+          if (n === 2) return { toolCalls: [{ name: "write", args: { path: "evil.txt", content: "x\n" } }] };
+          return { text: "wide done" };
+        }
+        const m = /area ([ab]) code/.exec(text);
+        if (m) {
+          const key = m[1]!;
+          const n = (seen.get(key) ?? 0) + 1;
+          seen.set(key, n);
+          if (n === 1) return { toolCalls: [{ name: "write", args: { path: "conflict.txt", content: `version-${key}\n` } }] };
+          return { text: `done-${key}` };
+        }
+        return { text: "review-done" };
+      }) as never,
+    });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "SC");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-sc", [IMPL("a"), IMPL("b"), REVIEWER_OF("ra", "a"), REVIEWER_OF("rb", "b")]);
+      const [aId, bId, raId, rbId] = dag.taskIds as [string, string, string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: aId, reviewer: raId }, { writer: bId, reviewer: rbId }]);
+        const conflicted = await untilConflicted(t, session.id, runId);
+        const conflict = (await t.core.conflicts.listConflicts({ scopeRef: conflicted.id, status: "open" }))[0]!;
+        const req = await t.core.conflicts.requestResolution(conflict.id);
+        await t.core.agents.wait(req.instanceId!, 60000);
+        await expectRejects(t.core.conflicts.finalizeResolution(conflict.id, req.instanceId!), /outside the conflict scope/i);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
     } finally {
       await t.cleanup();
     }

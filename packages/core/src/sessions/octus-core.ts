@@ -49,6 +49,7 @@ import { TaskScheduler } from "../tasks/task-scheduler.js";
 import { RepositoryManager } from "../repositories/repository-manager.js";
 import { WorktreeManager } from "../worktrees/worktree-manager.js";
 import { IntegrationManager } from "../integration/integration-manager.js";
+import { ConflictManager } from "../integration/conflict-manager.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
 import { MetaAdapter } from "../providers/meta-adapter.js";
@@ -110,6 +111,7 @@ export class OctusCore {
   readonly repositories: RepositoryManager;
   readonly worktrees: WorktreeManager;
   readonly integrations: IntegrationManager;
+  readonly conflicts: ConflictManager;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -207,6 +209,7 @@ export class OctusCore {
       () => this.config.get().agentLimits ?? DEFAULT_AGENT_LIMITS,
       (event) => this.streamHandlers.get(event.sessionId)?.(event),
       () => this.worktrees,
+      () => this.conflicts,
     );
     toolServices.agents = this.agents;
     toolServices.plans = this.plans;
@@ -244,6 +247,7 @@ export class OctusCore {
       () => this.worktrees,
       () => this.integrations,
     );
+    this.conflicts = new ConflictManager(db, this.events, this.bus, this.repositories, this.worktrees, () => this.agents, options.dataDir);
     toolServices.tasks = {
       plan: async (input) => {
         const out = await this.planner.planTasks(input.coordinatorInstanceId, input);

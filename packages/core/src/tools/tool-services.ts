@@ -19,6 +19,8 @@ export interface SpawnRequest {
   worktreeId?: string;
   /** Para reviewer sobre worktree ajeno: task cuyo worktree se lee (P2). */
   reviewTargetTaskId?: string;
+  /** Workspace de resolución de un conflicto (Etapa 5). Gana sobre directoryId. */
+  resolutionWorkspaceId?: string;
 }
 
 export interface SpawnResult {

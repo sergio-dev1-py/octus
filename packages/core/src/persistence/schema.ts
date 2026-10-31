@@ -742,10 +742,17 @@ BEGIN
 END;
 `;
 
+const MIGRATION_0006 = `
+ALTER TABLE integration_conflicts ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;
+ALTER TABLE integration_conflicts ADD COLUMN attempt INTEGER;
+ALTER TABLE integration_conflicts ADD COLUMN resolution_instance_id TEXT REFERENCES agent_instances(id) ON DELETE SET NULL;
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "core-etapa1", sql: MIGRATION_0001 },
   { version: 2, name: "agents-plans-etapa2", sql: MIGRATION_0002 },
   { version: 3, name: "tasks-dag-etapa3", sql: MIGRATION_0003 },
   { version: 4, name: "repositories-worktrees-etapa4", sql: MIGRATION_0004 },
   { version: 5, name: "integration-promotion-etapa5", sql: MIGRATION_0005 },
+  { version: 6, name: "conflict-resolution-etapa5", sql: MIGRATION_0006 },
 ];

@@ -592,7 +592,8 @@ export class WorktreeManager implements WorktreePort {
         continue;
       }
       // Físico sin fila: solo ramas harness/* bajo worktrees_root, EXCEPTO las
-      // gestionadas por IntegrationManager (harness/integration/, harness/workbase/).
+      // gestionadas por IntegrationManager/ConflictManager (harness/integration/,
+      // harness/workbase/, harness/resolution/).
       for (const e of entries) {
         let real = e.path;
         try {
@@ -602,7 +603,7 @@ export class WorktreeManager implements WorktreePort {
         }
         if (!sameOrInside(workRootReal, real)) continue;
         if (!e.branch || !e.branch.startsWith("harness/")) continue;
-        if (e.branch.startsWith("harness/integration/") || e.branch.startsWith("harness/workbase/")) continue;
+        if (e.branch.startsWith("harness/integration/") || e.branch.startsWith("harness/workbase/") || e.branch.startsWith("harness/resolution/")) continue;
         const known = await this.db.queryOne<{ id: string }>("SELECT id FROM worktrees WHERE canonical_path = ?", [real]);
         if (known) continue;
         const id = createId("wt");

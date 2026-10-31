@@ -267,7 +267,7 @@ export class IntegrationManager implements IntegrationPort {
     } catch (error) {
       const details = error instanceof OctusError ? (error as OctusError & { details?: { conflict?: boolean; files?: string[]; ours?: string; theirs?: string } }).details : undefined;
       if (details?.conflict === true && Array.isArray(details.files) && typeof details.ours === "string" && typeof details.theirs === "string") {
-        await this.markConflicted(integrationId, opId, { files: details.files as string[], ours: details.ours, theirs: details.theirs }, taskId);
+        await this.markConflicted(integrationId, opId, { files: details.files as string[], ours: details.ours, theirs: details.theirs }, taskId, attempt);
       } else {
         const msg = error instanceof Error ? error.message : String(error);
         await this.db.exec("UPDATE integration_ops SET status = 'failed', step = 'incorporate failed', detail = ?, updated_at = ? WHERE id = ?", [msg.slice(0, 2000), now(), opId]);
@@ -554,8 +554,8 @@ export class IntegrationManager implements IntegrationPort {
     const base = wb ? await this.mergeBase(String(wb.canonical_path), conflict.ours, conflict.theirs).catch(() => undefined) : undefined;
     await this.db.batch([
       {
-        sql: "INSERT INTO integration_conflicts (id, scope, scope_ref, files, ours_sha, theirs_sha, base_sha, status, created_at, updated_at) VALUES (?, 'work_base', ?, ?, ?, ?, ?, 'open', ?, ?)",
-        params: [conflictId, workbaseId, JSON.stringify(conflict.files.slice(0, 200)), conflict.ours, conflict.theirs, base ?? null, timestamp, timestamp],
+        sql: "INSERT INTO integration_conflicts (id, scope, scope_ref, files, ours_sha, theirs_sha, base_sha, task_id, status, created_at, updated_at) VALUES (?, 'work_base', ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+        params: [conflictId, workbaseId, JSON.stringify(conflict.files.slice(0, 200)), conflict.ours, conflict.theirs, base ?? null, wb ? String(wb.task_id) : null, timestamp, timestamp],
       },
       { sql: "UPDATE work_bases SET status = 'conflicted', error = 'predecessors conflict; resolution required', updated_at = ? WHERE id = ?", params: [timestamp, workbaseId] },
     ]);
@@ -597,14 +597,14 @@ export class IntegrationManager implements IntegrationPort {
   }
 
   // ---------------------------------------------------------------- internas (resto)
-  private async markConflicted(integrationId: string, opId: string, conflict: { files: string[]; ours: string; theirs: string }, taskId: string): Promise<void> {
+  private async markConflicted(integrationId: string, opId: string, conflict: { files: string[]; ours: string; theirs: string }, taskId: string, attempt: number): Promise<void> {
     const timestamp = now();
     const conflictId = createId("cf");
     const base = await this.mergeBase(await this.canonicalOf(integrationId), conflict.ours, conflict.theirs).catch(() => undefined);
     await this.db.batch([
       {
-        sql: "INSERT INTO integration_conflicts (id, scope, scope_ref, files, ours_sha, theirs_sha, base_sha, status, created_at, updated_at) VALUES (?, 'integration', ?, ?, ?, ?, ?, 'open', ?, ?)",
-        params: [conflictId, integrationId, JSON.stringify(conflict.files.slice(0, 200)), conflict.ours, conflict.theirs, base ?? null, timestamp, timestamp],
+        sql: "INSERT INTO integration_conflicts (id, scope, scope_ref, files, ours_sha, theirs_sha, base_sha, task_id, attempt, status, created_at, updated_at) VALUES (?, 'integration', ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+        params: [conflictId, integrationId, JSON.stringify(conflict.files.slice(0, 200)), conflict.ours, conflict.theirs, base ?? null, taskId, attempt, timestamp, timestamp],
       },
       { sql: "UPDATE integrations SET status = 'conflicted', updated_at = ? WHERE id = ?", params: [timestamp, integrationId] },
       { sql: "UPDATE integration_ops SET status = 'failed', step = 'conflict', detail = ?, updated_at = ? WHERE id = ?", params: [`task ${taskId.slice(-6)}: ${conflict.files.slice(0, 10).join(",")}`.slice(0, 2000), timestamp, opId] },

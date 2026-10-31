@@ -606,8 +606,13 @@ export interface IntegrationConflict {
   oursSha: string;
   theirsSha: string;
   baseSha?: string;
+  /** Task cuyo incorporate abrió el conflicto (workbase: la dependiente). */
+  taskId?: string;
+  attempt?: number;
   status: ConflictStatus;
   resolutionSha?: string;
+  /** Instancia implementer asignada a la resolución (una activa cada vez). */
+  resolutionInstanceId?: string;
   createdAt: Milliseconds;
   updatedAt: Milliseconds;
 }
