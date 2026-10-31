@@ -727,14 +727,32 @@ export interface PromotionOperation {
   updatedAt: Milliseconds;
 }
 
+export type MemoryScope = "project" | "session" | "run" | "task" | "instance";
+export type MemoryStatus = "proposed" | "verified" | "approved" | "stale" | "superseded" | "rejected";
+export type MemoryConfidence = "low" | "medium" | "high";
+
+export interface MemoryOriginRef {
+  path?: string;
+  section?: string;
+  commit?: string;
+  /** Hash del contenido de origen (revalidación por cambio, no por mera existencia). */
+  contentHash?: string;
+}
+
 export interface MemoryItem {
   id: string;
-  scope: "project" | "session" | "run" | "task";
+  scope: MemoryScope;
   scopeId: string;
-  status: "provisional" | "approved";
+  category: string;
   topic: string;
-  text: string;
-  sourceRef?: string;
+  content: string;
+  source: string;
+  originRef: MemoryOriginRef;
+  status: MemoryStatus;
+  confidence: MemoryConfidence;
+  version: number;
+  supersedes?: string;
+  reviewNote?: string;
   createdAt: Milliseconds;
   updatedAt: Milliseconds;
 }

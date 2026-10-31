@@ -103,6 +103,7 @@ export type PersistedEventType =
   | "plan.approval_decided"
   | "agent.delivery_ready"
   | "memory.recorded"
+  | "memory.status_changed"
   | "error.raised";
 
 export interface EventEnvelope<TType extends string = string, TPayload = unknown> {

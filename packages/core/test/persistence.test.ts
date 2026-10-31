@@ -20,10 +20,14 @@ describe("persistence worker", () => {
       for (const expected of ["projects", "sessions", "runs", "agent_instances", "messages", "tool_invocations", "events", "artifacts", "provider_configs", "permission_rules", "usage_records", "budgets", "kv", "schema_migrations"]) {
         expect(names).toContain(expected);
       }
-      // Sin tablas de etapas futuras (Etapa 6: memory). En Etapa 5,
-      // integrations/approvals/promotions y auxiliares ya existen legítimamente.
-      for (const future of ["memory_entries"]) {
-        expect(names).not.toContain(future);
+      // Etapa 6: memory_entries ya existe legítimamente (no hay etapas futuras).
+      // Tablas de la Etapa 6 presentes tras migrar a latest.
+      for (const stage6 of ["memory_entries"]) {
+        expect(names).toContain(stage6);
+      }
+      const memoryCols = await db.query<{ name: string }>("PRAGMA table_info(memory_entries)");
+      for (const col of ["id", "scope", "scope_id", "category", "topic", "content", "source", "origin_ref", "status", "confidence", "version", "supersedes", "review_note", "created_at", "updated_at"]) {
+        expect(memoryCols.map((c) => c.name)).toContain(col);
       }
       // Tablas de la Etapa 3 presentes tras migrar a latest.
       for (const stage3 of ["tasks", "task_dependencies", "task_attempts", "plannings", "scheduler_reservations", "scheduler_fairness"]) {

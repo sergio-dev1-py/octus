@@ -748,6 +748,68 @@ ALTER TABLE integration_conflicts ADD COLUMN attempt INTEGER;
 ALTER TABLE integration_conflicts ADD COLUMN resolution_instance_id TEXT REFERENCES agent_instances(id) ON DELETE SET NULL;
 `;
 
+const MIGRATION_0007 = `
+CREATE TABLE memory_entries (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  category TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  content TEXT NOT NULL,
+  source TEXT NOT NULL,
+  origin_ref TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'proposed',
+  confidence TEXT NOT NULL DEFAULT 'medium',
+  version INTEGER NOT NULL DEFAULT 1,
+  supersedes TEXT REFERENCES memory_entries(id) ON DELETE SET NULL,
+  review_note TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_memory_scope ON memory_entries(scope, scope_id, status);
+CREATE INDEX idx_memory_topic ON memory_entries(scope, scope_id, topic);
+
+-- Anclaje: INSERT exige campos obligatorios (estilo Etapas 3–5).
+CREATE TRIGGER trg_memory_anchor_ins BEFORE INSERT ON memory_entries
+BEGIN
+  SELECT CASE
+    WHEN NEW.scope IS NULL OR NEW.scope = '' THEN RAISE(ABORT, 'memory_entries.scope is required')
+    WHEN NEW.scope_id IS NULL OR NEW.scope_id = '' THEN RAISE(ABORT, 'memory_entries.scope_id is required')
+    WHEN NEW.category IS NULL OR NEW.category = '' THEN RAISE(ABORT, 'memory_entries.category is required')
+    WHEN NEW.topic IS NULL OR NEW.topic = '' THEN RAISE(ABORT, 'memory_entries.topic is required')
+    WHEN NEW.content IS NULL OR NEW.content = '' THEN RAISE(ABORT, 'memory_entries.content is required')
+    WHEN NEW.source IS NULL OR NEW.source = '' THEN RAISE(ABORT, 'memory_entries.source is required')
+  END;
+END;
+-- Inmutabilidad de contenido y procedencia: el cambio es fila nueva con supersedes.
+CREATE TRIGGER trg_memory_immutable_upd BEFORE UPDATE OF scope, scope_id, category, topic, content, source, origin_ref, version ON memory_entries
+BEGIN
+  SELECT CASE
+    WHEN NEW.scope IS NOT OLD.scope THEN RAISE(ABORT, 'memory_entries.scope is immutable')
+    WHEN NEW.scope_id IS NOT OLD.scope_id THEN RAISE(ABORT, 'memory_entries.scope_id is immutable')
+    WHEN NEW.category IS NOT OLD.category THEN RAISE(ABORT, 'memory_entries.category is immutable')
+    WHEN NEW.topic IS NOT OLD.topic THEN RAISE(ABORT, 'memory_entries.topic is immutable')
+    WHEN NEW.content IS NOT OLD.content THEN RAISE(ABORT, 'memory_entries.content is immutable')
+    WHEN NEW.source IS NOT OLD.source THEN RAISE(ABORT, 'memory_entries.source is immutable')
+    WHEN NEW.origin_ref IS NOT OLD.origin_ref THEN RAISE(ABORT, 'memory_entries.origin_ref is immutable')
+    WHEN NEW.version IS NOT OLD.version THEN RAISE(ABORT, 'memory_entries.version is immutable')
+  END;
+END;
+-- Gobernanza: transiciones blancas de estado (FINAL-2: verified→stale;
+-- proposed→approved solo vía aprobación explícita del usuario, nunca validate).
+CREATE TRIGGER trg_memory_status_upd BEFORE UPDATE OF status ON memory_entries
+BEGIN
+  SELECT CASE
+    WHEN OLD.status = NEW.status THEN NULL
+    WHEN OLD.status = 'proposed' AND NEW.status IN ('verified', 'rejected', 'approved') THEN NULL
+    WHEN OLD.status = 'verified' AND NEW.status IN ('approved', 'rejected', 'stale', 'superseded') THEN NULL
+    WHEN OLD.status = 'approved' AND NEW.status IN ('stale', 'superseded') THEN NULL
+    WHEN OLD.status = 'stale' AND NEW.status IN ('verified', 'superseded') THEN NULL
+    ELSE RAISE(ABORT, 'memory_entries: illegal status transition')
+  END;
+END;
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "core-etapa1", sql: MIGRATION_0001 },
   { version: 2, name: "agents-plans-etapa2", sql: MIGRATION_0002 },
@@ -755,4 +817,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 4, name: "repositories-worktrees-etapa4", sql: MIGRATION_0004 },
   { version: 5, name: "integration-promotion-etapa5", sql: MIGRATION_0005 },
   { version: 6, name: "conflict-resolution-etapa5", sql: MIGRATION_0006 },
+  { version: 7, name: "memory-etapa6", sql: MIGRATION_0007 },
 ];

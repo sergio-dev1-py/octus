@@ -15,6 +15,7 @@ tools:
   - grep
   - git_status
   - git_diff
+  - memory_propose
 deniedTools:
   - write
   - edit

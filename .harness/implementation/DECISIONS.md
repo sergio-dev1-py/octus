@@ -514,3 +514,53 @@ Smoke en Electron 45.2.0 / Node 24.22.1 (cierra los pendientes del Hito 0): `nod
 - Los conflictos registran task/attempt/instance vía migración 0006 (trazabilidad e idempotencia de la resolución).
 - Orden de checks en `incorporateCommit`: existencia de fila previa e idempotencia primero; el gate de estado admite `building/conflicted/validating` (un `validating` con commit nuevo -p. ej. reintento tardío- debe poder incorporarse).
 - Vía idempotente de `promoteIntegration` no convergía (bug real, encontrado por live A3-meta-rundone5 dos veces 44/45 + espejo unitario): con `tip==head` devolvía `reused` sin cerrar nada — integración quedaba en `approved` y run en `integrating` para siempre, sin vía de salida (cada reintento repetía el early-return). Causa live: el deliverable ya estaba commiteado en main antes de aprovisionar el worktree (base==produced; el modelo real con permisos auto-aprobados del harness escribió/commiteó en el root de sesión) — flujo válido que la vía idempotente debe absorber. Fix: la rama `tip==head` ahora converge (fila promotion completed si falta, integración→promoted, run→done + eventos, solo transiciones pendientes); `promoted` + reintento con tip==head es no-op puro; `reconcile` tip==newSha también completa el run (si no, el próximo settle lo cancelaría). Test: "promote idempotente converge aunque el destino ya esté en el head".
+
+## ADR-063 — Entradas de memoria con versionado por cadena
+
+- **Estado:** Aceptada (propietario, Etapa 6).
+- **Decisión:** tabla `memory_entries` (migración 0007) con scope project/session/run/task/instance, category/topic/content/source, `origin_ref` JSON {path,section,commit,contentHash}, status proposed/verified/approved/stale/superseded/rejected (+rejected, añadido en Build), confidence, version, `supersedes`, review_note. Triggers estilo Etapas 3–5: contenido/procedencia inmutables (cambio = fila nueva con `supersedes`, vieja → `superseded`); transiciones blancas incluyendo `verified→stale` (FINAL-2) y `proposed→approved` solo vía aprobación explícita del usuario; `review_note` mutable solo por gobernanza. Sin tabla de versiones separada (la cadena `supersedes` lo es); checkpoints = filas `category='checkpoint'`.
+- **Consecuencias:** la memoria es conocimiento derivado con historial completo; jamás una segunda fuente operativa contradictoria.
+
+## ADR-064 — Gobernanza de memoria P1/P2
+
+- **Estado:** Aceptada (propietario, Etapa 6).
+- **Decisión:** `MemoryWriter` (servicio interno, no perfil): tool `memory_propose` para todos los perfiles, siempre `proposed` con procedencia verificada contra el linaje del agente y deny-list de secretos a nivel servicio; `memory_validate` solo coordinador y solo categorías ordinarias (`decision`/`instruction` exigen usuario); aprobación arquitectónica o de instrucciones confiables vía `QuestionService` con bloqueo parcial (solo la decisión espera); `decide` (usuario) verified/approved/rejected; `supersede` con versión+1; `revalidate` por hash/commit (existencia o alcanzabilidad solas no bastan); contradicción: se marca `review_note` sin borrar y la selección excluye el grupo hasta resolver (`resolveConflict`: ganadora limpia, resto a `stale`).
+- **Consecuencias:** ningún subagente se auto-aprueba ni toca memorias permanentes; secretos jamás se persisten.
+
+## ADR-065 — Selección de contexto sin vectores
+
+- **Estado:** Aceptada (propietario, Etapa 6).
+- **Decisión:** `buildMemorySection` tras project-instructions: cadena proyecto→sesión→run→task→instancia; `verified` basta para ordinarias en todo scope, `decision`/`instruction` exigen `approved` (FINAL-1); checkpoints solo del run/task/instance en curso; grupos en contradicción pendiente excluidos (FINAL-3); topes de entradas/antigüedad con nota de omitidas; SQLite + estructurado basta, sin base vectorial.
+- **Consecuencias:** contexto relevante por agente sin fugas entre scopes; sin infra nueva.
+
+## ADR-066 — Coordinador de recuperación + previews al arrancar
+
+- **Estado:** Aceptada (propietario, Etapa 6).
+- **Decisión:** coordinador delgado que ordena lo existente (tasks→worktrees→integrations→previews→promotions→orphanSweep→memory sweep solo-notas); añade `previews.reconcile` al arranque (huérfanos sin matar pids ajenos) y barrido de memoria; `recovery.status` (solo lectura) y `reconcileRecovery` (sin settle cancelador, sin reanudar generaciones). Sin segundo sistema de recuperación.
+- **Consecuencias:** recuperación coordinada sin duplicar operaciones; reglas H por construcción.
+
+## ADR-067 — Steering y runs intactos (afirmación anti-regresión)
+
+- **Estado:** Aceptada (propietario, Etapa 6).
+- **Decisión:** la Etapa 6 no toca steering/`asNewRequest`, fairness, serialización del coordinador ni TaskGraph/Scheduler/AgentManager. O5 (runs coexistentes) se verifica con e2e de aislamiento por scopes, no con cambios.
+- **Consecuencias:** garantías de Etapa 3 preservadas por construcción y por test.
+
+## ADR-068 — Checkpoints de recuperación
+
+- **Estado:** Aceptada (propietario, Etapa 6).
+- **Decisión:** checkpoints = `memory_entries` con `category='checkpoint'` ligados a run/task/instance; la conversación ya persiste por separado y el checkpoint es el resumen recuperable (formato del `COMPACTION_PROMPT`); la selección solo los inyecta para el run/instancia en curso.
+- **Consecuencias:** continuidad tras reinicio sin duplicar historial.
+
+## ADR-069 — Matriz B GLM-5.3-Flash (P4)
+
+- **Estado:** Aceptada (propietario, Etapa 6).
+- **Decisión:** `GO_MODEL=glm-5.3-flash`, `GO_EFFORT=high` (ya en catálogo con toolCall y low/high/max; el effort llega al endpoint vía `reasoning_effort`); prohibido `xhigh` para este modelo (guardia BLOCKED explícita); un caso controlado con `effort=max` en planificación compleja TaskPlanner con aserción de DAG no vacío y ejecutable (regresión explícita del `{"tasks":[]}` de DeepSeek) + trazabilidad (modelo/proveedor/effort/resultado/latencia/uso); DeepSeek queda como antecedente BLOCKED intacto, no se repite.
+- **Consecuencias:** OpenCode Go no se declara validado hasta PASS de GLM; PASS/FAIL/BLOCKED/NOT VERIFIED diferenciados.
+
+## Hallazgos de implementación (Etapa 6)
+
+- La whitelist inicial del trigger olvidaba `proposed→approved` (vía usuario explícita) y `verified→superseded`: el live de gobernanza lo habría bloqueado todo; fix + test de retrocesos (`verified→proposed`, `approved→verified` bloqueados).
+- `requestApproval` registra el pending de forma asíncrona (tras `get`): los tests deben esperar la pregunta con deadline en vez de leerla síncrona (misma lección que los ticks del scheduler).
+- `buildInstructions` pasó a incluir memoria para subagentes (antes solo coordinador recibía projectId): cambio de comportamiento deliberado O3; la suite completa (226 tests) lo avala sin regresión.
+- `memory.list` sin filtros + filtrado en renderer por ids conocidos evita N llamadas IPC y fugas entre proyectos.
+- El planner rechazaba propuestas válidas cuando el modelo serializa opcionales ausentes como `null` explícito (detectado en live matriz B con GLM: `reviewTargetTempId:null` tumbaba un DAG no vacío): `reviewTargetTempId`/`estimatedComplexity` ahora aceptan null y se normalizan a ausente. Test de regresión con nulos explícitos en `planner.test.ts`. Sin relajar el contrato (sigue exigiendo claves exactas y DAG válido).

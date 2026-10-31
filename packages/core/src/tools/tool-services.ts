@@ -78,11 +78,35 @@ export interface PlanToolService {
   requestApproval(planId: string, revisionId: string, sessionId: string, runId: string): Promise<import("@octus/shared").ApprovalRequest>;
 }
 
+export interface MemoryProposeInput {
+  scope: "project" | "session" | "run" | "task" | "instance";
+  scopeId: string;
+  category: string;
+  topic: string;
+  content: string;
+  source: string;
+  originRef?: { path?: string; section?: string; commit?: string; contentHash?: string };
+  confidence?: "low" | "medium" | "high";
+}
+
+export interface MemoryAgentProvenance {
+  projectId: string;
+  sessionId: string;
+  runId: string;
+  instanceId: string;
+}
+
+export interface MemoryToolService {
+  propose(input: MemoryProposeInput, agent: MemoryAgentProvenance): Promise<{ id: string; status: string; scope: string; category: string; topic: string }>;
+  validate(id: string, coordinatorInstanceId: string): Promise<{ id: string; status: string }>;
+}
+
 export interface ToolServices {
   agents?: AgentToolService;
   plans?: PlanToolService;
   tests?: TestRunnerService;
   tasks?: TaskPlannerService;
+  memory?: MemoryToolService;
 }
 
 export interface TestAllowlistEntry {
@@ -135,6 +159,11 @@ export function requireAgents(services: ToolServices | undefined): AgentToolServ
 export function requirePlans(services: ToolServices | undefined): PlanToolService {
   if (!services?.plans) throw new Error("plan service is not available in this context");
   return services.plans;
+}
+
+export function requireMemory(services: ToolServices | undefined): MemoryToolService {
+  if (!services?.memory) throw new Error("memory service is not available in this context");
+  return services.memory;
 }
 
 export type { AgentDefinitionSnapshot, AgentKind };

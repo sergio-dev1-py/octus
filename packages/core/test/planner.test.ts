@@ -231,6 +231,37 @@ describe("task planning (validation + idempotency + anchoring)", () => {
     }
   });
 
+  test("planner acepta nulos explícitos en opcionales (modelos que serializan ausentes como null)", async () => {
+    // Regresión live matriz B (GLM): reviewTargetTempId:null tumbaba la propuesta válida.
+    const proposal = {
+      tasks: [
+        { tempId: "p1", title: "Explore auth module files", description: "Locate and read every file involved in the current login flow.", agentRole: "explorer", priority: 5, dependencies: [], acceptanceCriteria: ["list of files under src/ with paths"], requiredTools: ["read", "glob"], writeScope: [], validationCommands: [], needsReview: false, reviewTargetTempId: null, estimatedComplexity: null },
+        { tempId: "p2", title: "Summarize login flow findings", description: "Write a structured summary of the login flow based on the exploration.", agentRole: "researcher", priority: 1, dependencies: ["p1"], acceptanceCriteria: ["summary mentions README.md"], requiredTools: ["read"], writeScope: [], validationCommands: [], needsReview: false, reviewTargetTempId: null },
+      ],
+    };
+    const t = await makeTestCore({ metaTurns: [{ text: JSON.stringify(proposal) }] });
+    try {
+      await useFakeModels(t);
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "Build auth", structured: STRUCTURED, runId, createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_p");
+      await t.core.plans.requestApproval(plan.id, rev.id, session.id, runId);
+      const pending = await t.core.pendingApprovals(session.id);
+      await t.core.decideApproval(pending[0]!.id, "approved");
+      const first = await t.core.planner.planTasks(instanceId, { runId, objective: "Build auth", planId: plan.id, revisionId: rev.id });
+      expect(first.created).toBe(true);
+      expect(first.taskIds).toHaveLength(2);
+      const tasks = await t.core.tasks.listTasks({ runId });
+      expect(tasks.every((task) => task.reviewTargetTaskId === undefined)).toBe(true);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("planner exige revisión aprobada explícita sin auto-selección", async () => {
     const t = await makeTestCore();
     try {

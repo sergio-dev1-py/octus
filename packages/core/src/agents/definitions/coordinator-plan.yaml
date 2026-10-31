@@ -26,6 +26,8 @@ tools:
   - plan.get
   - plan.list
   - plan.request_approval
+  - memory_propose
+  - memory_validate
 deniedTools:
   - write
   - edit

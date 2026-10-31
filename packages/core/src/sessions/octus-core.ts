@@ -54,6 +54,9 @@ import { PreviewManager } from "../integration/preview-manager.js";
 import { ApprovalService } from "../integration/approval-service.js";
 import { PromotionManager } from "../integration/promotion-manager.js";
 import { ConflictManager } from "../integration/conflict-manager.js";
+import { MemoryService } from "../memory/memory-service.js";
+import { MemoryWriter } from "../memory/memory-writer.js";
+import { MEMORY_TOOLS } from "../memory/memory-tools.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
 import { MetaAdapter } from "../providers/meta-adapter.js";
@@ -120,6 +123,8 @@ export class OctusCore {
   readonly approvals: ApprovalService;
   readonly promotions: PromotionManager;
   readonly conflicts: ConflictManager;
+  readonly memory: MemoryService;
+  readonly memoryWriter: MemoryWriter;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -190,7 +195,7 @@ export class OctusCore {
           return { definitionTools: def?.tools ?? [], deniedTools: def?.deniedTools ?? [], definitionRules: def?.permissionRules ?? [], instanceRules };
         },
       },
-      STAGE1_TOOLS.concat(WEB_TOOLS, GIT_TOOLS, TEST_TOOLS, PLAN_TOOLS, AGENT_TOOLS, TASK_TOOLS),
+      STAGE1_TOOLS.concat(WEB_TOOLS, GIT_TOOLS, TEST_TOOLS, PLAN_TOOLS, AGENT_TOOLS, TASK_TOOLS, MEMORY_TOOLS),
     );
     this.plans = new PlanManager(db, this.events, this.bus);
     this.directories = new DirectoryRegistry(db);
@@ -221,9 +226,21 @@ export class OctusCore {
       () => this.conflicts,
       () => this.integrations,
     );
+    this.memory = new MemoryService(db, this.events, this.bus);
+    this.memoryWriter = new MemoryWriter(this.memory, this.questions);
     toolServices.agents = this.agents;
     toolServices.plans = this.plans;
     toolServices.tests = this.tests;
+    toolServices.memory = {
+      propose: async (input, agent) => {
+        const entry = await this.memoryWriter.propose(input, agent);
+        return { id: entry.id, status: entry.status, scope: entry.scope, category: entry.category, topic: entry.topic };
+      },
+      validate: async (id, coordinatorInstanceId) => {
+        const entry = await this.memoryWriter.validate(id, coordinatorInstanceId);
+        return { id: entry.id, status: entry.status };
+      },
+    };
     this.tasks = new TaskManager(
       db,
       this.events,
@@ -1041,6 +1058,92 @@ export class OctusCore {
     }));
   }
 
+  // ------------------------------------------------- recuperación (Etapa 6)
+  /**
+   * Estado pendiente de recuperación (solo lectura): journals abiertos,
+   * promociones a medio camino, previews vivos, memorias stale o en
+   * contradicción. No ejecuta nada.
+   */
+  async recoveryStatus(): Promise<{ pendingOps: number; startedPromotions: number; livePreviews: number; staleMemories: number; pendingContradictions: number }> {
+    const count = async (sql: string, params: unknown[] = []): Promise<number> => {
+      const row = await this.db.queryOne<{ n: number }>(sql, params as import("../persistence/protocol.js").SqlParam[]).catch(() => null);
+      return row ? Number(row.n ?? 0) : 0;
+    };
+    const [attempts, iops, pops, wops] = await Promise.all([
+      count("SELECT COUNT(*) AS n FROM task_attempts WHERE status IN ('pending','running')"),
+      count("SELECT COUNT(*) AS n FROM integration_ops WHERE status = 'started'"),
+      count("SELECT COUNT(*) AS n FROM promotion_ops WHERE status = 'started'"),
+      count("SELECT COUNT(*) AS n FROM worktree_ops WHERE status IN ('provisioning','cleanup_pending')"),
+    ]);
+    const [startedPromotions, livePreviews, staleMemories, pendingContradictions] = await Promise.all([
+      count("SELECT COUNT(*) AS n FROM promotions WHERE status = 'started'"),
+      count("SELECT COUNT(*) AS n FROM previews WHERE status IN ('running','reachable')"),
+      count("SELECT COUNT(*) AS n FROM memory_entries WHERE status = 'stale'"),
+      count("SELECT COUNT(*) AS n FROM memory_entries WHERE review_note LIKE '%contradiction pending%'"),
+    ]);
+    return { pendingOps: attempts + iops + pops + wops, startedPromotions, livePreviews, staleMemories, pendingContradictions };
+  }
+
+  /**
+   * Coordinador delgado de reconciliación (Etapa 6): ordena los reconciles
+   * existentes (tasks → worktrees → integrations → previews → promotions →
+   * planes → memoria). Nunca ejecuta el settle cancelador ni reanuda
+   * generaciones; las reglas H se cumplen por construcción.
+   */
+  async reconcileRecovery(): Promise<{
+    tasks: { interrupted: number; released: number };
+    worktrees: { suspended: number; orphaned: number; resumed: number };
+    integrations: { resolved: number; interrupted: number; stale: number };
+    previews: { orphaned: number };
+    promotions: { resolved: number; diverged: number };
+    orphanedPlans: number;
+    memory: { checked: number; markedStale: string[] };
+  }> {
+    const tasks = await this.tasks.reconcile().catch(() => ({ interrupted: 0, released: 0 }));
+    const worktrees = await this.worktrees.reconcile().catch(() => ({ suspended: 0, orphaned: 0, resumed: 0 }));
+    const integrations = await this.integrations.reconcile().catch(() => ({ resolved: 0, interrupted: 0, stale: 0 }));
+    const previews = await this.previews.reconcile().catch(() => ({ orphaned: 0 }));
+    const promotions = await this.promotions.reconcile().catch(() => ({ resolved: 0, diverged: 0 }));
+    const orphanedPlans = await this.plans.orphanSweep().catch(() => 0);
+    const memory = await this.memory.startupSweep(200).catch(() => ({ checked: 0, markedStale: [] as string[] }));
+    return { tasks, worktrees, integrations, previews, promotions, orphanedPlans, memory };
+  }
+
+  // ------------------------------------------------- memoria (Etapa 6, P1/P2)
+  /** Lectura de memorias (filtros opcionales por scope/estado/categoría). */
+  async listMemories(filter?: { scope?: "project" | "session" | "run" | "task" | "instance"; scopeId?: string; status?: "proposed" | "verified" | "approved" | "stale" | "superseded" | "rejected" | Array<"proposed" | "verified" | "approved" | "stale" | "superseded" | "rejected">; category?: string }) {
+    return this.memory.list(filter ?? {});
+  }
+
+  async getMemory(id: string) {
+    return this.memory.get(id);
+  }
+
+  /** Propuesta explícita (UI/usuario u otro flujo con procedencia verificada). */
+  async proposeMemory(input: { scope: "project" | "session" | "run" | "task" | "instance"; scopeId: string; category: string; topic: string; content: string; source: string; originRef?: { path?: string; section?: string; commit?: string; contentHash?: string }; confidence?: "low" | "medium" | "high" }) {
+    return this.memoryWriter.propose(input);
+  }
+
+  /** Validación ordinaria por el usuario (decision/instruction exigen approved). */
+  async validateMemory(id: string) {
+    return this.memoryWriter.decide(id, "verified");
+  }
+
+  /** Decisión explícita del usuario (verified|approved|rejected). */
+  async decideMemory(id: string, decision: "verified" | "approved" | "rejected") {
+    return this.memoryWriter.decide(id, decision);
+  }
+
+  /** Revalidación contra el origen (hash/commit). */
+  async revalidateMemory(id: string) {
+    return this.memoryWriter.revalidate(id);
+  }
+
+  /** Resolución de contradicción: ganadora limpia, resto a stale. */
+  async resolveMemoryConflict(winnerId: string, note?: string) {
+    return this.memoryWriter.resolveConflict(winnerId, note);
+  }
+
   private async cancelSessionTasks(sessionId: string): Promise<void> {
     const tasks = await this.tasks.listTasks({ sessionId });
     for (const task of tasks) {
@@ -1329,8 +1432,10 @@ export class OctusCore {
     await this.tasks.reconcile().catch(() => undefined);
     await this.worktrees.reconcile().catch(() => undefined);
     await this.integrations.reconcile().catch(() => undefined);
+    await this.previews.reconcile().catch(() => undefined);
     await this.promotions.reconcile().catch(() => undefined);
     await this.plans.orphanSweep().catch(() => 0);
+    await this.memory.startupSweep(200).catch(() => ({ checked: 0, markedStale: [] as string[] }));
   }
 }
 

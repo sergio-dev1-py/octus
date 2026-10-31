@@ -14,6 +14,7 @@ import type {
   IntegrationConflict,
   IntegrationOperation,
   IntegrationReview,
+  MemoryItem,
   Message,
   PermissionRequest,
   Plan,
@@ -86,6 +87,8 @@ interface UIState {
   previews: Record<string, Preview[]>;
   previewLogs: Record<string, string>;
   promotions: Record<string, Promotion[]>;
+  memories: MemoryItem[];
+  recoveryStatus?: { pendingOps: number; startedPromotions: number; livePreviews: number; staleMemories: number; pendingContradictions: number };
 }
 
 const [state, setState] = createStore<UIState>({
@@ -128,6 +131,8 @@ const [state, setState] = createStore<UIState>({
   previews: {},
   previewLogs: {},
   promotions: {},
+  memories: [],
+  recoveryStatus: undefined,
 });
 
 export { state };
@@ -222,12 +227,13 @@ export async function selectProject(projectId: string): Promise<void> {
   await refreshProjectSettings();
   await refreshWorktrees();
   await refreshIntegrations();
+  await refreshMemory();
 }
 
 export async function selectSession(sessionId: string): Promise<void> {
   setState("activeSessionId", sessionId);
   setState("live", {});
-  await Promise.all([refreshMessages(), refreshPending(), refreshUsage(), refreshPlans(), refreshApprovals(), refreshAgents(), refreshTasks(), refreshIntegrations()]);
+  await Promise.all([refreshMessages(), refreshPending(), refreshUsage(), refreshPlans(), refreshApprovals(), refreshAgents(), refreshTasks(), refreshIntegrations(), refreshMemory()]);
 }
 
 export async function createProject(name: string, rootPath: string): Promise<void> {
@@ -525,6 +531,73 @@ export async function setWorktreesRoot(path: string): Promise<void> {
 
 export async function reloadIntegrations(): Promise<void> {
   await refreshIntegrations();
+}
+
+export async function reloadMemory(): Promise<void> {
+  await refreshMemory();
+}
+
+async function refreshAfterMemoryAction(ok: boolean, error?: string): Promise<void> {
+  if (!ok) setError(error ?? "Memory action failed");
+  else setError(undefined);
+  await refreshMemory();
+}
+
+/** Memorias visibles de la sesión activa (proyecto + sesión + runs/tasks/instancias cargadas). */
+async function refreshMemory(): Promise<void> {
+  if (!state.activeProjectId) {
+    setState("memories", []);
+    setState("recoveryStatus", undefined);
+    return;
+  }
+  try {
+    const { entries } = await invoke("memory.list", {});
+    const known = new Set<string>([state.activeProjectId]);
+    if (state.activeSessionId) known.add(state.activeSessionId);
+    for (const r of state.runs) known.add(r.id);
+    for (const t of state.tasks) known.add(t.id);
+    for (const i of state.agentInstances) known.add(i.id);
+    setState("memories", entries.filter((e) => known.has(e.scopeId)));
+  } catch {
+    setState("memories", []);
+  }
+  try {
+    setState("recoveryStatus", await invoke("recovery.status", {}));
+  } catch {
+    setState("recoveryStatus", undefined);
+  }
+}
+
+export async function proposeMemory(input: { scope: MemoryItem["scope"]; scopeId: string; category: string; topic: string; content: string; source: string }): Promise<void> {
+  const result = await invoke("memory.propose", input);
+  await refreshAfterMemoryAction(result.ok, result.error);
+}
+
+export async function validateMemory(id: string): Promise<void> {
+  const result = await invoke("memory.validate", { id });
+  await refreshAfterMemoryAction(result.ok, result.error);
+}
+
+export async function decideMemory(id: string, decision: "verified" | "approved" | "rejected"): Promise<void> {
+  const result = await invoke("memory.decide", { id, decision });
+  await refreshAfterMemoryAction(result.ok, result.error);
+}
+
+export async function revalidateMemory(id: string): Promise<void> {
+  const result = await invoke("memory.revalidate", { id });
+  await refreshAfterMemoryAction(result.ok, result.error);
+}
+
+export async function resolveMemoryConflict(winnerId: string): Promise<void> {
+  const result = await invoke("memory.resolve", { winnerId });
+  await refreshAfterMemoryAction(result.ok, result.error);
+}
+
+export async function reconcileRecovery(): Promise<void> {
+  const result = await invoke("recovery.reconcile", {});
+  if (!result.ok) setError(result.error ?? "Recovery reconcile failed");
+  else setError(undefined);
+  await Promise.all([refreshMemory(), refreshTasks(), refreshIntegrations()]);
 }
 
 async function refreshAfterIntegrationAction(ok: boolean, error?: string): Promise<void> {
@@ -876,6 +949,10 @@ function applyEvent(event: CoreEvent): void {
     case "resolution.requested":
     case "resolution.completed":
       void refreshIntegrations();
+      break;
+    case "memory.recorded":
+    case "memory.status_changed":
+      void refreshMemory();
       break;
     default:
       break;

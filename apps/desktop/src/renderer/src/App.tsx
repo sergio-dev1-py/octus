@@ -18,6 +18,7 @@ import {
   createProject,
   createSession,
   decideApproval,
+  decideMemory,
   exportRevision,
   finalizeConflictResolution,
   implementRevision,
@@ -27,7 +28,9 @@ import {
   inspectPreview,
   interrupt,
   loadPreviewLogs,
+  proposeMemory,
   promoteIntegration,
+  revalidateMemory,
   rebuildIntegration,
   rejectIntegration,
   rejectRevision,
@@ -36,11 +39,14 @@ import {
   reloadProviders,
   reloadWorktrees,
   requestConflictResolution,
+  resolveMemoryConflict,
   restartPreview,
   retryTask,
   reviewTask,
   rerunValidations,
   recordIntegrationReview,
+  reconcileRecovery,
+  reloadMemory,
   selectProject,
   selectSession,
   sendPrompt,
@@ -52,6 +58,7 @@ import {
   startPreview,
   state,
   stopPreview,
+  validateMemory,
 } from "./store.js";
 
 function PartView(props: { part: MessagePart }) {
@@ -885,6 +892,96 @@ function IntegrationsSection() {
   );
 }
 
+function MemorySection() {
+  const [form, setForm] = createSignal({ scope: "project", scopeId: "", category: "fact", topic: "", content: "", source: "user" });
+  const byScope = () => {
+    const groups = new Map<string, typeof state.memories>();
+    for (const m of state.memories) {
+      const key = `${m.scope}:${m.scopeId.slice(-6)}`;
+      const list = groups.get(key);
+      if (list) list.push(m);
+      else groups.set(key, [m]);
+    }
+    return [...groups.entries()];
+  };
+  const pending = () => state.memories.filter((m) => m.status === "proposed").length;
+  const conflicts = () => state.memories.filter((m) => m.reviewNote && /contradiction pending/i.test(m.reviewNote));
+  return (
+    <details class="stage2">
+      <summary>
+        Memory ({pending()} proposed / {state.memories.length} total{conflicts().length > 0 ? ` · ${conflicts().length} conflicted` : ""})
+      </summary>
+      <Show when={state.memories.length === 0}>
+        <p class="muted">No memory entries yet. Agents propose via memory_propose; governance decides.</p>
+      </Show>
+      <For each={byScope()}>
+        {([scope, entries]) => (
+          <details>
+            <summary>{scope} ({entries.length})</summary>
+            <ul>
+              <For each={entries}>
+                {(m) => (
+                  <li>
+                    <code>{m.category}:{m.topic}</code>{" "}
+                    <span class={`pill ${m.status === "approved" || m.status === "verified" ? "ok" : m.status === "proposed" ? "warn" : m.status === "stale" ? "err" : "err"}`}>{m.status}</span>{" "}
+                    <span class="muted">v{m.version}</span>
+                    <p class="muted">{m.content.slice(0, 200)}</p>
+                    <Show when={m.reviewNote}>
+                      <p class="muted">note: {m.reviewNote}</p>
+                    </Show>
+                    <div class="row">
+                      <Show when={m.status === "proposed"}>
+                        <Show when={m.category !== "decision" && m.category !== "instruction"}>
+                          <button onClick={() => void validateMemory(m.id)}>Validate</button>
+                        </Show>
+                        <button class="primary" onClick={() => void decideMemory(m.id, "approved")}>Approve</button>
+                        <button class="danger" onClick={() => void decideMemory(m.id, "rejected")}>Reject</button>
+                      </Show>
+                      <Show when={m.status === "verified" || m.status === "approved"}>
+                        <button onClick={() => void revalidateMemory(m.id)}>Revalidate</button>
+                      </Show>
+                      <Show when={m.reviewNote && /contradiction pending/i.test(m.reviewNote)}>
+                        <button class="primary" onClick={() => void resolveMemoryConflict(m.id)}>Keep this</button>
+                      </Show>
+                    </div>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </details>
+        )}
+      </For>
+      <details>
+        <summary>Propose memory</summary>
+        <div class="row">
+          <select value={form().scope} onChange={(e) => setForm((f) => ({ ...f, scope: e.currentTarget.value }))}>
+            <option value="project">project</option>
+            <option value="session">session</option>
+            <option value="run">run</option>
+            <option value="task">task</option>
+            <option value="instance">instance</option>
+          </select>
+          <input placeholder="scopeId" value={form().scopeId} onInput={(e) => setForm((f) => ({ ...f, scopeId: e.currentTarget.value }))} />
+          <input placeholder="category" value={form().category} onInput={(e) => setForm((f) => ({ ...f, category: e.currentTarget.value }))} />
+          <input placeholder="topic" value={form().topic} onInput={(e) => setForm((f) => ({ ...f, topic: e.currentTarget.value }))} />
+        </div>
+        <div class="row">
+          <input placeholder="content" value={form().content} onInput={(e) => setForm((f) => ({ ...f, content: e.currentTarget.value }))} />
+          <input placeholder="source" value={form().source} onInput={(e) => setForm((f) => ({ ...f, source: e.currentTarget.value }))} />
+          <button class="primary" onClick={() => void proposeMemory({ scope: form().scope as "project" | "session" | "run" | "task" | "instance", scopeId: form().scopeId, category: form().category, topic: form().topic, content: form().content, source: form().source })}>Propose</button>
+        </div>
+      </details>
+      <details>
+        <summary>Recovery ({state.recoveryStatus ? `${state.recoveryStatus.pendingOps} pending ops · ${state.recoveryStatus.staleMemories} stale · ${state.recoveryStatus.pendingContradictions} conflicts` : "unknown"})</summary>
+        <div class="row">
+          <button onClick={() => void reconcileRecovery()}>Reconcile now</button>
+          <button onClick={() => void reloadMemory()}>Refresh</button>
+        </div>
+      </details>
+    </details>
+  );
+}
+
 function AgentsSection() {  const active = () => state.agentInstances.filter((i) => ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
   return (
     <details class="stage2">
@@ -977,6 +1074,7 @@ function ChatView() {
       <TasksSection />
       <WorktreesSection />
       <IntegrationsSection />
+      <MemorySection />
       <AgentsSection />
       <Composer />
       <details>

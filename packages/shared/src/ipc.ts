@@ -14,6 +14,7 @@ import type {
   IntegrationOperation,
   IntegrationReview,
   Message,
+  MemoryItem,
   ModelSelection,
   Plan,
   PlanRevision,
@@ -169,6 +170,15 @@ export interface OctusIPC {
   "worktrees.cleanup": { request: { worktreeId: string; deleteBranch?: boolean }; response: { ok: boolean; error?: string } };
   "repos.inspect": { request: { projectId: string }; response: { summary: RepositorySummary } };
   "repos.setWorktreesRoot": { request: { projectId: string; path: string }; response: { ok: boolean; error?: string } };
+  "memory.list": { request: { scope?: "project" | "session" | "run" | "task" | "instance"; scopeId?: string; status?: "proposed" | "verified" | "approved" | "stale" | "superseded" | "rejected" }; response: { entries: MemoryItem[] } };
+  "memory.get": { request: { id: string }; response: { entry?: MemoryItem; error?: string } };
+  "memory.propose": { request: { scope: "project" | "session" | "run" | "task" | "instance"; scopeId: string; category: string; topic: string; content: string; source: string; originRef?: { path?: string; section?: string; commit?: string; contentHash?: string }; confidence?: "low" | "medium" | "high" }; response: { ok: boolean; id?: string; status?: string; error?: string } };
+  "memory.validate": { request: { id: string }; response: { ok: boolean; status?: string; error?: string } };
+  "memory.decide": { request: { id: string; decision: "verified" | "approved" | "rejected" }; response: { ok: boolean; status?: string; error?: string } };
+  "memory.revalidate": { request: { id: string }; response: { ok: boolean; changed?: boolean; status?: string; reason?: string; error?: string } };
+  "memory.resolve": { request: { winnerId: string; note?: string }; response: { ok: boolean; status?: string; error?: string } };
+  "recovery.status": { request: Record<string, never>; response: { pendingOps: number; startedPromotions: number; livePreviews: number; staleMemories: number; pendingContradictions: number } };
+  "recovery.reconcile": { request: Record<string, never>; response: { ok: boolean; summary?: { tasks: { interrupted: number; released: number }; worktrees: { suspended: number; orphaned: number; resumed: number }; integrations: { resolved: number; interrupted: number; stale: number }; previews: { orphaned: number }; promotions: { resolved: number; diverged: number }; orphanedPlans: number; memory: { checked: number; markedStale: string[] } }; error?: string } };
 }
 
 export type IpcChannel = keyof OctusIPC;

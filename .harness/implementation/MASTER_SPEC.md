@@ -64,6 +64,8 @@ Etapa 5 (implementado): ramas `harness/integration|workbase|resolution/*` bajo w
 
 Fuentes de verdad diferenciadas: memoria permanente de proyecto, de sesión, de run/task y conversación por instancia. Cada agente recibe contexto relevante, no el historial completo de los demás. Soporte: archivos del proyecto, base de datos y artefactos verificables; sin bases vectoriales al principio. Se registran arquitectura, stack, convenciones, decisiones aprobadas, contratos, resúmenes de tareas, investigaciones, dependencias y versiones de contexto. Los hallazgos provisionales no se convierten en reglas permanentes sin aprobación registrada.
 
+Etapa 6 (implementado): `memory_entries` (scope project/session/run/task/instance; estados proposed/verified/approved/stale/superseded/rejected; versionado por cadena `supersedes`; triggers de inmutabilidad y transiciones blancas); `MemoryWriter` como servicio interno (proponer/validar/aprobar con usuario vía `QuestionService`/superseder/revalidar por hash de origen); tools `memory_propose` (todos los perfiles, solo provisional) y `memory_validate` (solo coordinador, solo ordinarias); `ContextBuilder.buildMemorySection` con política por categoría y exclusión de contradicciones pendientes; coordinador de recuperación (`recoveryStatus`/`reconcileRecovery`, `previews.reconcile` al arrancar, barrido de memoria).
+
 ## 9. Proveedores y modelos (decisión cerrada)
 
 - Solo dos proveedores: **Meta Model API (principal)** y **OpenCode Go (alternativo seleccionable)**. Sin fallback automático entre proveedores en las primeras etapas.

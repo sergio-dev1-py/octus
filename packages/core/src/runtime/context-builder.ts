@@ -16,6 +16,8 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { PersistenceService } from "../persistence/persistence-service.js";
 import { OCTUS_BASE_PROMPT } from "../prompts/prompts.js";
+import { deserializeMemory } from "../memory/memory-service.js";
+import { selectForContext } from "../memory/memory-select.js";
 
 export interface BuiltContext {
   instructions: string;
@@ -25,6 +27,10 @@ export interface BuiltContext {
 
 export interface InstructionExtras {
   projectId?: string;
+  sessionId?: string;
+  runId?: string;
+  taskId?: string;
+  instanceId?: string;
   /** Instrucciones de la tarea delegada (brief) si aplica. */
   taskBrief?: string;
   /** Estado autoritativo de planes de la sesión (inyectado desde SQLite). */
@@ -38,7 +44,8 @@ export class ContextBuilder {
 
   /**
    * Capas: base Octus + sistema del perfil + instrucciones de proyecto APROBADAS
-   * + tarea + estado de planes/entregas + tools. (Prompt 2 §D, ADR-027.)
+   * + memoria validada del contexto + tarea + estado de planes/entregas + tools.
+   * (Prompt 2 §D, ADR-027; memoria Etapa 6: FINAL-1/FINAL-3.)
    */
   async buildInstructions(definition: AgentDefinition, directory: string, tools: NormalizedTool[], extras: InstructionExtras = {}): Promise<string> {
     const parts = [OCTUS_BASE_PROMPT, definition.systemPrompt];
@@ -47,6 +54,7 @@ export class ContextBuilder {
     }
     if (extras.projectId) {
       parts.push(...(await this.approvedProjectInstructions(extras.projectId, directory)));
+      parts.push(...(await this.buildMemorySection(extras)));
     }
     if (extras.planState) {
       parts.push(`<session-plans>\n${extras.planState}\n</session-plans>`);
@@ -91,6 +99,52 @@ export class ContextBuilder {
       }
     }
     return out;
+  }
+
+  /**
+   * Memoria validada del contexto (Etapa 6, FINAL-1/FINAL-3): cadena
+   * proyecto→sesión→run→task→instancia, puerta por categoría+estado,
+   * checkpoints de la recuperación en curso, exclusión de contradicciones
+   * pendientes. Sin inyectar scopes ajenos.
+   */
+  async buildMemorySection(ids: { projectId?: string; sessionId?: string; runId?: string; taskId?: string; instanceId?: string }): Promise<string[]> {
+    if (!ids.projectId) return [];
+    const ors: string[] = ["(scope = 'project' AND scope_id = ?)"];
+    const params: unknown[] = [ids.projectId];
+    if (ids.sessionId) {
+      ors.push("(scope = 'session' AND scope_id = ?)");
+      params.push(ids.sessionId);
+    }
+    if (ids.runId) {
+      ors.push("(scope = 'run' AND scope_id = ?)");
+      params.push(ids.runId);
+    }
+    if (ids.taskId) {
+      ors.push("(scope = 'task' AND scope_id = ?)");
+      params.push(ids.taskId);
+    }
+    if (ids.instanceId) {
+      ors.push("(scope = 'instance' AND scope_id = ?)");
+      params.push(ids.instanceId);
+    }
+    const rows = await this.db.query<Record<string, string | number | null>>(
+      `SELECT * FROM memory_entries WHERE (${ors.join(" OR ")}) AND status IN ('verified','approved') ORDER BY updated_at DESC LIMIT 200`,
+      params as import("../persistence/protocol.js").SqlParam[],
+    );
+    const { selected, dropped } = selectForContext(rows.map(deserializeMemory), ids);
+    if (selected.length === 0) return [];
+    const out = selected.map((e) => {
+      const origin = e.originRef.path ? ` origin="${e.originRef.path}${e.originRef.commit ? `#${e.originRef.commit.slice(0, 12)}` : ""}"` : "";
+      return `<memory scope="${e.scope}" category="${e.category}" topic="${this.escapeAttr(e.topic)}" status="${e.status}" version="${e.version}" source="${this.escapeAttr(e.source)}"${origin}>\n${e.content}\n</memory>`;
+    });
+    if (dropped > 0) {
+      out.push(`<!-- ${dropped} memorias relevantes omitidas por tope de contexto; pide resumen si las necesitas -->`);
+    }
+    return out;
+  }
+
+  private escapeAttr(value: string): string {
+    return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").slice(0, 200);
   }
 
   /** Historial de la instancia → mensajes normalizados, aplicando el corte de compactación. */
