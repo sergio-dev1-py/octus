@@ -1,0 +1,28 @@
+node_modules/
+out/
+dist/
+build/
+release/
+.data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+.DS_Store
+Thumbs.db
+*.local.json
+# Secrets & local env (keys live in the OS store, never in the repo)
+.env
+.env.*
+*.pem
+*.key
+secrets.json
+# Test / coverage artefacts
+coverage/
+playwright-report/
+test-results/
+# Packaged desktop artefacts
+*.exe
+*.dmg
+*.AppImage
+*.snap

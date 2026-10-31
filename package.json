@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "octus",
+  "description": "Octus - local-first multi-agent coding harness (desktop)",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "bun": ">=1.4.0",
+    "node": ">=22.5"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "trustedDependencies": [
+    "electron"
+  ],
+  "scripts": {
+    "dev": "bun run --cwd apps/desktop dev",
+    "typecheck": "bun run --cwd packages/shared typecheck && bun run --cwd packages/core typecheck && bun run --cwd apps/desktop typecheck",
+    "test": "bun run --cwd packages/shared test && bun run --cwd packages/core test",
+    "build": "bun run --cwd apps/desktop build",
+    "smoke": "bun run --cwd apps/desktop smoke"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
+  }
+}

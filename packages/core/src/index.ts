@@ -1,0 +1,25 @@
+/** @octus/core — superficie pública. */
+export * from "./errors.js";
+export * from "./util.js";
+export * from "./persistence/persistence-service.js";
+export * from "./persistence/schema.js";
+export * from "./events/event-store.js";
+export * from "./secrets/secret-store.js";
+export * from "./config/config-store.js";
+export * from "./providers/pricing.js";
+export * from "./providers/model-router.js";
+export * from "./providers/meta-adapter.js";
+export * from "./providers/go-adapter.js";
+export * from "./permissions/permission-manager.js";
+export * from "./questions/question-service.js";
+export * from "./tools/tool-gateway.js";
+export * from "./tools/tool-definitions.js";
+export * from "./tools/path-scope.js";
+export * from "./agents/agent-registry.js";
+export { promptHashOf, snapshotOf } from "./agents/definition-loader.js";
+export * from "./prompts/prompts.js";
+export * from "./runtime/context-builder.js";
+export * from "./runtime/agent-runtime.js";
+export * from "./costs/budgets.js";
+export * from "./costs/usage.js";
+export * from "./sessions/octus-core.js";

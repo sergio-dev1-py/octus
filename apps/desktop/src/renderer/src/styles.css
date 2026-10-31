@@ -1,0 +1,309 @@
+:root {
+  color-scheme: light;
+  --bg: #fafafa;
+  --panel: #ffffff;
+  --border: #e2e2e2;
+  --text: #1a1a1a;
+  --muted: #6b6b6b;
+  --accent: #2456c8;
+  --danger: #b3261e;
+  --warn-bg: #fff4d6;
+  --err-bg: #fdecea;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+}
+
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.sidebar h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 8px 0 4px;
+}
+
+.sidebar button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 4px;
+}
+
+button {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button.active {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 100%;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.profile {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat,
+.settings-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px;
+  overflow-y: auto;
+  gap: 8px;
+}
+
+.banner {
+  padding: 8px 12px;
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.banner.warn {
+  background: var(--warn-bg);
+}
+
+.banner.err {
+  background: var(--err-bg);
+}
+
+.timeline {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px;
+}
+
+.message {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.message .role {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.message.live {
+  border-style: dashed;
+}
+
+.md pre,
+.toolresult pre,
+pre.detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f2f2f2;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.toolcall {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 4px 0;
+}
+
+.toolname {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.toolresult {
+  margin: 4px 0;
+}
+
+.toolresult.err pre {
+  background: var(--err-bg);
+}
+
+.reasoning {
+  margin: 4px 0;
+}
+
+.composer textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 40%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.dialog {
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 420px;
+  max-width: 640px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.dialog pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f2f2f2;
+  padding: 8px;
+  border-radius: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
+.pill {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.pill.ok {
+  background: #dff5e1;
+}
+
+.pill.warn {
+  background: var(--warn-bg);
+}
+
+.pill.err {
+  background: var(--err-bg);
+}
+
+.pill.mode {
+  margin-left: 8px;
+  background: #e8eefc;
+}
+
+.pill.mode.plan {
+  background: #e8eefc;
+}
+
+.pill.mode.build {
+  background: #e2f3e5;
+}
+
+details.stage2 {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+details.stage2 summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.revision {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.card.warn {
+  border-color: #d9a400;
+}
+
+code.muted {
+  font-size: 11px;
+}
+
+.question label {
+  display: block;
+  margin: 4px 0;
+}
