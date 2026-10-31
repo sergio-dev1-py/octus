@@ -342,7 +342,8 @@ export class MemoryService {
 /** Deny-list a nivel servicio: secretos aparentes jamás se persisten. */
 const SECRET_LIKE = /api[_-]?key|secret|passwd|password|credential|private[_-]?key|bearer|access_token|auth_token|client_secret|session_token/i;
 
-function deserializeMemory(row: Record<string, string | number | null>): MemoryItem {
+/** Fila → MemoryItem (reutilizado por ContextBuilder para no duplicar mapeo). */
+export function deserializeMemory(row: Record<string, string | number | null>): MemoryItem {
   let originRef: MemoryOriginRef = {};
   try {
     const parsed = JSON.parse(String(row.origin_ref ?? "{}")) as unknown;

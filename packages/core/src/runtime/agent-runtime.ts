@@ -126,10 +126,20 @@ export class AgentRuntime {
     const extras = isCoordinator
       ? {
           projectId: providers?.projectIdOf ? await providers.projectIdOf(session.id) : undefined,
+          sessionId: session.id,
+          runId: instance.runId,
+          taskId: instance.taskId,
+          instanceId: instance.id,
           planState: providers?.planState ? await providers.planState(session.id) : undefined,
           deliveries: providers?.deliveries ? await providers.deliveries(session.id) : undefined,
         }
-      : {};
+      : {
+          projectId: providers?.projectIdOf ? await providers.projectIdOf(session.id) : undefined,
+          sessionId: session.id,
+          runId: instance.runId,
+          taskId: instance.taskId,
+          instanceId: instance.id,
+        };
     const instructions = await this.context.buildInstructions(definition, instance.directory, tools, extras);
     const built = isCoordinator ? await this.context.buildSessionMessages(session.id) : await this.context.buildMessages(instance.id);
     const resolution = this.router.resolve({

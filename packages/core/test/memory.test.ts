@@ -470,3 +470,151 @@ describe("etapa 6.1 — tools y definiciones", () => {
     }
   });
 });
+
+describe("etapa 6.2 — selección de memoria (FINAL-1/FINAL-3)", () => {
+  let n = 0;
+  const item = (over: Partial<import("@octus/shared").MemoryItem>): import("@octus/shared").MemoryItem => {
+    n += 1;
+    return {
+      id: `mem_t${n}`,
+      scope: "project",
+      scopeId: "p1",
+      category: "fact",
+      topic: "t",
+      content: "c",
+      source: "code",
+      originRef: {},
+      status: "verified",
+      confidence: "medium",
+      version: 1,
+      createdAt: n,
+      updatedAt: n,
+      ...over,
+    };
+  };
+
+  test("ordinarias verified en todo scope entran; proposed/rejected/stale/superseded no", async () => {
+    const { selectForContext } = await import("../src/memory/memory-select.js");
+    const ctx = { projectId: "p1", sessionId: "s1", runId: "r1", taskId: "t1", instanceId: "i1" };
+    for (const [scope, scopeId] of [["project", "p1"], ["session", "s1"], ["run", "r1"], ["task", "t1"], ["instance", "i1"]] as const) {
+      const { selected } = selectForContext([item({ scope, scopeId })], ctx);
+      expect(selected, scope).toHaveLength(1);
+    }
+    for (const status of ["proposed", "rejected", "stale", "superseded"] as const) {
+      const { selected } = selectForContext([item({ status })], ctx);
+      expect(selected, status).toHaveLength(0);
+    }
+    // approved ordinaria también entra.
+    expect(selectForContext([item({ status: "approved" })], ctx).selected).toHaveLength(1);
+  });
+
+  test("decision/instruction: solo approved; verified no basta", async () => {
+    const { selectForContext } = await import("../src/memory/memory-select.js");
+    const ctx = { projectId: "p1" };
+    expect(selectForContext([item({ category: "decision", status: "verified" })], ctx).selected).toHaveLength(0);
+    expect(selectForContext([item({ category: "decision", status: "approved" })], ctx).selected).toHaveLength(1);
+    expect(selectForContext([item({ category: "instruction", status: "verified" })], ctx).selected).toHaveLength(0);
+    expect(selectForContext([item({ category: "instruction", status: "approved" })], ctx).selected).toHaveLength(1);
+    // verified nunca se auto-convierte: el selector no cambia estados.
+    const cand = item({ category: "decision", status: "verified" });
+    selectForContext([cand], ctx);
+    expect(cand.status).toBe("verified");
+  });
+
+  test("scopes ajenos jamás entran", async () => {
+    const { selectForContext } = await import("../src/memory/memory-select.js");
+    const ctx = { projectId: "p1", sessionId: "s1" };
+    expect(selectForContext([item({ scope: "session", scopeId: "s9" })], ctx).selected).toHaveLength(0);
+    expect(selectForContext([item({ scope: "project", scopeId: "p9" })], ctx).selected).toHaveLength(0);
+    expect(selectForContext([item({ scope: "run", scopeId: "r1" })], { projectId: "p1" }).selected).toHaveLength(0);
+  });
+
+  test("checkpoints solo del run/task/instance en curso", async () => {
+    const { selectForContext } = await import("../src/memory/memory-select.js");
+    const ctx = { projectId: "p1", sessionId: "s1", runId: "r1", taskId: "t1", instanceId: "i1" };
+    expect(selectForContext([item({ category: "checkpoint", scope: "run", scopeId: "r1" })], ctx).selected).toHaveLength(1);
+    expect(selectForContext([item({ category: "checkpoint", scope: "run", scopeId: "r9" })], ctx).selected).toHaveLength(0);
+    expect(selectForContext([item({ category: "checkpoint", scope: "instance", scopeId: "i1" })], ctx).selected).toHaveLength(1);
+    // Checkpoint de proyecto/sesión no es punto de recuperación: fuera.
+    expect(selectForContext([item({ category: "checkpoint", scope: "project", scopeId: "p1" })], ctx).selected).toHaveLength(0);
+    expect(selectForContext([item({ category: "checkpoint", scope: "session", scopeId: "s1" })], ctx).selected).toHaveLength(0);
+  });
+
+  test("contradicción pendiente excluye el grupo; sin nota entra; resuelta vuelve", async () => {
+    const { selectForContext } = await import("../src/memory/memory-select.js");
+    const ctx = { projectId: "p1" };
+    const a = item({ status: "approved", topic: "db", content: "sqlite", reviewNote: "contradiction pending vs mem_t2" });
+    const b = item({ status: "approved", topic: "db", content: "postgres", reviewNote: "contradiction pending vs mem_t1" });
+    const both = selectForContext([a, b], ctx);
+    expect(both.selected).toHaveLength(0);
+    expect(both.dropped).toBe(0);
+    // Sin nota: ambas entran (no hay contradicción marcada).
+    const c = item({ status: "approved", topic: "db", content: "sqlite" });
+    const d = item({ status: "approved", topic: "db", content: "postgres" });
+    expect(selectForContext([c, d], ctx).selected).toHaveLength(2);
+    // Una sola con nota y sin hermanas: entra.
+    expect(selectForContext([a], ctx).selected).toHaveLength(1);
+  });
+
+  test("topes: recientes primero, maxEntries y maxChars", async () => {
+    const { selectForContext } = await import("../src/memory/memory-select.js");
+    const ctx = { projectId: "p1" };
+    const entries = [item({ topic: "viejo", content: "x".repeat(10), updatedAt: 1 }), item({ topic: "nuevo", content: "y".repeat(10), updatedAt: 2 })];
+    const one = selectForContext(entries, ctx, { maxEntries: 1 });
+    expect(one.selected.map((e) => e.topic)).toEqual(["nuevo"]);
+    expect(one.dropped).toBe(1);
+    const chars = selectForContext(entries, ctx, { maxChars: 15 });
+    expect(chars.selected.map((e) => e.topic)).toEqual(["nuevo"]);
+    expect(chars.dropped).toBe(1);
+    expect(selectForContext(entries, {}).selected).toHaveLength(0);
+  });
+
+  test("buildInstructions inyecta memoria del contexto y nada ajeno", async () => {
+    const t = await makeTestCore();
+    try {
+      const s = await setup(t, "C1");
+      const fact = await t.core.memoryWriter.propose({ scope: "project", scopeId: s.projectId, category: "fact", topic: "stack-bun", content: "bun 1.4", source: "code" }, agentCtx(s, s.coordId));
+      await t.core.memoryWriter.validate(fact.id, s.coordId);
+      const dec = await t.core.memoryWriter.propose({ scope: "project", scopeId: s.projectId, category: "decision", topic: "db-elegida", content: "sqlite WAL", source: "user" }, agentCtx(s, s.coordId));
+      await t.core.memoryWriter.decide(dec.id, "approved");
+      // Otra sesión: memoria que no debe filtrarse.
+      const other = await setup(t, "C2");
+      const alien = await t.core.memoryWriter.propose({ scope: "project", scopeId: other.projectId, category: "fact", topic: "ajeno-total", content: "x", source: "code" }, agentCtx(other, other.coordId));
+      await t.core.memoryWriter.validate(alien.id, other.coordId);
+      const def = await t.core.registry.get("explorer");
+      const text = await t.core.context.buildInstructions(def!, t.dir, [], { projectId: s.projectId, sessionId: s.sessionId, runId: s.runId });
+      expect(text).toContain("stack-bun");
+      expect(text).toContain("db-elegida");
+      expect(text).not.toContain("ajeno-total");
+      expect(text).toMatch(/<memory scope="project"/);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("buildInstructions excluye grupo en contradicción y lo muestra tras resolver", async () => {
+    const t = await makeTestCore();
+    try {
+      const s = await setup(t, "C3");
+      const mk = async (content: string) => {
+        const e = await t.core.memoryWriter.propose({ scope: "session", scopeId: s.sessionId, category: "fact", topic: "endpoint", content, source: "delivery" }, agentCtx(s, s.coordId));
+        return t.core.memoryWriter.validate(e.id, s.coordId);
+      };
+      const winner = await mk("https://api-v2");
+      const loser = await mk("https://api-v1");
+      // Marca contradicción manualmente como haría approveEntry (fact+fact vía decide).
+      await t.core.memory.setReviewNote(winner.id, "contradiction pending vs test", "governance");
+      await t.core.memory.setReviewNote(loser.id, "contradiction pending vs test", "governance");
+      const def = await t.core.registry.get("explorer");
+      const hidden = await t.core.context.buildInstructions(def!, t.dir, [], { projectId: s.projectId, sessionId: s.sessionId });
+      expect(hidden).not.toContain("api-v1");
+      expect(hidden).not.toContain("api-v2");
+      await t.core.memoryWriter.resolveConflict(winner.id, "v2 vigente");
+      const shown = await t.core.context.buildInstructions(def!, t.dir, [], { projectId: s.projectId, sessionId: s.sessionId });
+      expect(shown).toContain("api-v2");
+      expect(shown).not.toContain("api-v1");
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
