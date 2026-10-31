@@ -1,7 +1,7 @@
 /** Etapa 5.1 — IntegrationManager con git real (fakes para los modelos). */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectRejects, makeRun, makeTestCore, workspaceOf, type TestCore } from "./helpers.js";
 import type { PlannedTaskInput } from "../src/tasks/task-manager.js";
@@ -151,6 +151,12 @@ async function sweepAll(t: TestCore, projectId: string, repoRoot: string): Promi
   }
   for (const c of await t.core.conflicts.listConflicts().catch(() => [])) {
     await t.core.conflicts.cleanupResolutionWorkspace(c.id).catch(() => undefined);
+  }
+  for (const irow of await t.core.db.query<{ id: string }>("SELECT id FROM integrations WHERE project_id = ?", [projectId]).catch(() => []) ?? []) {
+    for (const p of await t.core.previews.listPreviews(String(irow.id)).catch(() => [])) {
+      await t.core.previews.stopPreview(p.id).catch(() => undefined);
+      await t.core.previews.cleanupPreview(p.id).catch(() => undefined);
+    }
   }
 }
 
@@ -831,6 +837,195 @@ describe("etapa 5.4 — validación (J10/J11)", () => {
         // Negativo: una instancia implementer no puede registrar veredicto.
         const wAtt = (await t.core.tasks.getAttempts(wId))[0]!;
         await expectRejects(t.core.validations.recordIntegrationReview(integration.id, { instanceId: wAtt.instanceId!, verdict: "accept" }), /not a reviewer/i);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
+describe("etapa 5.5 — preview (J12–J16)", () => {
+  const SERVER = `require("http").createServer((q,r)=>{r.end("ok")}).listen(Number(process.env.OCTUS_PREVIEW_PORT))`;
+  const DUMP = `require("fs").writeFileSync(process.env.OCTUS_PREVIEW_DATA_DIR+"/env.json", JSON.stringify(process.env)); setInterval(()=>{}, 1000000)`;
+
+  async function previewAllowlist(t: TestCore, projectId: string): Promise<void> {
+    const exe = process.execPath;
+    await t.core.previews.saveAllowlist(projectId, [
+      { id: "install-ok", name: "install", phase: "install", argv: [exe, "-e", "process.exit(0)"] },
+      { id: "serve", name: "serve", phase: "start", argv: [exe, "-e", SERVER] },
+      { id: "dump", name: "dump", phase: "start", argv: [exe, "-e", DUMP] },
+      { id: "exit2", name: "exiter", phase: "start", argv: [exe, "-e", "process.exit(2)"] },
+    ]);
+  }
+
+  test("J16+J13: preview sirve el SHA exacto; stop mata el árbol", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "PV");
+      await previewAllowlist(t, project.id);
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-pv", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const head = (await t.core.integrations.getIntegration(integration.id)).head!;
+        const pv = await t.core.previews.createPreview(integration.id);
+        expect(pv.sha).toBe(head);
+        const started = await t.core.previews.startPreview(pv.id, { startEntryId: "serve" });
+        expect(started.reachable).toBe(true);
+        expect(started.status).toBe("reachable");
+        expect(started.url).toBe((await t.core.previews.getPreview(pv.id)).url);
+        // J16: URL y SHA corresponden al registrado.
+        const inspected = await t.core.previews.inspectPreview(pv.id);
+        expect(inspected.shaMatchesHead).toBe(true);
+        expect(inspected.reachable).toBe(true);
+        const before = await t.core.previews.getPreview(pv.id);
+        expect(before.pid).toBeDefined();
+        // J13: stop termina el proceso (pid muerto) y marca stopped.
+        const { stopped } = await t.core.previews.stopPreview(pv.id);
+        expect(stopped).toBe(true);
+        expect((await t.core.previews.getPreview(pv.id)).status).toBe("stopped");
+        let alive = true;
+        try {
+          process.kill(before.pid!, 0);
+        } catch {
+          alive = false;
+        }
+        expect(alive).toBe(false);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J14: aislamiento de entorno y DB; sin .git real en el preview", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "EN");
+      await previewAllowlist(t, project.id);
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-en", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const pv = await t.core.previews.createPreview(integration.id);
+        await t.core.previews.startPreview(pv.id, { startEntryId: "dump" });
+        const envPath = path.join(t.dir, "data", "previews", pv.id, "env.json");
+        const deadline = Date.now() + 15000;
+        for (;;) {
+          if (existsSync(envPath)) break;
+          if (Date.now() > deadline) throw new Error("dumped env never appeared");
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        const env = JSON.parse(readFileSync(envPath, "utf8")) as Record<string, string>;
+        expect(env.OCTUS_PREVIEW_PORT).toBe(String((await t.core.previews.getPreview(pv.id)).port));
+        expect(env.OCTUS_PREVIEW_HOST).toBe("127.0.0.1");
+        expect(env.OCTUS_PREVIEW_URL).toBe((await t.core.previews.getPreview(pv.id)).url);
+        expect(env.OCTUS_PREVIEW_SHA).toBe((await t.core.previews.getPreview(pv.id)).sha);
+        expect(env.OCTUS_PREVIEW_DATA_DIR).toBe(path.join(t.dir, "data", "previews", pv.id));
+        const leaked = Object.keys(env).filter((k) => /api[_-]?key|token|secret|password|credentials/i.test(k));
+        expect(leaked).toEqual([]);
+        expect(env.PATH).toBeDefined();
+        // Sin .git real en el preview (gitdir como fichero) y fuera del repo principal.
+        const dotGit = path.join((await t.core.previews.getPreview(pv.id)).canonicalPath, ".git");
+        expect(existsSync(dotGit)).toBe(true);
+        expect(statSync(dotGit).isFile()).toBe(true);
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("J12: preview que no arranca queda failed (sin excepción)", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "PX");
+      await previewAllowlist(t, project.id);
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-px", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const pv = await t.core.previews.createPreview(integration.id);
+        const started = await t.core.previews.startPreview(pv.id, { startEntryId: "exit2" });
+        expect(started.status).toBe("failed");
+        expect(started.reachable).toBe(false);
+        expect((await t.core.previews.getPreview(pv.id)).status).toBe("failed");
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("preview.reconcile marca huérfanos sin matar nada; cleanup retira el espacio", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "RC");
+      await previewAllowlist(t, project.id);
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-rc", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const pv = await t.core.previews.createPreview(integration.id);
+        // Sin proceso lanzado: reconcile no toca 'starting' (lanzamiento pendiente).
+        expect((await t.core.previews.reconcile()).orphaned).toBe(0);
+        const started = await t.core.previews.startPreview(pv.id, { startEntryId: "serve" });
+        expect(started.reachable).toBe(true);
+        const livePid = (await t.core.previews.getPreview(pv.id)).pid!;
+        // Proceso ajeno a este manager (simula reinicio): tracked vacío → orphaned, sin matar.
+        (t.core.previews as unknown as { tracked: Map<string, unknown> }).tracked.clear();
+        expect((await t.core.previews.reconcile()).orphaned).toBe(1);
+        expect((await t.core.previews.getPreview(pv.id)).status).toBe("orphaned");
+        // El proceso sigue vivo (reconcile no mata pids ajenos): lo termina el test.
+        try {
+          process.kill(livePid);
+        } catch {
+          // ya muerto
+        }
+        const deadline = Date.now() + 5000;
+        for (;;) {
+          let alive = true;
+          try {
+            process.kill(livePid, 0);
+          } catch {
+            alive = false;
+          }
+          if (!alive) break;
+          if (Date.now() > deadline) break;
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        await t.core.previews.stopPreview(pv.id).catch(() => undefined);
+        const { removed } = await t.core.previews.cleanupPreview(pv.id);
+        expect(removed).toBe(true);
+        await expectRejects(t.core.previews.getPreview(pv.id), /not found/i);
         await sweepAll(t, project.id, root);
       } finally {
         stop();

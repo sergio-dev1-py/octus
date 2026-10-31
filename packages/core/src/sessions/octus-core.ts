@@ -50,6 +50,7 @@ import { RepositoryManager } from "../repositories/repository-manager.js";
 import { WorktreeManager } from "../worktrees/worktree-manager.js";
 import { IntegrationManager } from "../integration/integration-manager.js";
 import { ValidationService } from "../integration/validation-service.js";
+import { PreviewManager } from "../integration/preview-manager.js";
 import { ConflictManager } from "../integration/conflict-manager.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
@@ -113,6 +114,7 @@ export class OctusCore {
   readonly worktrees: WorktreeManager;
   readonly integrations: IntegrationManager;
   readonly validations: ValidationService;
+  readonly previews: PreviewManager;
   readonly conflicts: ConflictManager;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
@@ -252,6 +254,7 @@ export class OctusCore {
       () => this.integrations,
     );
     this.conflicts = new ConflictManager(db, this.events, this.bus, this.repositories, this.worktrees, () => this.agents, options.dataDir);
+    this.previews = new PreviewManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir);
     toolServices.tasks = {
       plan: async (input) => {
         const out = await this.planner.planTasks(input.coordinatorInstanceId, input);

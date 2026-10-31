@@ -81,6 +81,7 @@ export type PersistedEventType =
   | "integration.status_changed"
   | "integration.completed"
   | "preview.ready"
+  | "preview.created"
   | "preview.started"
   | "preview.stopped"
   | "approval.requested"

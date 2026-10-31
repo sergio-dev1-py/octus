@@ -12,6 +12,7 @@ import { OctusError } from "../errors.js";
 import { truncate } from "../util.js";
 import { resolveInScope, sameOrInside, scopeRelative } from "./path-scope.js";
 import { assertShellGitAllowed } from "./shell-guard.js";
+import { killTree, scrubbedEnv } from "./process-tree.js";
 
 export interface ToolRunContext {
   directory: string;
@@ -292,52 +293,7 @@ const shellSchema = z.object({
   timeoutMs: z.number().int().min(1000).max(600_000).optional().describe("Timeout in ms (default from config)"),
 });
 
-const SHELL_ENV_ALLOW = new Set([
-  "PATH",
-  "PATHEXT",
-  "SYSTEMROOT",
-  "SYSTEMDRIVE",
-  "TEMP",
-  "TMP",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "LANG",
-  "LC_ALL",
-  "TERM",
-  "OS",
-  "COMSPEC",
-  "NUMBER_OF_PROCESSORS",
-  "PROCESSOR_ARCHITECTURE",
-]);
-
-function scrubbedEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && SHELL_ENV_ALLOW.has(key)) out[key] = value;
-  }
-  return out;
-}
-
-function killTree(childPid: number): void {
-  if (process.platform === "win32") {
-    try {
-      spawn("taskkill", ["/T", "/F", "/PID", String(childPid)], { stdio: "ignore", windowsHide: true });
-    } catch {
-      // ignore
-    }
-    return;
-  }
-  try {
-    process.kill(-childPid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(childPid, "SIGKILL");
-    } catch {
-      // ignore
-    }
-  }
-}
+// Entorno depurado y muerte del árbol: ver process-tree.ts (import arriba).
 
 export const shellTool: ToolDefinition = {
   manifest: {
