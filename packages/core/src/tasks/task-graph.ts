@@ -78,15 +78,16 @@ export function transitiveDependents(input: GraphInput, taskId: string): Set<str
   return out;
 }
 
-export type SatisfiedStatus = "completed" | "reviewed";
+export type SatisfiedStatus = "completed" | "reviewed" | "integrated";
 
 /**
  * Una tarea está lista solo si TODAS sus dependencias obligatorias están
- * satisfechas: `completed` sin revisión, o `reviewed` cuando la requieren.
+ * satisfechas: `completed` sin revisión, o `reviewed`/`integrated` cuando la
+ * requieren (integrated implica reviewed + asentado).
  */
 export function isDependencySatisfied(depStatus: Task["status"], depNeedsReview: boolean): boolean {
-  if (depNeedsReview) return depStatus === "reviewed";
-  return depStatus === "completed" || depStatus === "reviewed";
+  if (depNeedsReview) return depStatus === "reviewed" || depStatus === "integrated";
+  return depStatus === "completed" || depStatus === "reviewed" || depStatus === "integrated";
 }
 
 export function unsatisfiedDeps(input: GraphInput): Map<string, string[]> {
@@ -111,7 +112,7 @@ export function unsatisfiedDeps(input: GraphInput): Map<string, string[]> {
  */
 export function cascadeCancelSet(input: GraphInput, rootId: string): Set<string> {
   const byId = new Map(input.tasks.map((t) => [t.id, t]));
-  const terminalSuccess = (s: Task["status"]): boolean => s === "completed" || s === "reviewed";
+  const terminalSuccess = (s: Task["status"]): boolean => s === "completed" || s === "reviewed" || s === "integrated";
   const terminal = (s: Task["status"]): boolean =>
     terminalSuccess(s) || s === "failed" || s === "cancelled" || s === "interrupted";
   const out = new Set<string>();

@@ -266,6 +266,7 @@ export class IntegrationManager implements IntegrationPort {
       ]);
       const event = await this.events.append({ type: "integration.status_changed", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { taskId, attempt, strategy, head: integratedSha } });
       this.bus.publish(event);
+      await markTaskIntegrated(this.db, this.events, this.bus, taskId);
       return { integrationId, taskId, attempt, originalSha: produced, integratedSha, reused: false, strategy };
     } catch (error) {
       const details = error instanceof OctusError ? (error as OctusError & { details?: { conflict?: boolean; files?: string[]; ours?: string; theirs?: string } }).details : undefined;
@@ -495,10 +496,11 @@ export class IntegrationManager implements IntegrationPort {
       const pred = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM tasks WHERE id = ?", [predId]);
       if (!pred) throw new OctusError("not_found", `Predecessor task not found: ${predId}`);
       const t = deserializeTask(pred);
-      if (t.needsReview && t.status !== "reviewed") {
+      // integrated implica reviewed + produced: sirve como base igual.
+      if (t.needsReview && t.status !== "reviewed" && t.status !== "integrated") {
         throw new OctusError("invalid_state", `Writer predecessor ${predId.slice(-6)} is ${t.status}, not reviewed`);
       }
-      if (!t.needsReview && t.status !== "completed" && t.status !== "reviewed") {
+      if (!t.needsReview && t.status !== "completed" && t.status !== "reviewed" && t.status !== "integrated") {
         throw new OctusError("invalid_state", `Writer predecessor ${predId.slice(-6)} is ${t.status}, not completed`);
       }
       const wt = await this.worktrees.getByTask(predId);
@@ -835,6 +837,24 @@ function deserializeCommit(row: Record<string, string | number | null>): Integra
     kind: row.kind as IntegrationCommit["kind"],
     createdAt: Number(row.created_at),
   };
+}
+
+/**
+ * Marca una task como integrada tras asentar su commit (completed/reviewed
+ * → integrated). Idempotente; sin efecto en otros estados.
+ */
+export async function markTaskIntegrated(
+  db: PersistenceService,
+  events: EventStore,
+  bus: EventBus,
+  taskId: string,
+): Promise<void> {
+  const row = await db.queryOne<{ status: string }>("SELECT status FROM tasks WHERE id = ?", [taskId]);
+  if (!row || !["completed", "reviewed"].includes(String(row.status))) return;
+  const timestamp = now();
+  await db.exec("UPDATE tasks SET status = 'integrated', updated_at = ? WHERE id = ? AND status IN ('completed','reviewed')", [timestamp, taskId]);
+  const event = await events.append({ type: "task.status_changed", aggregate: { kind: "task", id: taskId }, correlationId: createId("cor"), payload: { from: String(row.status), to: "integrated" } });
+  bus.publish(event);
 }
 
 function deserializeOp(row: Record<string, string | number | null>): IntegrationOperation {

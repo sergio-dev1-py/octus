@@ -223,6 +223,9 @@ describe("etapa 5.1 — incorporación (J1–J3)", () => {
         const integration = (await t.core.integrations.listByRun(runId))[0]!;
         const commits = await t.core.integrations.getCommits(integration.id);
         expect(commits.map((c) => c.kind).sort()).toEqual(["original", "resolution"]);
+        // Las tasks asentadas quedan marcadas como integradas (trazabilidad Plan→Integration).
+        expect((await t.core.tasks.getTask(aId)).status).toBe("integrated");
+        expect((await t.core.tasks.getTask(bId)).status).toBe("integrated");
         const after = await t.core.integrations.getIntegration(integration.id);
         expect(after.head).toMatch(/^[0-9a-f]{40}$/);
         expect(readFileSync(path.join(after.canonicalPath, "file-a.txt"), "utf8")).toContain("content-a");
@@ -334,8 +337,10 @@ describe("etapa 5.1 — rechazos (J7–J9)", () => {
       const b = await gitProject(t, "JB");
       const runA = await makeRun(t, a.session.id);
       const runB = await makeRun(t, b.session.id);
-      const dagB = await approvedDag(t, b.session.id, b.project.id, runB.runId, "h-j8b", [IMPL("z"), REVIEWER_OF("rz", "z")]);
-      const [zId, rzId] = dagB.taskIds as [string, string];
+      // "other" completa pero nunca se revisa: el auto-build de B no dispara y z
+      // queda reviewed sin incorporar (estado exacto que debe rechazar A).
+      const dagB = await approvedDag(t, b.session.id, b.project.id, runB.runId, "h-j8b", [IMPL("z"), IMPL("other"), REVIEWER_OF("rz", "z")]);
+      const [zId, , rzId] = dagB.taskIds as [string, string, string];
       const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
       try {
         await settlePairs(t, b.session.id, [{ writer: zId, reviewer: rzId }]);
@@ -1320,6 +1325,78 @@ describe("etapa 5.6 — aprobación y promoción (J17–J26)", () => {
     try {
       const { root } = await gitProject(t, "NP");
       expect(execFileSync("git", ["remote", "-v"], { cwd: root, encoding: "utf8", timeout: 30_000, windowsHide: true }).trim()).toBe("");
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
+
+describe("etapa 5.7 — IPC/UI/ciclo de vida", () => {
+  test("dependiente deriva de predecesor integrated (no solo reviewed)", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["a", "b"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "DI");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-di", [IMPL("a"), IMPL("b"), REVIEWER_OF("ra", "a"), REVIEWER_OF("rb", "b")]);
+      const [aId, bId, raId, rbId] = dag.taskIds as [string, string, string, string];
+      await t.core.db.exec("INSERT INTO task_dependencies (task_id, depends_on, kind) VALUES (?, ?, 'requires')", [bId, aId]);
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(aId)).status === "completed", 30000);
+        await untilWorktreesFinished(t, [aId]);
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(raId)).status === "completed", 30000);
+        await t.core.recordTaskReview(raId, aId, "accept", { note: "di-a" });
+        // Incorporación temprana de A: B debe seguir desbloqueándose (integrated satisface).
+        const early = await t.core.integrations.createForRun({ projectId: project.id, runId });
+        await t.core.integrations.incorporateCommit(early.id, aId, 1);
+        expect((await t.core.tasks.getTask(aId)).status).toBe("integrated");
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => ["assigned", "running", "completed"].includes((await t.core.tasks.getTask(bId)).status), 30000);
+        await until(async () => (await t.core.tasks.getTask(bId)).status === "completed", 30000);
+        await untilWorktreesFinished(t, [bId]);
+        const wa = await t.core.worktrees.getByTask(aId);
+        const wb = await t.core.worktrees.getByTask(bId);
+        expect(wb!.baseCommit).toBe(wa!.producedCommit!);
+        expect(existsSync(path.join(wb!.canonicalPath, "solo-a.txt"))).toBe(true);
+        await t.core.scheduler.tick({ sessionId: session.id });
+        await until(async () => (await t.core.tasks.getTask(rbId)).status === "completed", 30000);
+        await t.core.recordTaskReview(rbId, bId, "accept", { note: "di-b" });
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("spawnIntegrationReview + record accept cierra el gate", async () => {
+    const t = await makeTestCore({ metaTurns: writerTurns(["w"], (key) => ({ name: "write", args: { path: `solo-${key}.txt`, content: `solo-${key}\n` } })) as never });
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "SR");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-sr", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const [wId, rId] = dag.taskIds as [string, string];
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        await settlePairs(t, session.id, [{ writer: wId, reviewer: rId }]);
+        await untilAutoBuilt(t, session.id, runId, 1);
+        const integration = (await t.core.integrations.listByRun(runId))[0]!;
+        const head = (await t.core.integrations.getIntegration(integration.id)).head!;
+        expect((await t.core.validations.validationGate(integration.id, head)).ok).toBe(false);
+        const { instanceId } = await t.core.spawnIntegrationReview(integration.id);
+        expect(instanceId).toBeDefined();
+        await t.core.agents.wait(instanceId!, 60000);
+        await t.core.recordIntegrationReview(integration.id, { instanceId: instanceId!, verdict: "accept", summary: "test" });
+        expect(await t.core.validations.validationGate(integration.id, head)).toEqual({ ok: true, reasons: [] });
+        await sweepAll(t, project.id, root);
+      } finally {
+        stop();
+      }
     } finally {
       await t.cleanup();
     }

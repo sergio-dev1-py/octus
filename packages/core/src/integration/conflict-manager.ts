@@ -18,6 +18,7 @@ import { assertValidBranchName, runGit } from "../repositories/git-exec.js";
 import type { RepositoryManager } from "../repositories/repository-manager.js";
 import type { AgentManager } from "../orchestration/agent-manager.js";
 import type { WorktreeManager } from "../worktrees/worktree-manager.js";
+import { markTaskIntegrated } from "./integration-manager.js";
 import type { ResolutionPort, ResolutionWorkspace } from "./resolution-port.js";
 
 export interface RequestResolutionResult {
@@ -249,6 +250,9 @@ export class ConflictManager implements ResolutionPort {
     ]);
     const event = await this.events.append({ type: "integration.status_changed", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { conflictId, strategy: "resolution", head: conflict.resolutionSha } });
     this.bus.publish(event);
+    if (conflict.taskId) {
+      await markTaskIntegrated(this.db, this.events, this.bus, conflict.taskId);
+    }
     return { integratedSha: conflict.resolutionSha, reused: false };
   }
 

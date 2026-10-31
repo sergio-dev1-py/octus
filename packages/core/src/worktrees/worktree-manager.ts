@@ -733,7 +733,8 @@ export class WorktreeManager implements WorktreePort {
     const writer = writers[0]!;
     const writerId = String(writer.id);
     const writerStatus = String(writer.status);
-    if (writerStatus !== "completed" && writerStatus !== "reviewed") {
+    // integrated implica reviewed + produced asentado: sirve como base igual.
+    if (writerStatus !== "completed" && writerStatus !== "reviewed" && writerStatus !== "integrated") {
       return { ok: false, blockedReason: "deps-unavailable", details: { reason: `writer predecessor ${writerId} is ${writerStatus}, not ready`, predecessor: writerId } };
     }
     const wt = await this.getByTask(writerId);

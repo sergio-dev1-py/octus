@@ -620,7 +620,8 @@ export interface IntegrationConflict {
 export interface ConflictResolution {
   id: string;
   conflictId: string;
-  instanceId: string;
+  /** Instancia que resolvió (ausente si se reutilizó o resolvió el harness). */
+  instanceId?: string;
   /** Merge commit creado por el harness en el worktree de resolución. */
   resolutionSha: string;
   /** true si se reutilizó una resolución previa con los mismos padres. */

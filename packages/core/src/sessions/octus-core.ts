@@ -860,10 +860,191 @@ export class OctusCore {
     return this.worktrees.setWorktreesRoot(projectId, path);
   }
 
+  // ------------------------------------------------- integraciones (Etapa 5)
+  async createIntegration(input: { projectId: string; runId: string; targetBranch?: string }) {
+    return this.integrations.createForRun(input);
+  }
+
+  async getIntegration(integrationId: string) {
+    const integration = await this.integrations.getIntegration(integrationId);
+    const commits = await this.integrations.getCommits(integrationId);
+    const operations = await this.integrations.listOperations(integrationId);
+    return { integration, commits, operations };
+  }
+
+  async listRunIntegrations(runId: string) {
+    return this.integrations.listByRun(runId);
+  }
+
+  async rebuildIntegration(integrationId: string) {
+    return this.promotions.rebuildIntegration(integrationId);
+  }
+
+  async abortIntegration(integrationId: string, reason?: string) {
+    await this.integrations.abortIntegration(integrationId, reason ?? "aborted by user");
+    return { ok: true };
+  }
+
+  async incorporateIntegration(integrationId: string) {
+    const results = await this.integrations.incorporateRun(integrationId);
+    return { incorporated: results.length };
+  }
+
+  async listIntegrationConflicts(filter?: { scope?: "integration" | "work_base"; scopeRef?: string; status?: string }) {
+    return this.conflicts.listConflicts(filter);
+  }
+
+  async getConflict(conflictId: string) {
+    const conflict = await this.conflicts.getConflict(conflictId);
+    const rows = await this.db.query<Record<string, string | number | null>>("SELECT * FROM conflict_resolutions WHERE conflict_id = ? ORDER BY created_at ASC", [conflictId]);
+    return {
+      conflict,
+      resolutions: rows.map((r) => ({
+        id: String(r.id),
+        conflictId: String(r.conflict_id),
+        instanceId: r.instance_id ? String(r.instance_id) : undefined,
+        resolutionSha: String(r.resolution_sha),
+        reused: Number(r.reused ?? 0) === 1,
+        createdAt: Number(r.created_at),
+      })),
+    };
+  }
+
+  async requestConflictResolution(conflictId: string, opts?: { briefSuffix?: string }) {
+    return this.conflicts.requestResolution(conflictId, opts);
+  }
+
+  async finalizeConflictResolution(conflictId: string, instanceId: string) {
+    return this.conflicts.finalizeResolution(conflictId, instanceId);
+  }
+
+  async incorporateConflictResolution(integrationId: string, conflictId: string) {
+    return this.conflicts.incorporateResolution(integrationId, conflictId);
+  }
+
+  async abortConflict(conflictId: string, reason?: string) {
+    await this.conflicts.abortResolution(conflictId, reason);
+    return { ok: true };
+  }
+
+  async cleanupConflictResolution(conflictId: string) {
+    return this.conflicts.cleanupResolutionWorkspace(conflictId);
+  }
+
+  async listValidations(integrationId: string, sha?: string) {
+    const validations = await this.validations.listValidations(integrationId, sha);
+    const reviews = await this.validations.listReviews(integrationId);
+    return { validations, reviews };
+  }
+
+  async rerunValidations(integrationId: string, sha?: string) {
+    const head = sha ?? (await this.integrations.getIntegration(integrationId)).head;
+    if (!head) throw new Error("Integration has no head to validate");
+    const validations = await this.validations.runSuiteValidation(integrationId, head, { force: true });
+    return { validations };
+  }
+
+  /** Spawnea un reviewer sobre el worktree de la integración (acción de app). */
+  async spawnIntegrationReview(integrationId: string, brief?: string) {
+    const integration = await this.integrations.getIntegration(integrationId);
+    const run = await this.db.queryOne<{ session_id: string }>("SELECT session_id FROM runs WHERE id = ?", [integration.runId]);
+    if (!run) throw new Error(`Run not found: ${integration.runId}`);
+    const coord = await this.db.queryOne<{ id: string }>(
+      `SELECT i.id AS id FROM agent_instances i JOIN agent_definitions d ON d.id = i.definition_id
+       WHERE i.run_id = ? AND d.kind = 'coordinator' ORDER BY i.created_at DESC LIMIT 1`,
+      [integration.runId],
+    );
+    if (!coord) throw new Error(`No coordinator instance for run ${integration.runId}`);
+    const spawned = await this.agents.spawn({
+      parentInstanceId: String(coord.id),
+      definitionId: "reviewer",
+      brief: brief ?? `Review the integration worktree at ${integration.head?.slice(0, 12) ?? "unknown"} against the task acceptance criteria. Report findings with file and line. Never modify files.`,
+      mode: "background",
+      integrationId,
+    });
+    return { instanceId: spawned.instanceId };
+  }
+
+  async recordIntegrationReview(integrationId: string, input: { instanceId: string; verdict: "accept" | "request-changes"; summary?: string }) {
+    await this.validations.recordIntegrationReview(integrationId, input);
+    return { ok: true };
+  }
+
+  async createPreview(integrationId: string) {
+    return this.previews.createPreview(integrationId);
+  }
+
+  async listPreviews(integrationId: string) {
+    return this.previews.listPreviews(integrationId);
+  }
+
+  async startPreview(previewId: string, opts?: { startEntryId?: string }) {
+    return this.previews.startPreview(previewId, opts);
+  }
+
+  async stopPreview(previewId: string) {
+    return this.previews.stopPreview(previewId);
+  }
+
+  async restartPreview(previewId: string, opts?: { startEntryId?: string }) {
+    return this.previews.restartPreview(previewId, opts);
+  }
+
+  async inspectPreview(previewId: string) {
+    return this.previews.inspectPreview(previewId);
+  }
+
+  async getPreviewLogs(previewId: string, tailChars?: number) {
+    return { logs: await this.previews.getPreviewLogs(previewId, tailChars) };
+  }
+
+  async cleanupPreview(previewId: string) {
+    return this.previews.cleanupPreview(previewId);
+  }
+
+  async previewAllowlist(projectId: string) {
+    return this.previews.listAllowlist(projectId);
+  }
+
+  async savePreviewAllowlist(projectId: string, entries: Array<{ id: string; name: string; phase: "install" | "start"; argv: string[]; timeoutMs?: number }>) {
+    return this.previews.saveAllowlist(projectId, entries as never);
+  }
+
+  async approveIntegration(integrationId: string, input: { previewId?: string; waiverReason?: string }) {
+    return this.approvals.approveIntegration(integrationId, input);
+  }
+
+  async rejectIntegration(integrationId: string, reason?: string) {
+    return this.approvals.rejectIntegration(integrationId, reason);
+  }
+
+  async approvalStatus(integrationId: string) {
+    return this.approvals.getApprovalStatus(integrationId);
+  }
+
+  async promoteIntegration(integrationId: string) {
+    return this.promotions.promoteIntegration(integrationId);
+  }
+
+  async listPromotions(integrationId: string) {
+    const rows = await this.db.query<Record<string, string | number | null>>("SELECT * FROM promotions WHERE integration_id = ? ORDER BY created_at ASC", [integrationId]);
+    return rows.map((row) => ({
+      id: String(row.id),
+      integrationId: String(row.integration_id),
+      approvalId: String(row.approval_id),
+      targetBranch: String(row.target_branch),
+      expectedOldSha: String(row.expected_old_sha),
+      newSha: String(row.new_sha),
+      status: row.status as "started" | "completed" | "failed" | "diverged",
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }));
+  }
+
   private async cancelSessionTasks(sessionId: string): Promise<void> {
     const tasks = await this.tasks.listTasks({ sessionId });
     for (const task of tasks) {
-      if (!["completed", "reviewed", "cancelled"].includes(task.status)) {
+      if (!["completed", "reviewed", "integrated", "cancelled"].includes(task.status)) {
         await this.tasks.cancelTask(task.id).catch(() => undefined);
       }
     }

@@ -630,7 +630,7 @@ export class TaskScheduler {
     if (tasks.length === 0) return;
     const maxAttempts = this.getSchedulerConfig().maxAttemptsPerTask;
     const open = tasks.filter(
-      (t) => !["completed", "reviewed", "cancelled"].includes(t.status) && !(t.status === "failed" && t.attempt >= maxAttempts),
+      (t) => !["completed", "reviewed", "integrated", "cancelled"].includes(t.status) && !(t.status === "failed" && t.attempt >= maxAttempts),
     );
     if (open.length > 0) return;
     const failed = tasks.some((t) => t.status === "failed");

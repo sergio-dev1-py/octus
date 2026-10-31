@@ -33,8 +33,8 @@ const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   running: ["completed", "failed", "blocked", "cancelled", "interrupted"],
   blocked: ["ready", "blocked", "cancelled"],
   failed: ["assigned", "cancelled"],
-  completed: ["cancelled"],
-  reviewed: ["cancelled"],
+  completed: ["cancelled", "integrated"],
+  reviewed: ["cancelled", "integrated"],
   integrated: ["cancelled"],
   cancelled: [],
   interrupted: ["assigned", "cancelled"],
@@ -388,7 +388,7 @@ export class TaskManager {
       }
       await this.db.batch([
         { sql: "UPDATE task_attempts SET status = 'cancelled', completed_at = ? WHERE task_id = ? AND status IN ('pending','running')", params: [now(), id] },
-        { sql: "UPDATE tasks SET status = 'cancelled', blocked_reason = NULL, blocked_details = NULL, updated_at = ? WHERE id = ? AND status NOT IN ('completed','reviewed')", params: [now(), id] },
+        { sql: "UPDATE tasks SET status = 'cancelled', blocked_reason = NULL, blocked_details = NULL, updated_at = ? WHERE id = ? AND status NOT IN ('completed','reviewed','integrated')", params: [now(), id] },
         { sql: "DELETE FROM scheduler_reservations WHERE task_id = ?", params: [id] },
       ]);
       // Cancelación: worktree a finished retenido (auditoría + Etapa 5). Sin auto-borrado.

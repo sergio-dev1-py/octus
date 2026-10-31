@@ -5,12 +5,21 @@
 import type {
   AgentDefinition,
   AgentInstance,
+  Approval,
   ApprovalRequest,
+  ConflictResolution,
+  Integration,
+  IntegrationCommit,
+  IntegrationConflict,
+  IntegrationOperation,
+  IntegrationReview,
   Message,
   ModelSelection,
   Plan,
   PlanRevision,
+  Preview,
   Project,
+  Promotion,
   RepositorySummary,
   Run,
   Session,
@@ -21,6 +30,7 @@ import type {
   TaskReviewVerdict,
   TaskStatus,
   ToolCallRecord,
+  Validation,
   Worktree,
   WorktreeOperation,
 } from "./domain.js";
@@ -123,6 +133,37 @@ export interface OctusIPC {
   "tasks.retry": { request: { taskId: string }; response: { ok: boolean; attempt?: number; instanceId?: string; error?: string } };
   "tasks.review": { request: { reviewerTaskId: string; targetTaskId: string; verdict: "accept" | "request-changes"; detail?: Record<string, unknown> }; response: { ok: boolean; error?: string } };
   "tasks.scheduler": { request: { sessionId: string }; response: { lastRunId?: string; active: { tasks: number; reservations: number } } };
+  "integrations.create": { request: { projectId: string; runId: string; targetBranch?: string }; response: { integration: Integration; error?: string } };
+  "integrations.get": { request: { integrationId: string }; response: { integration: Integration; commits: IntegrationCommit[]; operations: IntegrationOperation[]; error?: string } };
+  "integrations.list": { request: { runId: string }; response: { integrations: Integration[] } };
+  "integrations.rebuild": { request: { integrationId: string }; response: { ok: boolean; id?: string; attempt?: number; error?: string } };
+  "integrations.abort": { request: { integrationId: string; reason?: string }; response: { ok: boolean; error?: string } };
+  "integrations.incorporate": { request: { integrationId: string }; response: { ok: boolean; incorporated?: number; error?: string } };
+  "integrations.spawnReviewer": { request: { integrationId: string; brief?: string }; response: { ok: boolean; instanceId?: string; error?: string } };
+  "integrations.review": { request: { integrationId: string; instanceId: string; verdict: "accept" | "request-changes"; summary?: string }; response: { ok: boolean; error?: string } };
+  "conflicts.list": { request: { scope?: "integration" | "work_base"; scopeRef?: string; status?: string }; response: { conflicts: IntegrationConflict[] } };
+  "conflicts.get": { request: { conflictId: string }; response: { conflict: IntegrationConflict; resolutions: ConflictResolution[]; error?: string } };
+  "conflicts.requestResolution": { request: { conflictId: string; briefSuffix?: string }; response: { ok: boolean; instanceId?: string; resolutionSha?: string; reused?: boolean; error?: string } };
+  "conflicts.finalize": { request: { conflictId: string; instanceId: string }; response: { ok: boolean; resolutionSha?: string; error?: string } };
+  "conflicts.incorporate": { request: { integrationId: string; conflictId: string }; response: { ok: boolean; integratedSha?: string; reused?: boolean; error?: string } };
+  "conflicts.abort": { request: { conflictId: string; reason?: string }; response: { ok: boolean; error?: string } };
+  "conflicts.cleanup": { request: { conflictId: string }; response: { ok: boolean; removed?: boolean; error?: string } };
+  "validations.list": { request: { integrationId: string; sha?: string }; response: { validations: Validation[]; reviews: IntegrationReview[] } };
+  "validations.rerun": { request: { integrationId: string; sha?: string }; response: { ok: boolean; validations?: Validation[]; error?: string } };
+  "previews.create": { request: { integrationId: string }; response: { ok: boolean; preview?: Preview; error?: string } };
+  "previews.list": { request: { integrationId: string }; response: { previews: Preview[] } };
+  "previews.start": { request: { previewId: string; startEntryId?: string }; response: { ok: boolean; status?: string; url?: string; pid?: number; reachable?: boolean; error?: string } };
+  "previews.stop": { request: { previewId: string }; response: { ok: boolean; stopped?: boolean; error?: string } };
+  "previews.restart": { request: { previewId: string; startEntryId?: string }; response: { ok: boolean; status?: string; url?: string; pid?: number; reachable?: boolean; error?: string } };
+  "previews.inspect": { request: { previewId: string }; response: { preview: Preview; shaMatchesHead: boolean; reachable: boolean; error?: string } };  "previews.logs": { request: { previewId: string; tailChars?: number }; response: { logs: string } };
+  "previews.cleanup": { request: { previewId: string }; response: { ok: boolean; removed?: boolean; error?: string } };
+  "previews.allowlist": { request: { projectId: string }; response: { entries: Array<{ id: string; name: string; phase: "install" | "start"; argv: string[]; timeoutMs?: number }> } };
+  "previews.saveAllowlist": { request: { projectId: string; entries: Array<{ id: string; name: string; phase: "install" | "start"; argv: string[]; timeoutMs?: number }> }; response: { ok: boolean; entries?: Array<{ id: string; name: string; phase: "install" | "start"; argv: string[]; timeoutMs?: number }>; error?: string } };
+  "approvals.approve": { request: { integrationId: string; previewId?: string; waiverReason?: string }; response: { ok: boolean; approvalId?: string; duplicate?: boolean; error?: string } };
+  "approvals.reject": { request: { integrationId: string; reason?: string }; response: { ok: boolean; approvalId?: string; error?: string } };
+  "approvals.status": { request: { integrationId: string }; response: { ok: boolean; reasons: string[]; approval?: Approval; error?: string } };
+  "promotions.promote": { request: { integrationId: string }; response: { ok: boolean; promotionId?: string; newSha?: string; reused?: boolean; error?: string } };
+  "promotions.status": { request: { integrationId: string }; response: { promotions: Promotion[] } };
   "worktrees.list": { request: { projectId: string }; response: { worktrees: Worktree[] } };
   "worktrees.get": { request: { worktreeId: string }; response: { ok: boolean; worktree?: Worktree; operations?: WorktreeOperation[]; error?: string } };
   "worktrees.cleanup": { request: { worktreeId: string; deleteBranch?: boolean }; response: { ok: boolean; error?: string } };

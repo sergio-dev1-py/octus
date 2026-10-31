@@ -111,7 +111,10 @@ export class ValidationService {
         await this.db.exec("UPDATE validations SET status = ?, detail = ?, updated_at = ? WHERE id = ?", [status, msg.slice(0, 2000), now(), id]);
       }
     }
-    return this.listValidations(integrationId, head);
+    const rows = await this.listValidations(integrationId, head);
+    const event = await this.events.append({ type: "integration.validated", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { sha: head, passed: rows.filter((r) => r.status === "passed").length, failed: rows.filter((r) => r.status === "failed").length, skipped: rows.filter((r) => r.status === "skipped").length, blocked: rows.filter((r) => r.status === "blocked").length } });
+    this.bus.publish(event);
+    return rows;
   }
 
   /**
