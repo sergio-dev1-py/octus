@@ -31,8 +31,10 @@ const proposedTaskSchema = z.object({
   writeScope: z.array(z.string().min(1).max(500)).max(40).default([]),
   validationCommands: z.array(z.string().min(1).max(200)).max(20).default([]),
   needsReview: z.boolean().default(false),
-  reviewTargetTempId: z.string().min(1).max(64).optional(),
-  estimatedComplexity: z.string().max(40).optional(),
+  // Distintos modelos serializan los opcionales ausentes como null explícito
+  // (detectado en live con GLM); null se normaliza a ausente, no es error.
+  reviewTargetTempId: z.string().min(1).max(64).nullish(),
+  estimatedComplexity: z.string().max(40).nullish(),
 });
 
 const proposalSchema = z.object({
@@ -173,6 +175,6 @@ export class TaskPlanner {
     if (!result.success) {
       throw new OctusError("tool_failed", `TaskPlanner returned an invalid proposal: ${result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).slice(0, 5).join("; ")} (raw head: ${jsonText.slice(0, 200)})`);
     }
-    return result.data.tasks;
+    return result.data.tasks.map((t) => ({ ...t, reviewTargetTempId: t.reviewTargetTempId ?? undefined, estimatedComplexity: t.estimatedComplexity ?? undefined }));
   }
 }

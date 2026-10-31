@@ -1010,6 +1010,13 @@ async function main(): Promise<void> {
     app.exit(code);
     return;
   }
+  if (process.argv.includes("--octus-acceptance-6")) {
+    await app.whenReady();
+    const { runAcceptancePhase3 } = await import("./acceptance.js");
+    const code = await runAcceptancePhase3({ stage5: true, stage6: true });
+    app.exit(code);
+    return;
+  }
   if (process.argv.includes("--octus-smoke")) {
     await app.whenReady();
     const code = await runSmoke();

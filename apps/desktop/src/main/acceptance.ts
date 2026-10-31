@@ -6,6 +6,7 @@
  * No modifica YAML de producción: los defaults se fijan solo en la DB temporal.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, chmodSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -45,8 +46,8 @@ interface UsageRow {
 
 const META_MODEL = "muse-spark-1.3-contributor";
 const META_EFFORT = "xhigh";
-const GO_MODEL = "deepseek-v4.1-flash";
-const GO_EFFORT = "max";
+const GO_MODEL = "glm-5.3-flash";
+const GO_EFFORT = "high";
 
 function log(message: string): void {
   console.log(`[acceptance] ${message}`);
@@ -574,9 +575,9 @@ export async function runAcceptance(): Promise<number> {
         const entry = go?.capabilitiesOf(GO_MODEL);
         const nativeOk = true;
         const fullOk = !!entry && entry.toolCall && entry.reasoningEfforts.includes("max");
-        push("B-cat", "deepseek-v4.1-flash: chat-completions, tools, max", fullOk && nativeOk ? "PASS" : "FAIL", entry ? `efforts=[${entry.reasoningEfforts.join(",")}] toolCall=${entry.toolCall}` : "missing entry");
+        push("B-cat", `${GO_MODEL}: chat-completions, tools, max`, fullOk && nativeOk ? "PASS" : "FAIL", entry ? `efforts=[${entry.reasoningEfforts.join(",")}] toolCall=${entry.toolCall}` : "missing entry");
         if (!fullOk) {
-          push("B-model", "deepseek max unavailable — no silent reduction", "BLOCKED", "refusing to substitute another model/effort");
+          push("B-model", "GLM max unavailable — no silent reduction", "BLOCKED", "refusing to substitute another model/effort");
         } else {
           await pinTempModels(core, "opencode-go", GO_MODEL, GO_EFFORT);
           await core.configureBudgets([
@@ -608,7 +609,7 @@ export async function runAcceptance(): Promise<number> {
           const parts = (await core.sessionMessages(session.id)).flatMap((m) => m.parts).filter((p) => p.type === "tool_call").length;
           const invErr = await core.db.query<Record<string, string | number | null>>("SELECT error FROM tool_invocations WHERE run_id = ? AND error IS NOT NULL", [long.runId]);
           const reasoningFault = invErr.some((r) => /reasoning_content|400|MissingSession/i.test(String(r.error ?? "")));
-          push("B-deepseek", "B. deepseek max multi-step tool continuity (no reasoning loss)", longRun.status === "done" && parts >= 3 && !reasoningFault ? "PASS" : "FAIL", `status=${longRun.status} toolCalls=${parts} reasoningFault=${reasoningFault} err=${(longRun.error ?? "").slice(0, 160)}`);
+          push("B-glm", "B. GLM high multi-step tool continuity (no reasoning loss)", longRun.status === "done" && parts >= 3 && !reasoningFault ? "PASS" : "FAIL", `status=${longRun.status} toolCalls=${parts} reasoningFault=${reasoningFault} err=${(longRun.error ?? "").slice(0, 160)}`);
           // Plan + delegate + background (mismo esquema que A, resumido).
           const structured = { objective: "Go probe", steps: [{ title: "Inspect app.txt" }], acceptanceCriteria: ["marker known"] };
           const created = await core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "Go probe", structured, runId: "run_seed_go", createdBy: "accept" });
@@ -1027,7 +1028,7 @@ export async function runAcceptancePhase2(): Promise<number> {
 
 /**
  * Corredor de aceptación Etapa 5 (solo harness de pruebas; reutiliza el flujo live).
- * Dos matrices independientes (A: meta/contributor/xhigh, B: go/deepseek-v4.1-flash/max),
+ * Dos matrices independientes (A: meta/contributor/xhigh, B: go/glm-5.3-flash/high + un caso max),
  * cada una con sesión y proyecto temporales propios. Flujo por matriz:
  * plan → revisión aprobada (decisión simulada del usuario) → DAG vía TaskPlanner
  * REAL → worktrees auto-aprovisionados → 2 lectoras en paralelo → implementer en su
@@ -1037,8 +1038,9 @@ export async function runAcceptancePhase2(): Promise<number> {
  * Sin directorios pre-registrados, sin ramas manuales, sin cambiar defaults de
  * producción (solo override de sesión + DB temporal). Presupuestos acotados como en fase 2.
  */
-export async function runAcceptancePhase3(opts?: { stage5?: boolean }): Promise<number> {
-  const STAGE5 = opts?.stage5 === true;
+export async function runAcceptancePhase3(opts?: { stage5?: boolean; stage6?: boolean }): Promise<number> {
+  const STAGE5 = opts?.stage5 === true || opts?.stage6 === true;
+  const STAGE6 = opts?.stage6 === true;
   const started = Date.now();
   const steps: Step[] = [];
   const instances: InstanceRow[] = [];
@@ -1167,8 +1169,12 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
         }
         const exact = (core.router.get("opencode-go")?.models() ?? []).find((m) => m.modelId.toLowerCase() === modelId.toLowerCase());
         if (!exact || exact.modelId !== modelId) {
-          const similar = (core.router.get("opencode-go")?.models() ?? []).filter((m) => /deepseek/i.test(m.modelId)).map((m) => m.modelId).slice(0, 10);
-          push(`${tag}-setup`, `fase 3 ${provider}: setup`, "BLOCKED", `exact ${modelId} absent (deepseek-like: [${similar.join(",") || "none"}]), no fallback to GLM/Grok`);
+          const similar = (core.router.get("opencode-go")?.models() ?? []).filter((m) => /glm|chat-completions/i.test(m.modelId)).map((m) => m.modelId).slice(0, 10);
+          push(`${tag}-setup`, `fase 3 ${provider}: setup`, "BLOCKED", `exact ${modelId} absent (similar: [${similar.join(",") || "none"}]), no fallback to another model`);
+          return;
+        }
+        if (effort === "xhigh") {
+          push(`${tag}-setup`, `fase 3 ${provider}: setup`, "BLOCKED", "xhigh is forbidden for this model (P4); use high or max");
           return;
         }
         if (!exact.capabilities.toolCall || !exact.capabilities.reasoningEfforts.includes(effort as never)) {
@@ -1518,6 +1524,101 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
         }
       }
 
+      // Etapa 6 (solo --octus-acceptance-6): memoria persistente + gobernanza + recuperación.
+      // Sin llamadas extra al modelo: propone por gateway real, decide/validate/revalidate
+      // por núcleo, selección en buildInstructions, recovery del coordinador.
+      if (STAGE6) {
+        try {
+          const memTool = await execGuarded(core, { toolCallId: `tool_mem_${tag}`, idempotencyKey: `idem-mem-${tag}`, sessionId: session.id, runId, instanceId: coordId, definitionId: "coordinator-build", directory: root, name: "memory_propose", args: { scope: "project", scopeId: project.id, category: "fact", topic: `live-stack-${tag}`, content: "bun 1.4 + node", source: "code" } });
+          const listedAfter = await core.memory.list({ scope: "project", scopeId: project.id });
+          const proposed = listedAfter.find((m) => m.topic === `live-stack-${tag}`);
+          push(`${tag}-memtool`, "memory_propose via gateway creates proposed entry", memTool.ok && proposed?.status === "proposed" ? "PASS" : "FAIL", memTool.text.slice(0, 120));
+          if (proposed) {
+            await core.memoryWriter.validate(proposed.id, coordId);
+            push(`${tag}-memvalidate`, "coordinator validates ordinary memory", (await core.memory.get(proposed.id)).status === "verified" ? "PASS" : "FAIL", proposed.id.slice(-6));
+          }
+          // Pregunta bloqueante P2: se abre, se responde approve, queda approved.
+          const decEntry = await core.memoryWriter.propose({ scope: "project", scopeId: project.id, category: "decision", topic: `live-db-${tag}`, content: "sqlite WAL", source: "user" }, undefined);
+          const askPending = core.memoryWriter.requestApproval(decEntry.id, { sessionId: session.id, runId, instanceId: coordId });
+          let pendingReq: { id: string; questions: Array<{ question: string }> } | undefined;
+          for (let i = 0; i < 60 && !pendingReq; i++) {
+            pendingReq = core.questions.pendingFor(session.id).find((q) => q.toolCallId === `mem-${decEntry.id}`);
+            if (!pendingReq) await new Promise((r) => setTimeout(r, 500));
+          }
+          push(`${tag}-memask`, "architectural memory raises blocking user question", pendingReq ? "PASS" : "FAIL", pendingReq?.id.slice(-6) ?? "no question raised");
+          if (pendingReq) {
+            await core.questions.reply(pendingReq.id, [{ question: pendingReq.questions[0]!.question, answers: ["approve"] }], `sim-${tag}`);
+          }
+          const decided = await askPending;
+          push(`${tag}-memapprove`, "user approval completes via question", decided.approved && decided.entry.status === "approved" ? "PASS" : "FAIL", decided.entry.status);
+          // Contradicción: segunda decisión mismo topic → notas + exclusión + resolución.
+          const rival = await core.memoryWriter.propose({ scope: "project", scopeId: project.id, category: "decision", topic: `live-db-${tag}`, content: "postgres", source: "user" }, undefined);
+          await core.memoryWriter.decide(rival.id, "approved");
+          const excluded = await core.context.buildMemorySection({ projectId: project.id, sessionId: session.id, runId });
+          push(`${tag}-memconflict`, "contradictory group excluded from context", !excluded.join("\n").includes(`live-db-${tag}`) ? "PASS" : "FAIL", `notes=${!!(await core.memory.get(rival.id)).reviewNote}`);
+          await core.memoryWriter.resolveConflict(decided.entry.id, "live: sqlite confirmed");
+          const included = await core.context.buildMemorySection({ projectId: project.id, sessionId: session.id, runId });
+          push(`${tag}-memresolve`, "resolved winner returns to context", included.join("\n").includes(`live-db-${tag}`) ? "PASS" : "FAIL", "sqlite");
+          // Revalidación con fichero real del fixture.
+          const markerPath = path.join(root, `memory-live-${tag}.txt`);
+          writeFileSync(markerPath, "origen v1\n");
+          const originHash = createHash("sha256").update("origen v1\n").digest("hex");
+          const fileMem = await core.memoryWriter.propose({ scope: "session", scopeId: session.id, category: "fact", topic: `live-doc-${tag}`, content: "doc fixture", source: "doc", originRef: { path: `memory-live-${tag}.txt`, contentHash: originHash } }, undefined);
+          await core.memoryWriter.validate(fileMem.id, coordId);
+          const defCoord = await core.registry.get("coordinator-build");
+          const withMem = defCoord ? await core.context.buildInstructions(defCoord, root, [], { projectId: project.id, sessionId: session.id, runId, instanceId: coordId }) : "";
+          push(`${tag}-memselect`, "context includes validated memory of this run", withMem.includes(`live-stack-${tag}`) ? "PASS" : "FAIL", "buildMemorySection");
+          writeFileSync(markerPath, "origen v2 cambiado\n");
+          const reval = await core.memoryWriter.revalidate(fileMem.id);
+          const staleRow = await core.memory.get(fileMem.id);
+          push(`${tag}-memstale`, "origin change marks stale without touching content", reval.changed && staleRow.status === "stale" && staleRow.content === "doc fixture" ? "PASS" : "FAIL", reval.reason);
+          // Recuperación: estado + reconcile sin duplicar.
+          const recStatus = await core.recoveryStatus();
+          const rec = await core.reconcileRecovery();
+          push(`${tag}-memrecovery`, "recovery status + reconcile converge", rec.previews.orphaned >= 0 && rec.memory.checked >= 0 ? "PASS" : "FAIL", `pendingOps=${recStatus.pendingOps} checked=${rec.memory.checked}`);
+        } catch (error) {
+          push(`${tag}-stage6`, "stage 6 flow", "FAIL", error instanceof Error ? error.message.slice(0, 300) : String(error));
+        }
+      }
+
+      // Sonda max controlada (P4, solo matriz B): un TaskPlanner con effort max.
+      if (STAGE6 && provider === "opencode-go") {
+        try {
+          const probeStart = Date.now();
+          const coordRow = await core.db.queryOne<{ model: string }>("SELECT model FROM agent_instances WHERE id = ?", [coordId]);
+          const coordModel = JSON.parse(String(coordRow?.model ?? "{}")) as { providerId: string; modelId: string; effort?: string };
+          const maxModel = { providerId: "opencode-go", modelId: GO_MODEL, effort: "max" };
+          await core.db.exec("UPDATE agent_instances SET model = ?, updated_at = ? WHERE id = ?", [JSON.stringify(maxModel), Date.now(), coordId]);
+          const { plan: probePlan } = await core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: `Probe max ${tag}: survey app files`, structured: { objective: `Probe max ${tag}`, steps: [{ title: "Survey app files thoroughly" }], acceptanceCriteria: ["report lists files"] }, runId, createdBy: `accept-max-${tag}` });
+          const probeRev = (await core.plans.listRevisions(probePlan.id))[0]!;
+          await core.plans.presentRevision(probeRev.id, `msg_max_${tag}`);
+          await core.plans.requestApproval(probePlan.id, probeRev.id, session.id, runId);
+          const probePending = await core.pendingApprovals(session.id);
+          await core.decideApproval(probePending[probePending.length - 1]!.id, "approved");
+          const probeOut = await core.planner.planTasks(coordId, {
+            runId,
+            objective: `Probe max ${tag} DAG`,
+            brief: "Produce EXACTLY 3 tasks: two explorers (priorities 10 and 9, no dependencies, requiredTools read/glob) and one researcher (priority 5, dependencies on both explorers, requiredTools websearch/read). Each acceptance criterion MUST quote a real fixture marker (alpha-42, beta-84) or a repo path (fixture-a.txt, fixture-b.txt) verbatim, e.g. 'delivery quotes marker alpha-42 from fixture-a.txt'. needsReview false everywhere. Output ONLY {\"tasks\": [...]}.",
+            planId: probePlan.id,
+            revisionId: probeRev.id,
+            nonce: `accept-max-${tag}`,
+          });
+          const probeTasks = await Promise.all(probeOut.taskIds.map((id) => core.tasks.getTask(id)));
+          const shapeOk = probeOut.taskIds.length >= 3 && probeTasks.every((t) => t.title.length >= 8 && t.description.length >= 20 && t.acceptanceCriteria.length > 0 && ["explorer", "researcher", "implementer", "reviewer"].includes(t.agentRole));
+          const manifests = new Set((await core.gateway.manifests()).map((m) => m.name));
+          const toolsOk = probeTasks.every((t) => (t.requiredTools ?? []).every((tool) => manifests.has(tool)));
+          push(`${tag}-maxplan`, "GLM max planner returns non-empty executable DAG", shapeOk && toolsOk ? "PASS" : "FAIL", `tasks=${probeOut.taskIds.length} shape=${shapeOk} tools=${toolsOk} (Das Problem {"tasks":[]} regressed)`);
+          const usage = await core.db.query<{ n: number; reasoning: number; ms: number }>(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(reasoning_tokens),0) AS reasoning, COALESCE(MAX(duration_ms),0) AS ms FROM usage_records WHERE provider_id = 'opencode-go' AND model_id = ? AND created_at >= ?",
+            [GO_MODEL, probeStart],
+          );
+          const u = usage[0] ?? { n: 0, reasoning: 0, ms: 0 };
+          push(`${tag}-maxtrace`, "max effort executed with usage + latency trace", u.n >= 1 ? "PASS" : "FAIL", `calls=${u.n} reasoning=${u.reasoning} maxMs=${u.ms} effort=max(input ${coordModel.effort ?? "?"})`);
+        } catch (error) {
+          push(`${tag}-maxprobe`, "controlled max probe", "FAIL", error instanceof Error ? error.message.slice(0, 300) : String(error));
+        }
+      }
+
       await collectInstances(core);
       for (const u of await runUsageSummary(core)) allUsage.push({ ...u, matrix: tag });
     } catch (error) {
@@ -1547,8 +1648,8 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
   const fail = steps.filter((s) => s.status === "FAIL").length;
   const blocked = steps.filter((s) => s.status === "BLOCKED").length;
   const skip = steps.filter((s) => s.status === "SKIP").length;
-  const stageLabel = STAGE5 ? "5" : "4";
-  const stageTitle = STAGE5 ? "Fase 5 live — IntegrationManager/Preview/Approval/Promotion (modelos reales)" : "Fase 4 live — WorktreeManager (modelos reales)";
+  const stageLabel = STAGE6 ? "6" : STAGE5 ? "5" : "4";
+  const stageTitle = STAGE6 ? "Fase 6 live — MemoryService/Gobernanza/Recuperación (modelos reales)" : STAGE5 ? "Fase 5 live — IntegrationManager/Preview/Approval/Promotion (modelos reales)" : "Fase 4 live — WorktreeManager (modelos reales)";
   const lines: string[] = [];
   lines.push("");
   lines.push(`## ${stageTitle}`);
@@ -1566,7 +1667,7 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
   lines.push("|---|---|---|---|---|---|---|---|---|");
   for (const u of allUsage) lines.push(`| ${u.matrix} | ${u.provider} | ${u.model} | ${u.calls} | ${u.input} | ${u.output} | ${u.reasoning} | ${u.cached} | ${fmtCost(u.costMicro)} |`);
   lines.push("");
-  const reportPath = path.join(findRepoRoot(), ".harness", "implementation", STAGE5 ? "STAGE5_ACCEPTANCE_REPORT.md" : "STAGE4_ACCEPTANCE_REPORT.md");
+  const reportPath = path.join(findRepoRoot(), ".harness", "implementation", STAGE6 ? "STAGE6_ACCEPTANCE_REPORT.md" : STAGE5 ? "STAGE5_ACCEPTANCE_REPORT.md" : "STAGE4_ACCEPTANCE_REPORT.md");
   try {
     const prev = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : `# STAGE${stageLabel}_ACCEPTANCE_REPORT.md — Aceptación funcional Etapa ${stageLabel}\n`;
     writeFileSync(reportPath, `${prev}${lines.join("\n")}`, "utf8");
