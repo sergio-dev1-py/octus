@@ -339,14 +339,18 @@ export async function closeSession(sessionId?: string): Promise<void> {
   setError(undefined);
   setState("sessionNotice", undefined);
   await invoke("sessions.delete", { sessionId: target });
-  if (target === state.activeSessionId) {
+  const wasActive = target === state.activeSessionId;
+  if (wasActive) {
     setState("activeSessionId", undefined);
     setState("messages", []);
     setState("live", {});
   }
-  // refreshSessions ya selecciona la primera sesión restante cuando la
-  // activa desapareció (continuar con otra sesión del mismo proyecto).
   await refreshSessions();
+  // Sin auto-selección en refreshSessions (Todo 10): al cerrar la activa se
+  // continúa explícitamente con la primera restante del mismo proyecto.
+  if (wasActive && !state.activeSessionId && state.sessions.length > 0) {
+    await selectSession(state.sessions[0]!.id);
+  }
 }
 
 export async function recoverActiveSession(): Promise<void> {
