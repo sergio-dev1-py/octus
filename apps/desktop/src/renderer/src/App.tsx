@@ -15,6 +15,7 @@ import {
 } from "./store.js";
 import { ActivityBar, Sidebar, ResizeHandle, InspectorPanel, BottomPanel } from "./views/workbench.jsx";
 import { SettingsView } from "./views/settings.jsx";
+import { AgentsView } from "./views/agents.jsx";
 import { ChatView, PermissionDialogs, QuestionDialogs } from "./views/chat.jsx";
 import { WelcomeView } from "./views/welcome.jsx";
 
@@ -83,7 +84,9 @@ export default function App() {
         <ResizeHandle kind="sidebar" hidden={!state.layout.sidebarVisible} />
         <div id="center">
           <Show when={state.view === "chat"} fallback={<SettingsView />}>
-            <ChatView />
+            <Show when={state.layout.activity === "agents"} fallback={<ChatView />}>
+              <AgentsView />
+            </Show>
           </Show>
         </div>
         <ResizeHandle kind="inspector" hidden={!state.layout.inspectorVisible} />

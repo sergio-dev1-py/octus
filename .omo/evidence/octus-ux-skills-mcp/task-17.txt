@@ -1,0 +1,143 @@
+TODO 17 - DAG, INTEGRACIONES, PREVIEWS, CONFLICTOS, DIFFS Y REVISIONES (+ worktrees.diff)
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 11) | Rama: feat/ux-skills-mcp-w11-agents
+Fecha: 2026-11-01 | Ejecutor: st_01a19928 | Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w11
+Sonda base: Todo 15 (.omo/evidence/octus-ux-skills-mcp/task-15.txt) | Nota Todo 9: se usa promotion-manager.ts
+Alcance: grafo de dependencias, integraciones, previews, conflictos con resolucion
+asistida, diff de archivos, resultados de revision e historial. Subtodo aditivo:
+canal IPC worktrees.diff (contrato N-A-DIFF-1 del Todo 4, confirmado por la sonda
+del Todo 15). Prohibido dry-run: todo lo afirmado se ejecuto de verdad.
+
+============================================================
+0. BASELINE (tests de la conducta tocada, ANTES de editar)
+============================================================
+$ bun test packages/core/test/task-graph.test.ts
+EXIT-0 | 5 pass, 0 fail (12 expects). En verde.
+$ bun test packages/core/test/worktrees.test.ts packages/core/test/integration.test.ts
+EXIT-1 | 12 pass, 46 fail, 31 errors. ROJO PRE-EXISTENTE: timeouts de entorno
+("Timed out waiting for condition", tests de 5000ms que agotan su deadline en
+esta maquina Windows) sin haber editado nada. No los causa el Todo 17; se
+registran y no se enmascaran. La conducta que el Todo 17 toca y SI verifica en
+verde: task-graph (2x), promotion-gate (failure real, seccion 2) y typecheck.
+$ git status --short (baseline): solo ?? task-15.txt. Limpio.
+$ git branch --show-current: feat/ux-skills-mcp-w11-agents.
+
+============================================================
+1. CAMBIOS (solo contenido Todo 17; coordinacion con Todo 16 por contenido
+   distinto: ficheros nuevos propios + regiones aditivas en ipc.ts, main y
+   chat.tsx; verificada coexistencia con views/agents.tsx y store/runs.ts del
+   Todo 16 al cierre: mis 3 lineas de montaje presentes, typecheck conjunto 0)
+============================================================
+M packages/shared/src/ipc.ts
+  + "worktrees.diff": { request: { worktreeId: string; base?: string };
+    response: { ok: boolean; diff?: string; head?: string; branch?: string; error?: string } }
+M apps/desktop/src/main/index.ts
+  + "worktrees.diff" en CHANNELS; handler con validacion (worktreeId no vacio;
+    base opcional solo SHA-40 /^[0-9a-f]{40}$/, si no "invalid payload") que
+    llama a need().worktrees.getWorktreeDiff + inspectWorktree (head/branch) y
+    devuelve { ok:false, error } ante fallo del servicio. Sin core nuevo:
+    worktrees es public readonly en OctusCore y el productor getWorktreeDiff ya
+    existia (sonda Todo 15).
+NUEVO apps/desktop/src/renderer/src/dagLogic.ts (pura, sin Solid: la vista la
+  consume y el script de verificacion la ejecuta)
+  layoutDag (profundidad por camino mas largo, orden determinista, ciclo con
+  camino explicito), isPreviewReachable (solo "reachable" cuenta),
+  visibleConflicts (open/resolving/resolved), parseDiffStat (formato --stat de
+  N-A-DIFF-1), canPromote (espejo de PromotionManager: approved + head + approval
+  pinneada al SHA; deshabilita Promote en cualquier otro caso).
+NUEVO apps/desktop/src/renderer/src/views/dag.tsx (solo var(--oc-*) y patrones
+  .card/.pill/.row/.muted/details.stage2; nodos SVG 12px = --oc-text-xs, rejilla 4px)
+  #integration-dag (SVG nodos/aristas + lista textual de dependencias + aviso de
+  ciclo + #conflict-list + #preview-status), #worktree-diff (botones por worktree,
+  fetch a worktrees.diff, head/rama/archivos/<pre>), #integration-history
+  (operaciones del journal por integracion, ordenadas).
+M apps/desktop/src/renderer/src/views/chat.tsx (2 regiones aditivas: import
+  ./dag.jsx + 3 secciones tras IntegrationsSection).
+
+============================================================
+2. VERIFICACION POR SCRIPT EJECUTADA (bun verify-task-17.ts, temporal, 29/29)
+============================================================
+$ bun verify-task-17.ts
+EXIT-0 | VERIFY-RESULT OK (todas las aserciones en verde)
+PASS DAG-ADJACENCY / DAG-ACYCLIC / DAG-UNSATISFIED (task-graph real)
+PASS DAG-LAYOUT-EDGE / DAG-LAYOUT-DEPTH / DAG-LAYOUT-NOCYCLE (dagLogic real)
+PASS PREVIEW-REACHABLE / PREVIEW-NOT-RUNNING / PREVIEW-VISIBLE
+PASS CONFLICT-VISIBLE / CONFLICT-ABORT-HIDDEN
+PASS DIFF-FILES / DIFF-NODATA (parser real sobre --stat simulado)
+PASS GATE-NOAPPROVAL / GATE-PINNED / GATE-MOVED (puerta UI espejo del manager)
+PASS IPC-CONTRACT / MAIN-CHANNEL / MAIN-VALIDATION / MAIN-SHA40
+PASS VIEW-integration-dag / VIEW-worktree-diff / VIEW-integration-history /
+     VIEW-worktrees.diff / VIEW-MOUNTED
+PASS FAILSETUP-INTEGRATION (integracion real creada en building via
+  makeTestCore + gitProject + makeRun + integrations.createForRun, sin agentes)
+PASS FAILURE-NO-APPROVAL: "Integration int_05459fa54786 is building, not
+  approved" (promoteIntegration real rechaza sin aprobacion fijada a SHA;
+  la integracion conserva building tras el rechazo: FAILSETUP-STATUS-KEPT)
+PASS FAILURE-DIFF-UNKNOWN: "Worktree not found: wt_missing" (getWorktreeDiff
+  real rechaza worktree inexistente)
+$ bun test packages/core/test/task-graph.test.ts (clase flaky, 2x): 5 pass 2/2.
+$ bun run typecheck (shared+core+desktop, tras todos los cambios): EXIT-0.
+  El mapa handlers() es total sobre IpcChannel: compila solo si worktrees.diff
+  existe en contrato, CHANNELS y handler a la vez.
+
+============================================================
+3. MANUAL QA DE SUPERFICIE REAL (node qa-task-17-surface.mjs, temporal;
+   build vite real + Chromium headless por CDP, patron Todo 7; 2 pasadas)
+============================================================
+$ node qa-task-17-surface.mjs
+EXIT-0 | SURFACE-RESULT OK (24 pass, 0 fail) en p1 y p2.
+p1+p2: #integration-dag visible; arista explore→impl + dep impl→review;
+sin banner de ciclo; #conflict-list con cf_open[open]; #preview-status con
+http://127.0.0.1:4311; #worktree-diff visible; click real en [data-diff-worktree]
+→ src/a.ts visible + rama octus/qa-17; #integration-history con ops incorporate
+y validate; --oc-panel == #fff (serializacion de #ffffff, tema claro aplicado);
+fondo por token (sin literales).
+Screenshot: .omo/evidence/octus-ux-skills-mcp/task-17-surface.png (revisada:
+nodos Explore/Implement/Review con borde semantico, aristas, lista de
+dependencias, conflicto, preview, diff con 2 archivos e historial).
+Incidencias del QA (causa en el script, no en el producto; corregidas y
+re-ejecutadas en verde): selector data-dag-dep con orden invertido; igualdad
+estricta de color serializado (#fff vs #ffffff).
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+stale_state: MITIGADA. El diff se refetchtea por IPC en cada seleccion (sin
+  cache persistente mas alla del ultimo resultado por worktree + flag loading);
+  el historial lee integrationOps ya poblado por refreshIntegrations y ordena por
+  createdAt. Doble click verificado en 2 pasadas sin loading atascado.
+misleading_success_output: MITIGADA. Salidas con nombre PASS/FAIL + exit code;
+  el failure FAILURE-NO-APPROVAL afirma el texto de rechazo del manager real,
+  no la ausencia de exito.
+dirty_worktree: LIMPIO (recibo seccion 5). Temporales eliminados; dist/profile
+  removidos por el propio QA; solo quedan entregables + evidencia.
+flaky_tests: 2x task-graph (5/5 ambas) + 2 pasadas superficie (12/12 ambas).
+Resto no-aplicable con motivo: sin esperas fijas en tests (poll CDP por
+condicion con deadline, no sleeps de correccion); sin red ni credenciales
+(stub IPC local y git fixture local); sin carga/rendimiento (alcance unitario +
+superficie determinista, presupuestos en Todo 34).
+
+============================================================
+5. LIMPIEZA (recibo)
+============================================================
+Eliminados: verify-task-17.ts, task-17-surface.entry.tsx, qa-task-17-surface.mjs
+(.task17-dist y .task17-profile ya removidos por el QA; EPERM de Windows
+resuelto con reintento tras matar Chromium).
+$ git status --short (post-limpieza): M main/index.ts, M chat.tsx,
+M packages/shared/src/ipc.ts (mios) + M App.tsx, store.ts, store/events.ts,
+store/projects.ts, store/state.ts, styles.css, ?? store/runs.ts,
+?? views/agents.tsx, ?? scripts/*16*, ?? task-16-*.png (del Todo 16, intactos,
+no tocados) + ?? dagLogic.ts, ?? views/dag.tsx, ?? task-17-surface.png y este
+archivo (mios). Sin restos temporales.
+NO commiteado (el plan pide commit Y pero sin especificacion de mensaje/ventana
+para esta rama compartida; se deja al coordinador de ola).
+
+============================================================
+6. RIESGOS / NOTAS
+============================================================
+- worktrees/integration en rojo pre-existente por timeouts de entorno (no
+  bloquea: el Todo 17 no modifica core y su failure usa el manager real).
+- chat.tsx compartido con Todo 16: ediciones en regiones distintas, coexistencia
+  verificada al cierre; si el Todo 16 reescribe el bloque de montaje, re-anclar
+  las 3 lineas tras IntegrationsSection.
+- promotion-manager.ts (nombre real, nota Todo 9) es quien rechaza; la vista
+  solo espeja la puerta y main propaga el error.

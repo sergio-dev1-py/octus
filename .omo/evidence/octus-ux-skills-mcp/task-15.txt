@@ -1,0 +1,196 @@
+TODO 15 - SONDA DE TASKMANAGER, SCHEDULER Y AGENTMANAGER REUTILIZABLES
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 11, abre) | Rama: feat/ux-skills-mcp-w11-agents
+Fecha: 2026-11-01 | Ejecutor: st_01a19926 | Alcance: SOLO lectura + sonda minima, sin cambios a servicios
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w11 (evidencia solo aqui, no en el checkout principal)
+Especificacion base: Todo 4 (.omo/evidence/octus-ux-skills-mcp/task-4.txt + .harness/design/ux-conversation-agent-skills-mcp.md)
+
+============================================================
+1. COMANDOS EXACTOS Y SALIDAS
+============================================================
+
+$ bun probe-task15.ts   (script temporal en raiz del worktree, SOLO importa
+  packages/core/src/tasks/task-graph.ts puro, sin tocar servicios; eliminado tras correr)
+ADJACENCY [["tsk_explore",[]],["tsk_impl",["tsk_explore"]],["tsk_review",["tsk_impl"]],["tsk_research",[]]]
+CYCLE null
+CYCLE-INTRODUCED ["tsk_explore","tsk_review","tsk_impl","tsk_explore"]
+TRANSITIVE-DEPS tsk_review ["tsk_impl","tsk_explore"]
+TRANSITIVE-DEPENDENTS tsk_explore ["tsk_impl","tsk_review"]
+GATE impl-needsReview completed => false
+GATE impl-needsReview reviewed => true
+GATE noReview completed => true
+UNSATISFIED [["tsk_review",["tsk_impl"]]]
+CASCADE from tsk_explore []
+  (vacio porque tsk_explore estaba en "reviewed" = exito terminal que corta la
+  propagacion por diseno de cascadeCancelSet; el Todo 16 debe mostrar estados
+  reales, nunca progreso inventado)
+ORDER ["c","a","b"]  (prioridad desc, createdAt asc, id asc)
+RUN-STATES-SIMULATED planning,executing,integrating,awaiting_approval,promoting,done,rejected,failed,cancelled
+TASK-STATES-SIMULATED draft,ready,assigned,running,blocked,failed,completed,reviewed,integrated,cancelled,interrupted
+WORKTREE-STATES-SIMULATED provisioning,available,assigned,running,finished,suspended,cleanup_pending,removed,retained,orphaned
+PROBE-OK
+PROBE-CLEANED (script temporal eliminado; `git status --short` sin rastro)
+
+$ bun install --frozen-lockfile   (el worktree no tenia node_modules; tampoco el
+  checkout principal. Instalacion de dependencias, sin tocar codigo)
+bun install v1.4.2 | 98 packages installed [1.93s]
+
+$ bun run typecheck
+TYPECHECK-EXIT-0
+$ bun run --cwd packages/shared typecheck && bun run --cwd packages/core typecheck && bun run --cwd apps/desktop typecheck
+$ tsc --noEmit (x3, desktop con tsconfig.node.json + tsconfig.web.json)
+
+$ git status --short (tras sonda + typecheck + este archivo)
+?? .omo/evidence/octus-ux-skills-mcp/task-15.txt
+(node_modules ignorado por git; ningun servicio modificado)
+
+============================================================
+2. FIRMAS NECESARIAS PARA LOS TODOS 16 Y 17 (ruta + linea, existe/falta)
+============================================================
+Rutas relativas a la raiz del worktree.
+
+TAREAS - packages/core/src/tasks/task-manager.ts (class TaskManager, L79)
+  EXISTE L94   getTask(taskId): Promise<Task>
+  EXISTE L100  listTasks({runId?, sessionId?}): Promise<Task[]>
+  EXISTE L115  getDependencies(taskId): Promise<TaskDependency[]>
+  EXISTE L120  getAttempts(taskId): Promise<TaskAttempt[]>
+  EXISTE L125  getDelivery(taskId): Promise<{summary, artifacts} | undefined>
+  EXISTE L135  getPlanning(id): Promise<Planning>
+  EXISTE L142  createDag(CreateDagInput): Promise<{planningId, taskIds, created}>
+  EXISTE L234  recordPlanningRejected(...): Promise<string>
+  EXISTE L351  setStatus(taskId, status, blocked?): Promise<Task>
+  EXISTE L371  cancelTask(taskId): Promise<{cancelled: string[]}>  (usa cascadeCancelSet + cancela instancias + worktrees)
+  EXISTE L410  startAttempt(taskId, instanceId): Promise<number>
+  EXISTE L431  completeAttempt(taskId, status, detail?): Promise<void>
+  EXISTE L452  failUnstarted(taskId, errorMessage): Promise<void>
+  EXISTE L468  retryTask(taskId, opts?): Promise<{attempt, instanceId}>
+  EXISTE L558  recordReview(reviewerTaskId, targetTaskId, verdict, detail?): Promise<void>
+  EXISTE L595  recoverInstance(instanceId): Promise<{taskId, attempt}>
+  EXISTE L611  recordProgress(taskId, kind, text): Promise<void>
+  EXISTE L627  reconcile(): Promise<{interrupted, released}>
+
+DAG - packages/core/src/tasks/task-graph.ts (puro, sin persistencia)
+  EXISTE L11  adjacency({tasks, deps}): Map<id, dependsOn[]>
+  EXISTE L22  detectCycle({tasks, deps}): string[] | null  (camino explicito)
+  EXISTE L46  transitiveDeps(input, taskId): Set<string>
+  EXISTE L59  transitiveDependents(input, taskId): Set<string>
+  EXISTE L76  isDependencySatisfied(depStatus, depNeedsReview): boolean
+               (needsReview => reviewed|integrated; si no => completed|reviewed|integrated)
+  EXISTE L86  unsatisfiedDeps(input): Map<id, faltantes[]>
+  EXISTE L105 cascadeCancelSet(input, rootId): Set<string>  (exitos terminales cortan; historial no-exito intacto salvo raiz)
+  EXISTE L133 orderTasks(tasks): orden prioridad desc, createdAt asc, id asc
+
+SCHEDULER - packages/core/src/tasks/task-scheduler.ts (class TaskScheduler, L62)
+  EXISTE L21  interface Assignment { taskId, runId, instanceId, attempt, definitionId, directoryId? }
+  EXISTE L81  tick({sessionId?} Chaque): Promise<Assignment[]>  (oleadas: assignWave + supervise + settleIntegratingRuns)
+  EXISTE L713 reconcile(): Promise<{interrupted, released}>
+
+AGENTES - packages/core/src/orchestration/agent-manager.ts (class AgentManager, L43, implementa AgentToolService)
+  EXISTE L24  interface AgentLimits { maxPerSession, maxPerProject, maxDepth, maxImplementers, maxReaders, maxReviewers }
+  EXISTE L34  DEFAULT_AGENT_LIMITS = { 4, 6, 2, 2, 2, 1 }
+  EXISTE L62  spawn(SpawnRequest): Promise<SpawnResult>  (foreground/background, taskId?, worktreeId?, reviewTargetTaskId?, resolutionWorkspaceId?, integrationId?)
+  EXISTE L136 status(instanceId): Promise<AgentStatusView>
+  EXISTE L149 message(instanceId, text): Promise<void>
+  EXISTE L165 wait(instanceId, timeoutMs): Promise<AgentDelivery>
+  EXISTE L176 result(instanceId): Promise<AgentDelivery>
+  EXISTE L206 resumeInstance(instanceId): Promise<void>
+  EXISTE L216 cancel(instanceId): Promise<{cancelled: string[]}>  (cascada)
+  EXISTE L237 cancelSession(sessionId): Promise<void>
+  EXISTE L253 pendingDeliveries(sessionId): Promise<AgentDelivery[]>
+  EXISTE L268 consumePendingDeliveries(sessionId): Promise<AgentDelivery[]>
+  EXISTE L279 activeInstances(sessionId): Promise<AgentStatusView[]>
+  Tipos en packages/core/src/tools/tool-services.ts: SpawnRequest/SpawnResult, AgentDelivery
+  (status: completed|failed|cancelled), AgentStatusView { instanceId, definitionId, status, depth, directory, error? },
+  AgentToolService (spawn/status/message/wait/result/cancel).
+
+RUNS - packages/core/src/sessions/octus-core.ts (class OctusCore, L98)
+  EXISTE L367  listSessions(projectId?): Promise<Session[]>
+  EXISTE L407  getSession(sessionId): Promise<{session, runs: Run[]}>
+  EXISTE L1330 getRun(runId): Promise<{run, instances: AgentInstance[], toolCalls: ToolCallRecord[]}>
+  Estados Run en packages/shared/src/domain.ts: planning|executing|integrating|awaiting_approval|promoting|done|rejected|failed|cancelled
+  Estados Task: draft|ready|assigned|running|blocked|failed|completed|reviewed|integrated|cancelled|interrupted
+  NOTA: no existe clase RunManager separada; los runs viven en OctusCore. No bloquea: el Todo 16 consume runs.get.
+
+WORKTREES - packages/core/src/worktrees/worktree-manager.ts (class WorktreeManager, L41, implementa WorktreePort)
+  EXISTE L52  getAssignment(worktreeId): Promise<WorktreeAssignment | undefined>
+  EXISTE L66  getWorktree(id): Promise<Worktree>
+  EXISTE L72  getByTask(taskId): Promise<Worktree | undefined>
+  EXISTE L77  listProjectWorktrees(projectId): Promise<Worktree[]>
+  EXISTE L82  listTaskWorktrees(taskId): Promise<Worktree[]>
+  EXISTE L87  listOperations(worktreeId): Promise<WorktreeOperation[]>
+  EXISTE L150 ensureForTask(EnsureInput): Promise<EnsureResult>
+  EXISTE L270 markRunning(worktreeId, instanceId): Promise<void>
+  EXISTE L285 releaseWorktree(worktreeId, reason): Promise<void>
+  EXISTE L303 recoverForRetry(taskId, attempt): Promise<EnsureResult>
+  EXISTE L332 commitTaskWork(worktreeId, {scopes, sessionDir, message}): Promise<{producedCommit, committed}>
+  EXISTE L373 recordProducedCommit(worktreeId, sha40hex): Promise<void>
+  EXISTE L385 markFinished(worktreeId): Promise<void>
+  EXISTE L395 inspectWorktree(worktreeId): Promise<{worktree, status, head, branch}>
+  EXISTE L410 getWorktreeStatus(worktreeId): Promise<string>
+  EXISTE L415 getWorktreeDiff(worktreeId, base?): Promise<string>  (productor del canal N-A-DIFF-1 del Todo 4)
+  EXISTE L428 validateWorktree(worktreeId): Promise<void>
+  EXISTE L455 cleanupWorktree(worktreeId, {deleteBranch?}): Promise<{removed, branchDeleted}>
+  EXISTE L515 reconcile(): Promise<{suspended, orphaned, resumed}>
+  EXISTE L575 sweepOrphans(): Promise<number>
+  Estados Worktree: provisioning|available|assigned|running|finished|suspended|cleanup_pending|removed|retained|orphaned
+
+INTEGRACIONES (Todo 17) - packages/core/src/integration/
+  EXISTE integration-manager.ts L51 getIntegration / L57 listByRun / L62 getCommits / L67 listOperations / L78 createForRun / L151 incorporateCommit /
+         L288 incorporateRun / L363 abortIntegration / L382 reconcile / L434 getWorkBase / L470 ensureWorkBaseForTask
+  EXISTE validation-service.ts L34 listValidations / L42 listReviews / L53 runSuiteValidation / L124 validationGate / L146 recordIntegrationReview
+  EXISTE preview-manager.ts L67 listPreviews / L72 getPreview / L78 listAllowlist / L90 saveAllowlist / L108 createPreview / L158 startPreview /
+         L271 stopPreview / L322 inspectPreview / L337 getPreviewStatus / L345 verifyReachable / L356 getPreviewLogs / L370 cleanupPreview
+  EXISTE conflict-manager.ts L45 getConflict / L51 listConflicts / L74 getResolutionWorkspace / L96 requestResolution / L163 finalizeResolution /
+         L219 incorporateResolution / L260 abortResolution / L272 cleanupResolutionWorkspace
+  EXISTE promotion-manager.ts L38 getPromotion / L44 listByIntegration / L54 promoteIntegration (SHA fijado) / L179 markStale / L192 rebuildIntegration
+  EXISTE approval-service.ts L34 getApproval / L40 listApprovals / L49 checkApproval / L95 getApprovalStatus / L112 approveIntegration / L173 rejectIntegration
+
+IPC (packages/shared/src/ipc.ts) - canales que consumiran los Todos 16/17, todos EXISTEN:
+  tasks.list L139 / tasks.get L140 / tasks.cancel L141 / tasks.retry L142 / tasks.review L143 / tasks.scheduler L144
+  runs.get L102 / runs.usage L103
+  agents.definitions L117 / agents.instances L118 / agents.cancel L119 / agents.limits L136 / agents.setLimits L137 / agents.setDefinitionModel L138
+  approvals.pending L127 / approvals.decide L128 / approvals.approve L171 / approvals.reject L172 / approvals.status L173
+  conflicts.list L153 / conflicts.get L154 / conflicts.requestResolution L155 / conflicts.finalize L156 / conflicts.incorporate L157 / conflicts.abort L158 / conflicts.cleanup L159
+  validations.list L160 / validations.rerun L161
+  previews.create L162 / previews.list L163 / previews.start L164 / previews.stop L165 / previews.restart L166 / previews.inspect L167 /
+    previews.cleanup L168 / previews.allowlist L169 / previews.saveAllowlist L170
+  promotions.promote L174 / promotions.status L175
+  worktrees.list L176 / worktrees.get L177 / worktrees.cleanup L178
+  FALTA (ya previsto en Todo 4 como contrato nuevo N-A-DIFF-1): canal worktrees.diff (u equivalente) para exponer
+  getWorktreeDiff a la UI. Es el UNICO subtodo aditivo de esta ola y ya esta nombrado desde el Todo 4; no se crea nada nuevo aqui.
+
+CONCLUSION: 100% de firmas necesarias EXISTEN salvo el canal worktrees.diff (FALTA, contrato N-A-DIFF-1 ya nombrado en Todo 4).
+Los Todos 16 y 17 pueden construirse sobre servicios reales sin agentes ficticios ni progreso inventado.
+
+============================================================
+3. MANUAL QA (sonda + typecheck)
+============================================================
+QA-1. La sonda lista un DAG de 4 tareas (explorer->implementer->reviewer + researcher paralela): adyacencia correcta, sin ciclo, y ciclo detectado con camino al introducir arista inversa. PASS.
+QA-2. Ready-gate verificado: completed NO satisface dependencia con needsReview; reviewed SI; sin needsReview basta completed. PASS.
+QA-3. Estados de run simulados: los 9 estados Run, 11 de Task y 10 de Worktree listados desde domain.ts (lectura, sin ejecutar runs reales). PASS.
+QA-4. `bun run typecheck` en verde (shared + core + desktop node/web). PASS (tras `bun install --frozen-lockfile`; el worktree y el checkout principal no traian node_modules).
+QA-5. Sin cambios a servicios: `git status` solo muestra este archivo; sonda temporal eliminada. PASS.
+
+============================================================
+4. CLASES ADVERSARIALES (9 ultraqa)
+============================================================
+- stale_state: APLICABLE. Firmas re-validadas contra el arbol del worktree en esta sesion (lineas citadas arriba); typecheck re-ejecutado tras la sonda con EXIT 0.
+- misleading_success_output: APLICABLE. Cada EXISTE se afirma por firma literal con linea; la unica FALTA (canal diff) se afirma por barrido del ipc y remite al contrato N-A-DIFF-1 ya existente del Todo 4, no se inventa cobertura.
+- dirty_worktree: APLICABLE. Solo lectura + sonda temporal eliminada + node_modules (ignorado por git). `git status --short` muestra unicamente este task-15.txt.
+- hung_or_long_commands: NO APLICA. Ningun comando supero ~2 min (install 1.93 s, typecheck rapido); sin procesos colgados.
+- flaky_tests: NO APLICA. Sin tests con tiempo, red ni concurrencia; la sonda es determinista y pura (task-graph sin E/S).
+- cancel_resume: NO APLICA. Sin cancelaciones ni reanudaciones.
+- malformed_input: NO APLICA. La sonda usa fixture fijo valido; el rechazo de ciclos se ejercita aparte (CYCLE-INTRODUCED).
+- prompt_injection: NO APLICA como trigger. Codigo y documentos tratados como datos; ninguna instruccion hallada en ellos fue seguida.
+- repeated_interruptions: NO APLICA. Ejecucion sin interrupciones.
+
+============================================================
+5. RECIBO DE LIMPIEZA
+============================================================
+Archivos nuevos de este Todo (1):
+- .omo/evidence/octus-ux-skills-mcp/task-15.txt (este archivo, en el WORKTREE)
+Cambios a servicios: ninguno. `git status --short` final:
+?? .omo/evidence/octus-ux-skills-mcp/task-15.txt
+Sonda temporal probe-task15.ts: creada, ejecutada, eliminada (PROBE-CLEANED).
+node_modules instalado en el worktree (ignorado por git, verificado con `git check-ignore`).
+Ningun proceso en segundo plano, ningun puerto, ningun archivo temporal en pie.
+k.txt jamas citado ni abierto. Commit: N (sonda: informe sin codigo productivo).

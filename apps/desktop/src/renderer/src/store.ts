@@ -6,6 +6,7 @@ export * from "./store/plans.js";
 export * from "./store/settings.js";
 export * from "./store/welcome.js";
 export * from "./store/tasks.js";
+export * from "./store/runs.js";
 export * from "./store/worktrees.js";
 export * from "./store/integrations.js";
 export * from "./store/memory.js";
