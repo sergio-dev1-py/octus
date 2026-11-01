@@ -1,0 +1,104 @@
+Todo 6 — Tokens, temas, densidades y persistencia de preferencias · evidencia de verificación
+Fecha: 2026-11-01 · Rama: feat/ux-skills-mcp-w8-foundations
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w8
+
+TODO 6 LEÍDO COMPLETO ANTES DE EMPEZAR (criterios, referencias y QA vinculantes).
+Contrato aplicado: C-01 del Todo 5 (canales IPC prefs.get/prefs.set, kv ui.prefs.v1,
+corrupta → defecto sin romper arranque). Sistema visual aplicado: Todo 3
+(design/tokens.css, components.css, README.md leídos primero).
+
+PASO PREVIO (antes de editar)
+- Suite relevante en VERDE antes de editar:
+  `bun run --cwd packages/shared test` → 1 pass / 0 fail (exit 0)
+  `bun test packages/core/test/persistence.test.ts` → 4 pass / 0 fail (exit 0)
+- HALLAZGO (contradicción con el plan, se reporta, no se edita para que pase):
+  `bun run test` en raíz NO está en verde en esta máquina: el worktree llegó sin
+  node_modules (fallo ambiental, se resolvió con `bun install`) y, con deps
+  instaladas, la suite completa de core no termina aquí (i3-2328M): el test J4 de
+  workbase supera su timeout de 30s y el scheduler alarga la corrida más allá de
+  la ventana. Preexistente y ambiental; fuera del alcance del Todo 6. Ningún
+  archivo de core existente fue modificado para ocultarlo.
+
+AUDITORÍA (App.tsx, store.ts, styles.css contra Todo 3)
+- styles.css tenía su propio :root con 9 variables y ~30 literales (hex, px de
+  fuente/espaciado) duplicando tokens → reescrito sobre var(--oc-*).
+- store.ts y App.tsx: cero rastro de prefs/temas/densidades → añadidos.
+- No se cambió comportamiento ni APIs de eventos: clases y canales existentes
+  intactos; solo aditivo (id="workbench", clase message-timeline, sección
+  Appearance, canales prefs.*, estado prefs).
+
+ENTREGABLES (12 archivos, y solo estos)
+- packages/shared/src/prefs.ts (NUEVO): UiTheme/UiDensity/UiPrefs, UI_PREFS_KEY,
+  DEFAULT_UI_PREFS, isUi*/parseUiPrefs/parseStoredUiPrefs.
+- packages/shared/src/index.ts: exporta ./prefs.js.
+- packages/shared/src/ipc.ts: canales "prefs.get" / "prefs.set" (contrato C-01).
+- packages/shared/test/prefs.test.ts (NUEVO): 6 tests (clave, defecto, ejes
+  válidos, rechazos, ida y vuelta, corrupción → defecto por campo).
+- packages/core/test/ui-prefs.test.ts (NUEVO): 2 tests con PersistenceService
+  real (round-trip con close+reopen; corrupción → defecto).
+- apps/desktop/src/main/index.ts: CHANNELS + handlers (get: kv con
+  parseStoredUiPrefs; set: isUiPrefs estricto o throw + upsert kv).
+- apps/desktop/src/renderer/src/prefs.ts (NUEVO): apply/load/saveUiPrefs.
+- apps/desktop/src/renderer/src/store.ts: estado prefs, setUiPrefs, carga en initStore.
+- apps/desktop/src/renderer/src/App.tsx: AppearanceSettings (#prefs-theme,
+  #prefs-density, #prefs-font-size con 12..18), id="workbench", message-timeline.
+- apps/desktop/src/renderer/src/styles.css: @import tokens; alias legacy
+  --bg/--panel/... → var(--oc-*); cero hex, cero font-size px, espaciado/radio
+  solo var(--oc-*). Literales estructurales conservados a propósito (260px
+  sidebar, 100vh, min-width 420px, z-index): restricciones de layout, no valores
+  de diseño; sin fragmentar en exceso.
+- scripts/probe-task-6.mjs (NUEVO): sonda estilo computado, 32 aserciones.
+- scripts/qa-task-6-manual.mjs (NUEVO): smoke equivalente manual-QA, 33 checks.
+
+COMANDOS EJECUTADOS (todos reales, con exit code observado)
+1) `bun test packages/shared/test/prefs.test.ts` → 6 pass / 0 fail, exit 0 (×2 pasadas)
+2) `bun test packages/core/test/ui-prefs.test.ts` → 2 pass / 0 fail, exit 0 (×2 pasadas)
+3) `node scripts/probe-task-6.mjs` → SONDA OK, 32 PASS / 0 FAIL, exit 0 (×2 pasadas)
+   (una pasada intermedia falló 31/32 por aserción de la sonda sobre .app sin
+   fondo propio; se fijó `background: var(--bg)` en .app y se re-ejecutó: verde.
+   Los CSS entregados ya resolvían bien vía body.)
+4) `node scripts/qa-task-6-manual.mjs` → 33 PASS / 0 FAIL → PASS, exit 0
+   (dos intentos previos FAIL por bug del script —no resolvía el alias --bg ni
+   el @import al parsear—; se corrigió el script, no el producto, y dio verde.
+   Detalle: 27 combos render light/dark/system × compact/normal/comfortable ×
+   12/14/18 con bg/gap/pad/font concretos, p. ej. dark/compact/12 =
+   #1b1a17/4px/8px/12px, system+oscuro/comfortable/18 = #1b1a17/12px/16px/18px.)
+5) `bun test packages/core/test/persistence.test.ts` → 4 pass / 0 fail, exit 0
+   `bun run --cwd packages/shared test` → 7 pass / 0 fail, exit 0
+6) Typechecks exit 0: shared, core, desktop (node + web).
+   (core typecheck falló una vez por inferencia `{theme: string}` en el test
+   nuevo; se anotó `UiPrefs` y quedó verde.)
+7) `git grep -i k.txt` sobre los 12 entregables → exit 1 (cero citas). Las 2
+   citas del repo están en tests preexistentes (path-scope, test-runner), no tocados.
+
+CHECKLIST QA DEL PLAN
+- happy `bun test` ida y vuelta (tema+tamaño+densidad, reinicio, afirmar): SÍ
+- failure corrupción → defecto sin romper arranque: SÍ (unit + kv real)
+- sonda estilo computado con variables aplicadas: SÍ (32/32)
+
+MANUAL-QA: smoke equivalente sobre layout real con selectores fijos
+(#workbench, .message-timeline, #composer, #prefs-*) → PASS (33/33).
+Sin display en esta máquina no hay render Electron; el smoke resuelve la cascada
+real (tokens.css + styles.css + App.tsx) por combo. Ver scripts/qa-task-6-manual.mjs.
+
+CLASES ADVERSARIALES
+- stale_state (aplicable): suite re-ejecutada tras cada edición (tests ×2,
+  sonda ×3 incl. re-verificación final, typechecks ×2 tras el último cambio).
+  Resultado observable: todo verde en la pasada final.
+- misleading_success_output (aplicable): solo exit codes observados; cada
+  comando vuelca su conteo (6/2/32/33 PASS). Los FAIL intermedios fueron de los
+  scripts nuevos, nunca del producto, y se registraron arriba.
+- dirty_worktree (aplicable): `git status --porcelain` final muestra solo los
+  12 entregables (6 modificados + 6 nuevos). node_modules/ ignorado por git.
+- flaky_tests (aplicable): persistencia repetida 2 veces (pasadas 1 y 2 OK:
+  216ms/248ms y 212ms/257ms, sin dispersión anómala).
+- cancel_resume (no aplicable): sin reinicio simulado de sesión; el reinicio
+  cubierto es close+reopen de SQLite dentro de los tests.
+- Resto no-aplicable en una línea: sin red ni credenciales (diseno local,
+  cero secretos en código/evidencia); sin relojes en tests (cascada síncrona);
+  sin inyección (entradas solo del árbol vivo y del plan); sin deriva de
+  esquema (se reutiliza tabla kv existente, sin migración).
+
+LIMPIEZA: sin procesos, puertos ni temporales (tests usan mkdtempSync con
+rmSync; `git status` sin restos). node_modules del worktree es setup ambiental
+ignorado por git, no entregable.

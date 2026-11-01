@@ -1,0 +1,270 @@
+/* Componentes compartidos del workbench (Todo 7, produccion).
+   Unica fuente de valores: ../design/tokens.css. Solo var(--oc-*): ningun
+   color, tamano de fuente ni espaciado literal. Los px estructurales
+   (bordes de 1px, anchos min/max, z-index) no son valores de diseno. */
+
+.oc-btn {
+  font: inherit;
+  font-size: var(--oc-font-base);
+  line-height: var(--oc-line-base);
+  padding: var(--oc-space-2) var(--oc-space-4);
+  border: 1px solid var(--oc-border-strong);
+  border-radius: var(--oc-radius-md);
+  background: var(--oc-panel);
+  color: var(--oc-text);
+  cursor: pointer;
+}
+
+.oc-btn--primary {
+  background: var(--oc-accent);
+  border-color: var(--oc-accent);
+  color: var(--oc-accent-ink);
+}
+
+.oc-btn--secondary {
+  background: var(--oc-panel);
+  border-color: var(--oc-border-strong);
+  color: var(--oc-text);
+}
+
+.oc-btn--danger {
+  background: var(--oc-panel);
+  border-color: var(--oc-danger);
+  color: var(--oc-danger);
+}
+
+.oc-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--oc-text-muted);
+}
+
+.oc-btn:disabled,
+.oc-menu__item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.oc-btn:focus-visible,
+.oc-menu__item:focus-visible {
+  outline: 2px solid var(--oc-accent);
+  outline-offset: 2px;
+}
+
+/* --- dialogo --- */
+
+.oc-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--oc-space-5);
+  background: var(--oc-panel-sunken);
+}
+
+.oc-dialog {
+  background: var(--oc-panel);
+  color: var(--oc-text);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-lg);
+  box-shadow: var(--oc-shadow-dialog);
+  padding: var(--oc-space-5);
+  min-width: 320px;
+  max-width: 640px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.oc-dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-gap);
+  margin-bottom: var(--oc-space-3);
+}
+
+.oc-dialog__title {
+  font-size: var(--oc-text-lg);
+  line-height: var(--oc-line-tight);
+  margin: 0;
+}
+
+.oc-dialog__body {
+  font-size: var(--oc-text-sm);
+  color: var(--oc-text);
+}
+
+.oc-dialog__actions {
+  display: flex;
+  gap: var(--oc-gap);
+  justify-content: flex-end;
+  margin-top: var(--oc-space-4);
+}
+
+/* --- menu --- */
+
+.oc-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.oc-menu__list {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 0;
+  margin-top: var(--oc-space-2);
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--oc-space-2);
+  gap: var(--oc-space-1);
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-md);
+  box-shadow: var(--oc-shadow-raised);
+}
+
+.oc-menu__item {
+  font: inherit;
+  font-size: var(--oc-text-sm);
+  text-align: left;
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border: 0;
+  border-radius: var(--oc-radius-sm);
+  background: transparent;
+  color: var(--oc-text);
+  cursor: pointer;
+}
+
+.oc-menu__item:hover:not(:disabled) {
+  background: var(--oc-accent-wash);
+}
+
+/* --- iconografia monocromatica --- */
+
+.oc-icon {
+  width: var(--oc-space-5);
+  height: var(--oc-space-5);
+  stroke: currentcolor;
+  fill: none;
+  stroke-width: 1.5;
+  flex-shrink: 0;
+  vertical-align: text-bottom;
+}
+
+/* --- tabla --- */
+
+.oc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--oc-text-sm);
+}
+
+.oc-table__caption {
+  text-align: left;
+  font-size: var(--oc-text-xs);
+  text-transform: uppercase;
+  color: var(--oc-text-muted);
+  padding-bottom: var(--oc-space-2);
+}
+
+.oc-table th {
+  text-align: left;
+  font-size: var(--oc-text-xs);
+  text-transform: uppercase;
+  color: var(--oc-text-muted);
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border-bottom: 1px solid var(--oc-border-strong);
+  background: var(--oc-panel-sunken);
+}
+
+.oc-table td {
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border-bottom: 1px solid var(--oc-border);
+  color: var(--oc-text);
+}
+
+/* --- estado vacio (funcional, no decorativo) --- */
+
+.oc-empty {
+  text-align: center;
+  padding: var(--oc-space-6) var(--oc-pad);
+  border: 1px dashed var(--oc-border-strong);
+  border-radius: var(--oc-radius-lg);
+  background: var(--oc-panel);
+}
+
+.oc-empty__title {
+  font-size: var(--oc-text-sm);
+  color: var(--oc-text);
+  margin: 0 0 var(--oc-space-2);
+}
+
+.oc-empty__hint {
+  font-size: var(--oc-text-xs);
+  color: var(--oc-text-muted);
+  margin: 0 0 var(--oc-space-3);
+}
+
+/* --- estado de error (semantico reservado) --- */
+
+.oc-error {
+  display: flex;
+  align-items: center;
+  gap: var(--oc-gap);
+  padding: var(--oc-space-3) var(--oc-pad);
+  border: 1px solid var(--oc-danger);
+  border-radius: var(--oc-radius-md);
+  background: var(--oc-danger-wash);
+  color: var(--oc-text);
+  font-size: var(--oc-text-sm);
+}
+
+.oc-error .oc-icon {
+  color: var(--oc-danger);
+}
+
+.oc-error__message {
+  flex: 1;
+  margin: 0;
+}
+
+/* --- catalogo de verificacion (layout de la pagina QA, no componente) --- */
+
+.oc-catalog {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--oc-space-6) var(--oc-pad);
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-space-5);
+  background: var(--oc-bg);
+  color: var(--oc-text);
+}
+
+.oc-catalog__section {
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-lg);
+  padding: var(--oc-message-pad);
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-gap);
+}
+
+.oc-catalog__section > h2 {
+  font-size: var(--oc-text-xs);
+  text-transform: uppercase;
+  color: var(--oc-text-muted);
+  margin: 0;
+}
+
+.oc-catalog__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--oc-gap);
+  align-items: center;
+}

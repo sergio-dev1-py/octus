@@ -1,0 +1,127 @@
+Todo 7 — Componentes compartidos del workbench · evidencia de verificación
+Fecha: 2026-11-01 · Rama: feat/ux-skills-mcp-w8-foundations
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w8 (commit base 42fc929)
+
+TODO 7 LEÍDO COMPLETO ANTES DE EMPEZAR (criterios, referencias y QA vinculantes).
+Sistema aplicado: Todo 3 (design/tokens.css, components.css, README.md) y Todo 6
+(styles.css con var(--oc-*), prefs.ts, contrato C-01). Sin tarjetas decorativas,
+sin emojis, SolidJS con reactividad, sin cambios de comportamiento ni APIs.
+
+PASO PREVIO (antes de editar)
+- Tests que cubren la conducta tocada, en VERDE antes de editar:
+  `bun test packages/shared/test/prefs.test.ts packages/core/test/ui-prefs.test.ts`
+  → 8 pass / 0 fail (exit 0), repetido tras el trabajo: 8/0 (exit 0).
+  `bun run typecheck` en apps/desktop → exit 0 antes y después (×2).
+- HALLAZGO (colisión de worktree, se reporta, no se edita para ocultarlo):
+  el ejecutor del Todo 8 trabaja en el MISMO worktree/rama con cambios sin
+  commitear (App.tsx +443/-18 aprox, styles.css, store.ts, main, shared/layout,
+  tests ui-layout, verify-task-8-layout.mjs). Mis lecturas iniciales de App.tsx
+  vieron la versión del Todo 6; el árbol cambió a mitad del turno. Mis ediciones
+  en App.tsx/styles.css son 6 líneas aditivas aisladas (ver §ENTREGABLES);
+  quedan en el working tree SIN commitear para no absorber su diff a medias
+  (los hunks se mezclan; ver `git diff`). El padre decide la atribución.
+- `bun run test` en raíz: preexistente NO verde en esta máquina (i3-2328M): el
+  test J4 de workbase supera su timeout de 30s (visto en el turno del Todo 6 y
+  re-confirmado al inicio de este turno). Ajeno al renderer; no se toca.
+
+AUDITORÍA (diseño real encontrado)
+- design/components.css del Todo 3 era prototipo (sin menú, sin estados de
+  error, backdrop opaco, min-width sin sentido) → producción nueva en
+  components/oc-components.css con el mismo vocabulario .oc-*.
+- styles.css ya estaba sobre var(--oc-*) (Todo 6 + Todo 8 en curso) → solo se
+  añade el @import del CSS de componentes (línea 7, tras tokens).
+- App.tsx monolítico con workbench del Todo 8 → el catálogo entra por ruta
+  aditiva ?catalog=1 con fallback al árbol existente (cero cambios por defecto).
+
+ENTREGABLES (archivos míos; los 2 compartidos quedan en working tree, §HALLAZGO)
+- apps/desktop/src/renderer/src/components/oc.tsx (NUEVO): OcButton
+  (primary/secondary/danger/ghost), OcDialog (role=dialog, aria-modal, cierra
+  por X, backdrop y acciones), OcMenu (aria-haspopup/expanded, roles
+  menu/menuitem, items deshabilitados, estado con createSignal), OcIcon (8
+  glifos SVG stroke=currentColor fill=none, sin emojis), OcTable (caption,
+  th scope=col, data-oc-row, fallback a vacío), OcEmpty (data-oc-empty),
+  OcErrorState (role=alert, data-oc-error). SSR-seguro (sin document/window).
+- apps/desktop/src/renderer/src/components/oc-components.css (NUEVO): solo
+  var(--oc-*); px solo estructurales (bordes 1px, min/max-width, z-index).
+- apps/desktop/src/renderer/src/components/catalog.tsx (NUEVO): CatalogView
+  con cada variante y 25 selectores fijos (#oc-catalog, #oc-btn-*×5,
+  #oc-dialog + acciones + reapertura, #oc-menu + #oc-menu-open con items
+  habilitado/deshabilitado, #oc-icons ×8, #oc-table 2 filas + #oc-table-empty,
+  #oc-empty + acción, #oc-error + reintento). Diálogo cerrable/reabrible y
+  confirmación registrada para probar reactividad real.
+- apps/desktop/src/renderer/src/styles.css (working tree): +1 línea @import.
+- apps/desktop/src/renderer/src/App.tsx (working tree): import CatalogView +
+  gate ?catalog=1 con fallback (5 líneas); sin cambios por defecto.
+- scripts/probe-task-7.mjs (NUEVO): sonda estática + caso failure ejecutado.
+- scripts/task-7-catalog.entry.tsx (NUEVO): entrada solo-QA (vite la compila;
+  nadie la importa en producto).
+- scripts/qa-task-7.mjs (NUEVO): build vite real + Chromium headless por CDP
+  (Node puro, sin deps nuevas) + 28 aserciones × 2 pasadas + screenshot.
+
+COMANDOS EJECUTADOS (todos reales, con exit code observado)
+1) `bun test packages/shared/test/prefs.test.ts packages/core/test/ui-prefs.test.ts`
+   → 8 pass / 0 fail, exit 0 (pre-edición y post-trabajo).
+2) `bun run typecheck` (apps/desktop) → exit 0 (×2: tras cablear App y tras el
+   último cambio en oc.tsx).
+3) `node scripts/probe-task-7.mjs` → 78 PASS / 0 FAIL, exit 0.
+   Intermedios (sonda, no producto): 62/4 y 77/1 por regex de la sonda sobre
+   IDs derivados por plantilla y clave con guion; se corrigió la sonda y dio
+   verde. El producto no cambió por esos FAIL.
+4) `node scripts/qa-task-7.mjs` → 56 PASS / 0 FAIL (28 × 2 pasadas), exit 0.
+   Primera ejecución: 56/56 checks verdes pero EPERM al borrar el perfil de
+   Chromium en Windows (proceso liberando handles); se fijó la limpieza del
+   script (taskkill + reintentos) y la re-ejecución completa dio verde CON
+   limpieza. Incluye: build vite con vite-plugin-solid del entry real,
+   servidor HTTP local, Chromium 1140 headless por CDP, 5 botones + deshabilitado,
+   diálogo (roles, cerrar, reabrir, confirmar→"confirmed"), menú (cerrado sin
+   items en DOM, click lo abre), 8 iconos monocromáticos (stroke=currentColor,
+   fill=none), tabla 2 filas + vacía, empty, error role=alert, computados
+   (primario rgb(31,95,168)=#1f5fa8, error rgb(251,231,228), fondo
+   rgb(246,245,242), th uppercase), tema oscuro conmutado (secundario
+   rgb(38,37,32), fondo rgb(27,26,23)=#1b1a17) y restauración a claro.
+   Screenshot: .omo/evidence/octus-ux-skills-mcp/task-7-catalog.png (mirado:
+   botones, menús desplegados, iconos, tabla coherentes, sin jank).
+5) `git grep -i k.txt` restringido a entregables → sin citas (no se abrió ni
+   citó el archivo prohibido; cero secretos en código/evidencia).
+
+CHECKLIST QA DEL PLAN
+- happy (catálogo renderizado con cada variante, prueba por script en verde):
+  SÍ — 56/0 en Chromium real sobre el bundle vite del catálogo.
+- failure (componente fuera de tokens se detecta y se rechaza): SÍ, EJECUTADO
+  — la sonda genera bad.css (hex, rgb(), font-px, padding-px) y bad.tsx
+  (emoji, hex, document.) en tmp y afirma rechazo 4 clases + 3 clases,
+  exit observado; tmp borrado.
+
+MANUAL-QA: superficie real (Chromium headless sobre bundle del catálogo,
+selectores fijos, binario PASS/FAIL por check): 28/28 PASS × 2 pasadas =
+56/0 → PASS. Sin display en esta máquina no hay render Electron; el bundle es
+el código real de componentes + tokens compilado con el toolchain del repo.
+Interacciones reales (clicks DOM, conmutación de tema) ejecutadas, no simuladas.
+
+CLASES ADVERSARIALES
+- stale_state (aplicable): prefs 8/0 pre y post, typecheck ×2 (antes/después
+  del último cambio), probe ×3 hasta verde final, QA ×2 pasadas completas.
+- misleading_success_output (aplicable): solo exit codes observados; cada
+  comando vuelca conteos (8, 78, 56). Los FAIL intermedios fueron de la sonda
+  nueva, nunca del producto, y constan arriba.
+- dirty_worktree (aplicable): `git status --porcelain` final muestra SOLO mis
+  9 archivos (3 componentes nuevos + 3 scripts + evidencia txt+png) MÁS mis 2
+  ediciones aditivas en App.tsx/styles.css (sin commitear por §HALLAZGO) MÁS
+  los archivos del Todo 8 (ajenos, intactos por mí). node_modules/ ignorado.
+- flaky_tests (aplicable): render repetido 2× (p1 y p2 idénticos 28/28, sin
+  dispersión); interacciones por poll con deadline, sin sleeps fijos.
+- cancel_resume (no aplicable): sin reinicio de sesión en este todo.
+- Resto no-aplicable en una línea: sin red ni credenciales (Chromium por
+  transporte local/CDP, cero secretos); sin relojes en tests (poll por estado
+  con deadline, no sleeps); sin inyección (entradas solo del árbol vivo);
+  sin deriva de esquema (sin persistencia nueva).
+
+LIMPIEZA (recibo)
+- `scripts/.task7-dist/` (bundle QA) borrado; `scripts/.task7-profile/`
+  (perfil Chromium) borrado con taskkill+reintentos; `scripts/.task7-shot.png`
+  movido a evidencia como task-7-catalog.png; `scripts/.pw-install.log`
+  borrado. `git status --porcelain` sin restos temporales.
+- Procesos: Chromium QA terminado (taskkill /T /F + espera de exit observada);
+  `tasklist /FI "IMAGENAME eq chrome.exe"` sin procesos del perfil QA.
+- Binario Chromium 1140 queda en %LOCALAPPDATA%/ms-playwright (caché de QA
+  fuera del repo, no entregable; reutilizable por olas 8–15).
