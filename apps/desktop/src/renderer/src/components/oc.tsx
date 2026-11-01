@@ -1,0 +1,265 @@
+/** Componentes compartidos del workbench (Todo 7): botones, dialogo, menu,
+    iconografia monocromatica, tabla y estados vacios y de error.
+    Solo clases `oc-*` de components/oc-components.css, que a su vez solo usa
+    var(--oc-*) del Todo 6. Sin tarjetas decorativas, sin emojis, sin valores
+    literales de diseno. SolidJS puro y SSR-seguro (sin document/window). */
+import { For, Show, createSignal, type JSX } from "solid-js";
+
+/* --- botones --- */
+
+export type OcButtonVariant = "primary" | "secondary" | "danger" | "ghost";
+
+export interface OcButtonProps {
+  id?: string;
+  variant?: OcButtonVariant;
+  disabled?: boolean;
+  title?: string;
+  onClick?: () => void;
+  children: JSX.Element;
+}
+
+export function OcButton(props: OcButtonProps) {
+  const variant = () => props.variant ?? "secondary";
+  return (
+    <button
+      id={props.id}
+      type="button"
+      title={props.title}
+      disabled={props.disabled}
+      onClick={() => props.onClick?.()}
+      class={`oc-btn oc-btn--${variant()}`}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+/* --- dialogo --- */
+
+export interface OcDialogProps {
+  id: string;
+  title: string;
+  open: boolean;
+  onClose?: () => void;
+  actions?: JSX.Element;
+  children: JSX.Element;
+}
+
+export function OcDialog(props: OcDialogProps) {
+  return (
+    <Show when={props.open}>
+      <div
+        class="oc-dialog-backdrop"
+        data-oc-dialog-backdrop
+        onClick={(event) => {
+          if (event.target === event.currentTarget) props.onClose?.();
+        }}
+      >
+        <div id={props.id} class="oc-dialog" role="dialog" aria-modal="true" aria-label={props.title}>
+          <div class="oc-dialog__head">
+            <h2 class="oc-dialog__title">{props.title}</h2>
+            <button
+              id={`${props.id}-close`}
+              type="button"
+              class="oc-btn oc-btn--ghost"
+              aria-label="Close dialog"
+              onClick={() => props.onClose?.()}
+            >
+              ×
+            </button>
+          </div>
+          <div class="oc-dialog__body">{props.children}</div>
+          <Show when={props.actions}>
+            <div class="oc-dialog__actions">{props.actions}</div>
+          </Show>
+        </div>
+      </div>
+    </Show>
+  );
+}
+
+/* --- menu --- */
+
+export interface OcMenuItem {
+  id: string;
+  label: string;
+  disabled?: boolean;
+  onSelect?: () => void;
+}
+
+export interface OcMenuProps {
+  id: string;
+  label: string;
+  items: OcMenuItem[];
+  defaultOpen?: boolean;
+}
+
+export function OcMenu(props: OcMenuProps) {
+  const [open, setOpen] = createSignal(props.defaultOpen ?? false);
+  return (
+    <div class="oc-menu" id={props.id}>
+      <button
+        id={`${props.id}-trigger`}
+        type="button"
+        class="oc-btn oc-btn--secondary"
+        aria-haspopup="menu"
+        aria-expanded={open() ? "true" : "false"}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span>{props.label}</span> <OcIcon name="chevron-down" />
+      </button>
+      <Show when={open()}>
+        <div class="oc-menu__list" role="menu" aria-label={props.label}>
+          <For each={props.items}>
+            {(item) => (
+              <button
+                id={item.id}
+                type="button"
+                role="menuitem"
+                class="oc-menu__item"
+                disabled={item.disabled}
+                onClick={() => {
+                  item.onSelect?.();
+                  setOpen(false);
+                }}
+              >
+                {item.label}
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+/* --- iconografia monocromatica (trazo currentColor, sin rellenos) --- */
+
+export type OcIconName = "check" | "x" | "warn" | "info" | "chevron-down" | "plus" | "search" | "folder";
+
+const OC_ICON_PATHS: Record<OcIconName, string> = {
+  check: "M3 8.5l3.5 3.5L13 4.5",
+  x: "M4 4l8 8M12 4l-8 8",
+  warn: "M8 2.5L14.5 13.5h-13L8 2.5z",
+  info: "M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11z",
+  "chevron-down": "M4 6l4 4 4-4",
+  plus: "M8 3v10M3 8h10",
+  search: "M7 2.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9zM10.5 10.5L14 14",
+  folder: "M1.5 4.5c0-.8.7-1.5 1.5-1.5h3l1.5 2H13c.8 0 1.5.7 1.5 1.5v4c0 .8-.7 1.5-1.5 1.5H3c-.8 0-1.5-.7-1.5-1.5v-6z",
+};
+
+const OC_ICON_NAMES: OcIconName[] = ["check", "x", "warn", "info", "chevron-down", "plus", "search", "folder"];
+
+export function ocIconNames(): OcIconName[] {
+  return [...OC_ICON_NAMES];
+}
+
+export function OcIcon(props: { name: OcIconName; label?: string }) {
+  return (
+    <svg
+      class="oc-icon"
+      data-icon={props.name}
+      viewBox="0 0 16 16"
+      stroke="currentColor"
+      fill="none"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      role={props.label ? "img" : undefined}
+      aria-label={props.label}
+      aria-hidden={props.label ? undefined : "true"}
+    >
+      <path d={OC_ICON_PATHS[props.name]} />
+    </svg>
+  );
+}
+
+/* --- tabla --- */
+
+export interface OcTableColumn {
+  key: string;
+  label: string;
+}
+
+export interface OcTableProps {
+  id: string;
+  caption: string;
+  columns: OcTableColumn[];
+  rows: Record<string, string>[];
+  emptyTitle?: string;
+  emptyHint?: string;
+}
+
+export function OcTable(props: OcTableProps) {
+  return (
+    <Show
+      when={props.rows.length > 0}
+      fallback={<OcEmpty id={`${props.id}-empty`} title={props.emptyTitle ?? "No rows"} hint={props.emptyHint} />}
+    >
+      <table class="oc-table" id={props.id}>
+        <caption class="oc-table__caption">{props.caption}</caption>
+        <thead>
+          <tr>
+            <For each={props.columns}>{(col) => <th scope="col">{col.label}</th>}</For>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={props.rows}>
+            {(row) => (
+              <tr data-oc-row>
+                <For each={props.columns}>{(col) => <td>{row[col.key] ?? ""}</td>}</For>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+    </Show>
+  );
+}
+
+/* --- estado vacio --- */
+
+export interface OcEmptyProps {
+  id?: string;
+  title: string;
+  hint?: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}
+
+export function OcEmpty(props: OcEmptyProps) {
+  return (
+    <div class="oc-empty" data-oc-empty id={props.id}>
+      <p class="oc-empty__title">{props.title}</p>
+      <Show when={props.hint}>
+        <p class="oc-empty__hint">{props.hint}</p>
+      </Show>
+      <Show when={props.actionLabel}>
+        <OcButton id={props.id ? `${props.id}-action` : undefined} variant="secondary" onClick={() => props.onAction?.()}>
+          {props.actionLabel}
+        </OcButton>
+      </Show>
+    </div>
+  );
+}
+
+/* --- estado de error --- */
+
+export interface OcErrorProps {
+  id?: string;
+  message: string;
+  retryLabel?: string;
+  onRetry?: () => void;
+}
+
+export function OcErrorState(props: OcErrorProps) {
+  return (
+    <div class="oc-error" role="alert" data-oc-error id={props.id}>
+      <OcIcon name="warn" label="Error" />
+      <p class="oc-error__message">{props.message}</p>
+      <OcButton id={props.id ? `${props.id}-retry` : undefined} variant="primary" onClick={() => props.onRetry?.()}>
+        {props.retryLabel ?? "Retry"}
+      </OcButton>
+    </div>
+  );
+}
