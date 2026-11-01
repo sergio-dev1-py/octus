@@ -437,6 +437,18 @@ export class OctusCore {
   }
 
   async sessionMessages(sessionId: string, runId?: string): Promise<Message[]> {
+    const page = await this.sessionMessagesPage(sessionId, runId);
+    return page.messages;
+  }
+
+  /** Paginación aditiva del historial (N-C-06, Todo 13): ventana por cursor
+      estable sobre el mismo orden (runs por creación, mensajes por seq).
+      Sin limit devuelve todo (comportamiento legacy intacto). */
+  async sessionMessagesPage(
+    sessionId: string,
+    runId?: string,
+    opts?: { limit?: number; beforeId?: string },
+  ): Promise<{ messages: Message[]; total: number; hasOlder: boolean }> {
     await this.requireSession(sessionId);
     const rows = runId
       ? await this.db.query<Record<string, string | number | null>>(
@@ -447,7 +459,13 @@ export class OctusCore {
         "SELECT m.* FROM messages m JOIN runs r ON r.id = m.run_id WHERE m.session_id = ? ORDER BY r.created_at ASC, m.seq ASC",
         [sessionId],
       );
-    return rows.map(deserializeMessage);
+    const all = rows.map(deserializeMessage);
+    const limit = opts?.limit;
+    if (limit === undefined || !(limit >= 1)) return { messages: all, total: all.length, hasOlder: false };
+    const end = opts?.beforeId ? Math.max(0, all.findIndex((m) => m.id === opts.beforeId)) : all.length;
+    const cursor = opts?.beforeId && end === 0 && all.every((m) => m.id !== opts.beforeId) ? all.length : end;
+    const start = Math.max(0, cursor - Math.floor(limit));
+    return { messages: all.slice(start, cursor), total: all.length, hasOlder: start > 0 };
   }
 
   /**

@@ -7,3 +7,4 @@ export * from "./costs.js";
 export * from "./prefs.js";
 export * from "./layout.js";
 export * from "./ipc.js";
+export * from "./conversation-widgets.js";

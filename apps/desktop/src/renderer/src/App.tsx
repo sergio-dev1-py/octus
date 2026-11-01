@@ -1,10 +1,19 @@
 /** Renderer — vistas de la Etapa 1: sesiones, chat, permisos, preguntas y ajustes. */
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import type { ActivityId, BottomTab, Message, MessagePart, Project, Session } from "@octus/shared";
-import { layoutStyles, resizeBottomBy, resizeInspectorBy, resizeSidebarBy } from "@octus/shared";
+import { layoutStyles, messageRenderItems, resizeBottomBy, resizeInspectorBy, resizeSidebarBy } from "@octus/shared";
 import { invoke } from "./api.js";
 import { renderMarkdown } from "./markdown.js";
 import CatalogView from "./components/catalog.jsx";
+import {
+  ModifiedFilesSection,
+  RunErrorsSection,
+  ToolCallCard,
+  orderedApprovals,
+  questionTimeoutLabel,
+  replyToQuestion,
+  revisionGate,
+} from "./toolcall-widgets.jsx";
 import {
   abortConflict,
   abortIntegration,
@@ -68,6 +77,12 @@ import {
   setError,
   setLayoutActivity,
   setLayoutBottomTab,
+  addAttachments,
+  dismissCancelNotice,
+  loadModels,
+  loadOlderMessages,
+  removeAttachment,
+  setSessionModel,
   setUiPrefs,
   setProfile,
   setView,
@@ -77,6 +92,7 @@ import {
   startPreview,
   state,
   stopPreview,
+  type LiveMessage,
   toggleBottomPanel,
   toggleInspectorPanel,
   toggleSidebarPanel,
@@ -113,14 +129,22 @@ function PartView(props: { part: MessagePart }) {
 function MessageView(props: { message: Message }) {
   const message = () => props.message;
   return (
-    <div class={`message ${message().role}`}>
+    <div class={`message ${message().role}`} data-message-id={message().id}>
       <div class="role">
         {message().role}
         <Show when={message().mode}>
           <span class={`pill mode ${message().mode}`}>[{message().mode}]</span>
         </Show>
       </div>
-      <For each={message().parts}>{(part) => <PartView part={part} />}</For>
+      <For each={messageRenderItems(message().parts)}>
+        {(item) =>
+          item.kind === "tool" ? (
+            <ToolCallCard call={item.call} result={item.result} runId={message().runId} />
+          ) : (
+            <PartView part={item.part} />
+          )
+        }
+      </For>
     </div>
   );
 }
@@ -562,8 +586,55 @@ function ResizeHandle(props: { kind: "sidebar" | "inspector" | "bottom"; hidden:
   );
 }
 
+/** Marco de streaming con estado visible por marco (N-C-12a/12b). */
+function LiveView(props: { live: LiveMessage }) {
+  const live = () => props.live;
+  return (
+    <Show when={live().text || live().reasoning || Object.keys(live().tools).length > 0}>
+      <div class="message assistant live" data-live={live().id} data-text-status={live().textStatus}>
+        <div class="role">
+          assistant (streaming) <FrameStatus status={live().textStatus} />
+        </div>
+        <Show when={live().text}>
+          <div class="md" innerHTML={renderMarkdown(live().text)} />
+        </Show>
+        <Show when={live().reasoning}>
+          <details class="reasoning" open>
+            <summary>
+              Reasoning summary <FrameStatus status={live().reasoningStatus} />
+            </summary>
+            <div class="md" innerHTML={renderMarkdown(live().reasoning)} />
+          </details>
+        </Show>
+        <For each={Object.entries(live().tools)}>
+          {([key, frame]) => (
+            <div class="toolcall" data-tool-status={frame.status}>
+              <span class="toolname">tool {key}</span>
+              <FrameStatus status={frame.status} />
+              <code>{frame.args.slice(0, 500)}</code>
+            </div>
+          )}
+        </For>
+      </div>
+    </Show>
+  );
+}
+
+function FrameStatus(props: { status: "streaming" | "done" }) {
+  return (
+    <span class="frame-status" data-status={props.status}>
+      {props.status === "done" ? "listo" : "en curso…"}
+    </span>
+  );
+}
+
 function Composer() {
   let input: HTMLTextAreaElement | undefined;
+  let fileInput: HTMLInputElement | undefined;
+  const session = () => state.sessions.find((s) => s.id === state.activeSessionId);
+  const providerId = () => session()?.model?.providerId ?? state.providers[0]?.id ?? "";
+  const providerModels = () =>
+    state.modelsByProvider[providerId()] ?? state.providers.find((p) => p.id === providerId())?.models ?? [];
   const send = () => {
     if (input && input.value.trim()) {
       void sendPrompt(input.value);
@@ -572,6 +643,20 @@ function Composer() {
   };
   return (
     <div class="composer" id="composer">
+      <Show when={state.attachments.length > 0}>
+        <div class="chips" aria-label="Adjuntos">
+          <For each={state.attachments}>
+            {(attachment) => (
+              <span class="chip" data-attachment={attachment.id}>
+                {attachment.name} <span class="muted">{attachment.size} B</span>
+                <button type="button" aria-label={`Quitar ${attachment.name}`} onClick={() => removeAttachment(attachment.id)}>
+                  ×
+                </button>
+              </span>
+            )}
+          </For>
+        </div>
+      </Show>
       <textarea
         ref={input}
         placeholder={state.activeSessionId ? "Type a request… (Enter to send)" : "Create or select a session first"}
@@ -583,12 +668,55 @@ function Composer() {
           }
         }}
       />
-      <div class="row">
+      <div class="row composer-row">
+        <input
+          ref={fileInput}
+          id="composer-files"
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            if (event.currentTarget.files) void addAttachments(event.currentTarget.files);
+            event.currentTarget.value = "";
+          }}
+        />
+        <button id="composer-attach" type="button" disabled={!state.activeSessionId || state.busy} onClick={() => fileInput?.click()}>
+          Adjuntar
+        </button>
+        <select
+          id="composer-provider"
+          aria-label="Proveedor"
+          value={providerId()}
+          disabled={!state.activeSessionId || state.busy || state.providers.length === 0}
+          onChange={(event) => {
+            const next = event.currentTarget.value;
+            void loadModels(next);
+          }}
+        >
+          <For each={state.providers}>{(provider) => <option value={provider.id}>{provider.displayName}</option>}</For>
+        </select>
+        <select
+          id="composer-model"
+          aria-label="Modelo"
+          value={session()?.model?.modelId ?? ""}
+          disabled={!state.activeSessionId || state.busy || providerModels().length === 0}
+          onChange={(event) => {
+            const modelId = event.currentTarget.value;
+            if (modelId) void setSessionModel({ providerId: providerId(), modelId });
+          }}
+        >
+          <Show when={!session()?.model?.modelId}>
+            <option value="">Elegir modelo…</option>
+          </Show>
+          <For each={providerModels()}>{(model) => <option value={model.modelId}>{model.displayName}</option>}</For>
+        </select>
         <button class="primary" disabled={!state.activeSessionId || state.busy} onClick={send}>
           Send
         </button>
         <Show when={state.busy}>
-          <button onClick={() => void interrupt()}>Interrupt</button>
+          <button id="composer-cancel" onClick={() => void interrupt()}>
+            Interrupt
+          </button>
         </Show>
       </div>
     </div>
@@ -601,7 +729,7 @@ function PermissionDialogs() {
     <For each={state.permissions}>
       {(request) => (
         <div class="modal">
-          <div class="dialog">
+          <div class="dialog" data-permission-request={request.id}>
             <h3>Permission requested</h3>
             <p>
               <strong>{request.action}</strong>
@@ -637,8 +765,11 @@ function QuestionDialogs() {
     <For each={state.questions}>
       {(request) => (
         <div class="modal">
-          <div class="dialog">
+          <div class="dialog" data-question-request={request.id}>
             <h3>Octus asks</h3>
+            <p class="muted q-timeout" data-question-timeout>
+              {questionTimeoutLabel(request)}
+            </p>
             <For each={request.questions}>
               {(question, qi) => (
                 <div class="question">
@@ -676,7 +807,7 @@ function QuestionDialogs() {
                     if (custom) checked.push(custom);
                     return { question: question.question, answers: checked };
                   });
-                  void invoke("questions.reply", { requestId: request.id, answers });
+                  void replyToQuestion(request.id, answers);
                 }}
               >
                 Answer
@@ -852,20 +983,26 @@ function PlansSection() {
       <Show when={state.approvals.length > 0}>
         <div class="card warn">
           <h3>Pending approvals (only you can decide)</h3>
-          <For each={state.approvals}>
-            {(request) => (
-              <div class="row">
-                <code>
-                  {request.planId} · {request.revisionId}
-                </code>
-                <button class="primary" onClick={() => void decideApproval(request.id, "approved")}>
-                  Approve
-                </button>
-                <button class="danger" onClick={() => void decideApproval(request.id, "rejected")}>
-                  Reject
-                </button>
-              </div>
-            )}
+          <For each={orderedApprovals()}>
+            {(request) => {
+              const gate = () => revisionGate(request.planId, request.revisionId);
+              return (
+                <div class="row" data-approval-request={request.id} data-approval-status={request.status}>
+                  <code>
+                    {request.planId} · {request.revisionId}
+                  </code>
+                  <span class="muted" data-approval-gate>
+                    {gate().decidable ? "Solo tú puedes decidir (ningún modelo aprueba)" : gate().reason}
+                  </span>
+                  <button class="primary" disabled={!gate().decidable} title={gate().reason} onClick={() => void decideApproval(request.id, "approved")}>
+                    Approve
+                  </button>
+                  <button class="danger" disabled={!gate().decidable} title={gate().reason} onClick={() => void decideApproval(request.id, "rejected")}>
+                    Reject
+                  </button>
+                </div>
+              );
+            }}
           </For>
         </div>
       </Show>
@@ -895,13 +1032,18 @@ function PlansSection() {
                     <div class="md" innerHTML={renderMarkdown(revision.contentMarkdown.slice(0, 8000))} />
                   </details>
                   <div class="row">
-                    <Show when={revision.lifecycle === "presented" && revision.approval === "pending"}>
+                    <Show when={revisionGate(plan.id, revision.id).decidable}>
                       <button class="primary" onClick={() => void approveRevision(plan.id, revision.id)}>
                         Approve v{revision.version}
                       </button>
                       <button class="danger" onClick={() => void rejectRevision(plan.id, revision.id)}>
                         Reject
                       </button>
+                    </Show>
+                    <Show when={state.approvals.some((entry) => entry.revisionId === revision.id && entry.status === "pending")}>
+                      <span class="muted" data-approval-pending={revision.id}>
+                        Awaiting your decision — ningún modelo puede aprobar.
+                      </span>
                     </Show>
                     <Show when={plan.approvedRevisionId === revision.id}>
                       <button onClick={() => void implementRevision(plan.id, revision.id)}>Implement this approved revision</button>
@@ -1393,7 +1535,7 @@ function MemorySection() {
 
 function AgentsSection() {  const active = () => state.agentInstances.filter((i) => ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
   return (
-    <details class="stage2">
+    <details class="stage2" id="agent-activity">
       <summary>
         Agents ({active().length} active / {state.agentInstances.length} total)
       </summary>
@@ -1402,15 +1544,24 @@ function AgentsSection() {  const active = () => state.agentInstances.filter((i)
       </Show>
       <For each={state.agentInstances}>
         {(instance) => (
-          <div class="card">
+          <div class="card" data-agent-instance={instance.id}>
             <div class="row">
               <code>{instance.definitionId}</code>
-              <span class={`pill ${instance.status === "completed" ? "ok" : instance.status === "failed" ? "err" : "warn"}`}>{instance.status}</span>
+              <span
+                class={`pill ${instance.status === "completed" ? "ok" : instance.status === "failed" ? "err" : instance.status === "cancelled" ? "" : "warn"}`}
+                data-agent-status={instance.status}
+              >
+                {instance.status}
+              </span>
               <code class="muted">{instance.id}</code>
             </div>
             <p class="muted">
               {instance.directory}
+              <Show when={instance.taskId}> · task {instance.taskId}</Show>
+              <Show when={instance.worktreeId}> · worktree {instance.worktreeId}</Show>
               <Show when={instance.parentInstanceId}> · parent {instance.parentInstanceId}</Show>
+              <Show when={instance.status === "waiting_permission"}> · esperando tu permiso</Show>
+              <Show when={instance.status === "waiting_input"}> · esperando tu respuesta</Show>
               <Show when={instance.error}> · error: {instance.error}</Show>
             </p>
             <Show when={["created", "running", "waiting_permission", "waiting_input"].includes(instance.status)}>
@@ -1427,6 +1578,48 @@ function AgentsSection() {  const active = () => state.agentInstances.filter((i)
 
 function ChatView() {
   const session = () => state.sessions.find((s) => s.id === state.activeSessionId);
+  let timelineEl: HTMLDivElement | undefined;
+  let olderObserver: IntersectionObserver | undefined;
+  // N-C-06: carga automática de la página anterior al asomar el centinela.
+  const observeOlder = (el: HTMLDivElement) => {
+    olderObserver?.disconnect();
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    // Raíz = el propio scroller (closest, no la ref: el orden de montaje no la garantiza).
+    const root = el.closest(".message-timeline") ?? timelineEl ?? undefined;
+    olderObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadOlderMessages();
+      },
+      { root: root ?? null },
+    );
+    olderObserver.observe(el);
+  };
+  const bottomAnchor: (el: HTMLDivElement) => void = () => undefined;
+  onCleanup(() => olderObserver?.disconnect());
+  onMount(() => {
+    // El centinela solo se arma al desplazar: sin carrera con el autoscroll inicial.
+    const el = timelineEl;
+    if (!el) return;
+    const arm = () => {
+      const sentinel = el.querySelector("#timeline-sentinel");
+      if (sentinel instanceof HTMLDivElement) observeOlder(sentinel);
+    };
+    el.addEventListener("scroll", arm, { passive: true });
+    onCleanup(() => el.removeEventListener("scroll", arm));
+  });
+  // Al abrir/cambiar de sesión se salta al final; después solo se sigue el
+  // directo si el usuario ya estaba abajo (no roba el scroll).
+  let followKey = "";
+  createEffect(() => {
+    const count = state.messages.length;
+    void Object.keys(state.live).length;
+    const el = timelineEl;
+    if (!el || count === 0) return;
+    const key = state.activeSessionId ?? "";
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    if (key !== followKey || nearBottom) el.scrollTop = el.scrollHeight;
+    followKey = key;
+  });
   return (
     <main class="chat">
       <Show when={!state.budgetsConfigured}>
@@ -1456,36 +1649,36 @@ function ChatView() {
           </div>
         </Show>
       </header>
-      <div class="timeline message-timeline">
+      <Show when={state.cancelReason}>
+        <div id="cancel-notice" class="banner warn" role="status">
+          Run cancelado: {state.cancelReason}
+          <button aria-label="Descartar aviso de cancelación" onClick={() => dismissCancelNotice()}>
+            ×
+          </button>
+        </div>
+      </Show>
+      <div
+        class="timeline message-timeline"
+        ref={timelineEl}
+        data-timeline-total={state.timelineTotal}
+        data-timeline-rendered={state.messages.length}
+        data-timeline-older={state.timelineHasOlder ? "true" : "false"}
+      >
+        <Show when={state.timelineHasOlder}>
+          <div class="older-wrap">
+            <div id="timeline-sentinel" />
+            <button id="timeline-older" onClick={() => void loadOlderMessages()}>
+              Mostrar anteriores ({state.timelineTotal - state.messages.length} restantes)
+            </button>
+          </div>
+        </Show>
         <For each={state.messages}>{(message) => <MessageView message={message} />}</For>
-        <For each={Object.values(state.live)}>
-          {(live) =>
-            live.text || live.reasoning || Object.keys(live.toolArgs).length > 0 ? (
-              <div class="message assistant live">
-                <div class="role">assistant (streaming)</div>
-                <Show when={live.text}>
-                  <div class="md" innerHTML={renderMarkdown(live.text)} />
-                </Show>
-                <Show when={live.reasoning}>
-                  <details class="reasoning" open>
-                    <summary>Reasoning summary</summary>
-                    <div class="md" innerHTML={renderMarkdown(live.reasoning)} />
-                  </details>
-                </Show>
-                <For each={Object.entries(live.toolArgs)}>
-                  {([key, args]) => (
-                    <div class="toolcall">
-                      <span class="toolname">tool {key}</span>
-                      <code>{args.slice(0, 500)}</code>
-                    </div>
-                  )}
-                </For>
-              </div>
-            ) : null
-          }
-        </For>
+        <For each={Object.values(state.live)}>{(live) => <LiveView live={live} />}</For>
+        <div id="timeline-bottom" ref={bottomAnchor} />
       </div>
       <PlansSection />
+      <RunErrorsSection />
+      <ModifiedFilesSection />
       <TasksSection />
       <WorktreesSection />
       <IntegrationsSection />
