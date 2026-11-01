@@ -8,11 +8,20 @@
 // adelgazado y compararse contra él sería vacuo). Los ids ADICIONALES respecto a la base son
 // legítimos: paneles del workbench de los Todos 6-8 (sidebar, inspector, bottom, activities) y el
 // gate ?catalog=1 del Todo 7, ya presentes en la base y conservados por el particionado.
+// Merge ola 10 (Todo 13/14, rama feat/ux-skills-mcp-w10-chat): los ids NUEVOS del chat son
+// legítimos y conservan el invariante de superconjunto (ningún id base se pierde):
+// timeline (timeline-older, timeline-sentinel, timeline-bottom, cancel-notice, composer-files,
+// composer-attach, composer-provider, composer-model, composer-cancel), tool calls expandibles
+// (data-toolcall, data-toolcall-toggle/args/result/error/artifact), banda de errores y archivos
+// (run-errors, data-error-item/retry/dismiss, modified-files, data-modified-file), aprobaciones
+// con gate humano (data-approval-request/status/gate/pending) y actividad de agentes
+// (agent-activity, data-agent-instance/status). Origen: commits a372092+ce0141c reubicados en
+// views/chat.tsx, views/sections.tsx y toolcall-widgets.tsx sin re-monolitizar.
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const WT = "C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w8";
+const WT = "C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w10";
 const R = WT + "/apps/desktop/src/renderer/src";
 // Último commit pre-partición (base de comparación inmutable del Todo 9).
 const BASE_REF = "2bc2dc9";
@@ -27,7 +36,7 @@ const check = (name, cond, detail = "") => {
 const headStore = atBase("apps/desktop/src/renderer/src/store.ts");
 const collectExports = (src) =>
   new Set(
-    [...src.matchAll(/^export\s+(?:async\s+function|function|const|interface)\s+(\w+)|^export\s*\{\s*([^}]+?)\s*\}/gm)].flatMap((m) =>
+    [...src.matchAll(/^export\s+(?:async\s+function|function|const|interface|type)\s+(\w+)|^export\s*(?:type\s*)?\{\s*([^}]+?)\s*\}/gm)].flatMap((m) =>
       m[1] ? [m[1]] : m[2].split(",").map((s) => s.trim()),
     ),
   );

@@ -1,0 +1,168 @@
+TODO 13 — LÍNEA DE TIEMPO DE CHAT CON STREAMING, VIRTUALIZACIÓN Y CANCELACIÓN
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 10, Todo 13) | Rama: feat/ux-skills-mcp-w10-chat
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a198ff)
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w10
+Sonda base: .omo/evidence/octus-ux-skills-mcp/task-12.txt (EXISTEN streaming/tool-calls/cancelación;
+  FALTAN N-C-12a part.done sin consumidor en store.ts, N-C-06 sin paginación/virtualización,
+  N-C-12b tool_call en vuelo sin estado visible). Los tres huecos quedan cubiertos abajo.
+Alcance: mensajes de usuario y coordinador, markdown, código, streaming con cancelación,
+  razonamiento, composer con adjuntos, selector de modelos y virtualización de conversaciones
+  extensas manteniendo APIs y eventos (sin cambiar semántica plan/build de la sesión).
+
+TODO 13 Y ESPECIFICACIÓN (Todo 4) LEÍDOS COMPLETOS ANTES DE EMPEZAR.
+
+============================================================
+1. LÍNEA BASE (antes de editar, todo en verde; hallazgos se reportan)
+============================================================
+$ bun test packages/core/test/conversation.test.ts → 7 pass / 0 fail
+$ bun test packages/core/test/runtime.test.ts packages/core/test/session-management.test.ts → 11 pass / 0 fail
+$ bun run --cwd packages/shared test → 17 pass / 0 fail
+$ bun run typecheck (raíz: shared + core + desktop node/web) → exit 0
+HALLAZGO (ambiental, preexistente): el worktree llegó sin node_modules
+  (@octus/shared sin resolver, tsc ausente). Se resolvió con `bun install`
+  en el worktree; no es cambio productivo.
+
+============================================================
+2. ENTREGABLES (archivos tocados por el Todo 13)
+============================================================
+- packages/shared/src/ipc.ts: sessions.messages admite limit?/beforeId? y
+  responde total?/hasOlder? (aditivo, compatible hacia atrás).
+- packages/core/src/sessions/octus-core.ts: sessionMessagesPage() con ventana
+  por cursor estable (mismo orden: runs por creación, mensajes por seq);
+  sessionMessages() legacy intacta (delega sin límite).
+- apps/desktop/src/main/index.ts: handler sessions.messages → sessionMessagesPage.
+- apps/desktop/src/renderer/src/timeline.ts (NUEVO): lógica pura del timeline
+  (sin Solid/DOM, testeada en bun): marcos de streaming con estado, part.done
+  que cierra marcos, purge por run, ventana virtualizada, inserción idempotente,
+  adjuntos como bloques cercados, motivo de cancelación.
+- apps/desktop/src/renderer/src/store.ts: consume part.done (N-C-12a), purga
+  marcos al terminar el run (sin fantasma/duplicado), motivo de cancelación
+  visible (N-C-12c), paginación inicial + loadOlderMessages (N-C-06), composer
+  con adjuntos y selector de modelos (sessions.setModel existente).
+- apps/desktop/src/renderer/src/App.tsx: timeline virtualizado (.message-timeline
+  con data-timeline-total/rendered/older, centinela #timeline-sentinel + botón
+  #timeline-older), marcos live con píldoras en curso…/listo y toolcalls con
+  estado visible, #cancel-notice descartable, #composer con adjuntos/chips,
+  selects de proveedor/modelo y botón Interrupt (#composer-cancel),
+  data-message-id por mensaje, salto al final al abrir sesión + follow solo abajo.
+- apps/desktop/src/renderer/src/styles.css: estilos nuevos solo con var(--oc-*).
+- packages/core/test/chat-pagination.test.ts (NUEVO): paginación + compat legacy.
+- apps/desktop/test/chat-timeline.test.ts (NUEVO): marcos, purga, ventana,
+  idempotencia, adjuntos, motivo (lógica real de timeline.ts).
+- scripts/probe-task-13-playwright.cjs + scripts/probe-task-13-fixture.cjs (NUEVOS):
+  sonda Playwright real (Chromium) sobre el bundle construido con stub window.octus
+  determinista: 600 mensajes, paginación con cursor, streaming/eventos a demanda.
+- package.json + bun.lock: playwright-core@1.48.0 como devDependency (solo sonda
+  E2E; el bundle Electron no la empaqueta; justificación: el Todo 13 exige
+  Playwright o equivalente ejecutado de verdad y no había driver en el repo).
+- PNGs de evidencia: task-13-timeline-long.png, task-13-streaming.png, task-13-cancel.png.
+
+N-C-12a (part.done): applyPartDone cierra el marco (texto/reasoning/tool por key)
+  sin borrar su contenido; la UI muestra píldoras en curso…/listo.
+N-C-06 (paginación/virtualización): IPC con cursor + ventana inicial de 100 con
+  totales; el DOM solo pinta lo cargado; centinela + botón cargan páginas de 100.
+N-C-12b (tool en vuelo): tool_call.started llega como part.delta vacío y ya crea
+  la entrada visible; su marco pasa a listo con part.done; el nombre real llega
+  con message.appended (ToolCallPart persistida).
+N-C-12c (motivo): run.cancelled ya trae error en el payload cuando existe;
+  con interrupt de usuario (error undefined) se muestra "Cancelado por el usuario".
+
+BUG REAL HALLADO POR LA SONDA (no estaba en la sonda 12): setState("live", obj)
+  en Solid FUSIONA: borrar una clave del objeto NO la elimina del store
+  (message.appended y purga de run dejaban el marco fantasma para siempre, y
+  setState("live", {}) al cambiar de sesión tampoco limpiaba). Corregido con
+  reconcile() en los tres puntos (append, purga terminal, cambio/cierre de sesión).
+  Sin este arreglo el caso failure (fantasma tras cancelar) era imposible de pasar.
+
+============================================================
+3. PRUEBAS (comando + resultado)
+============================================================
+$ bun test packages/core/test/chat-pagination.test.ts → 1 pass / 0 fail (16 expects)
+$ bun test apps/desktop/test/chat-timeline.test.ts → 6 pass / 0 fail (26 expects), 2× verde
+$ bun run --cwd packages/shared test → 17 pass / 0 fail
+$ bun run --cwd packages/core typecheck / desktop typecheck → exit 0 (node + web)
+$ bun run test (raíz, worktree) → 1ª pasada 242 pass / 1 fail (fallo no capturado en
+  tail; corría en paralelo con sondas Playwright que saturaban el i3) → 2ª pasada
+  limpia 243 pass / 0 fail (1008 expects, 30 ficheros), exit 0. Sin regresión persistente.
+$ node scripts/probe-task-13-playwright.cjs → probe-task-13-playwright: OK (41/41),
+  ejecutado 4× verde (1× tras el arreglo del fantasma + 1× tras el retoque de captura
+  + 2× de repetición flaky). Flujo: bienvenida → reciente → continuar (sin
+  auto-selección), ventana 100/600, centinela → 200, botón → 300, deltas →
+  marco en curso + tool en vuelo, part.done → listos, message.appended → +1 sin
+  fantasma ni duplicados, adjunto en prompt cercado, setModel registrado,
+  FAILURE: envío → Interrupt → run.cancelled sin error → sin live, sin mensaje
+  nuevo, ids contenidos, aviso con motivo; recarga limpia (cancel_resume).
+$ bun run --cwd apps/desktop build → exit 0 (bundle usado por la sonda).
+
+============================================================
+4. MANUAL-QA DE SUPERFICIE REAL (Playwright/Chromium, entrada real, PASS/FAIL)
+============================================================
+- S1 ventana con workbench tras continuar sesión, .message-timeline + #composer: PASS
+- S2 600 mensajes servidos, 100 en DOM (data-timeline-total=600, rendered=100): PASS
+- S3 scroll arriba autocarga 100 anteriores (centinela, 200): PASS
+- S4 botón Mostrar anteriores suma 100 (300): PASS
+- S5 deltas de texto/reasoning/tool visibles con píldora en curso…: PASS
+- S6 part.done pone texto y tool en listo: PASS
+- S7 message.appended integra (+1), retira el live, sin duplicados: PASS
+- S8 adjunto (input real) → chip → Enter envía prompt con bloque cercado: PASS
+- S9 cambio de modelo → sessions.setModel {fake,a}: PASS
+- S10 busy muestra #composer-cancel; click → sessions.interrupt: PASS
+- S11 aviso #cancel-notice "Run cancelado: Cancelado por el usuario": PASS
+- F1 FAILURE cancelar a mitad de stream: sin [data-live], sin mensaje nuevo,
+  sin duplicados (n=100, nuevos=0), aviso visible y descartable: PASS
+- S12 recarga: total 600, sin live, sin aviso: PASS
+- S13 PNGs task-13-timeline-long/streaming/cancel legibles, píldoras y aviso
+  visibles en captura (revisadas por el ejecutor): PASS
+
+============================================================
+5. CLASES ADVERSARIALES
+============================================================
+- stale_state: la sonda relee el bundle reconstruido en cada pasada (build antes
+  de cada serie); el stub regenera fixtures; sin cachés entre pasadas.
+- misleading_success_output: se exige exit 0 Y conteos exactos (41/41, 6/6, 1/1);
+  waitForCond registra FAIL con diagnóstico (attrs del timeline) ante timeout;
+  el failure se demuestra (live=0, nuevos=0, aviso visible).
+- dirty_worktree: el Todo 14 trabaja en paralelo en la MISMA rama y tocó los
+  mismos archivos (App.tsx PartView/Planes/Preguntas, store refreshIntegrations,
+  styles, shared/index + conversation-widgets/toolcall-widgets nuevos). No toqué
+  sus archivos; mis hunks son disjuntos. El commit de cierre incluye el snapshot
+  conjunto (árbol verde) con atribución separada en el mensaje. Ver RIESGOS.
+- flaky_tests: timeline bun 2× verde; sonda Playwright 4× OK (misma máquina i3).
+- cancel_resume: K (recarga limpia) + reconcile en cambio/cierre de sesión; la
+  suite raíz reutiliza núcleos efíricos con cleanup.
+- Resto no-aplicable con motivo: live_credentials (sin red ni claves; jamás se
+  abrió k.txt), timing_flake (sin sleeps fijos en tests bun; la sonda espera por
+  condición con tope, no por tiempo), prompt_injection (fixture solo del árbol),
+  schema_drift (IPC aditivo: request/response viejos siguen válidos; legacy
+  sessionMessages intacta y testeada), i18n_garble (sin plantillas).
+
+============================================================
+6. LIMPIEZA (recibo)
+============================================================
+- Procesos: sondas y servidores terminados (browser.close + server.close por
+  corrida; sesiones bash_28/29/30/31/33/38/39/45 completadas, exit 0 salvo el
+  tail de la 1ª suite; sin sesiones vivas al cerrar).
+- Temporales: scripts/probe-task-13-debug.cjs ELIMINADO (verificado ausente);
+  C:/tmp/octus-qa-attach-13 (1 txt) fuera del repo (se deja como artefacto
+  reproducible de la evidencia); out/ del build ignorado por git.
+- En el repo solo quedan los entregables del §2 + PNGs (3) + task-12.txt previo.
+- Contenido sensible: cero (grep de secretos no aplica; sin claves en evidencia).
+
+============================================================
+7. RIESGOS / NOTAS PARA EL PADRE
+============================================================
+- Rama compartida ola 10: el Todo 14 (hermano) edita App.tsx/store.ts/styles.css
+  e index.ts en los mismos archivos. Mis hunks son disjuntos y el árbol está en
+  verde (typecheck + build + sonda), pero mi commit incluirá su WIP aún no
+  confirmado por él. Mensaje del commit lo declara. Si el padre prefiere
+  commits separados por ejecutor, revertir mi commit y re-emitirlo tras el suyo.
+- playwright-core queda como devDependency raíz (solo E2E). Si se prefiere cero
+  dependencias nuevas, la alternativa es la sonda Electron del Todo 8.
+- `bun run test` raíz tarda ~340 s en este i3: programar su ventana.
+- CSP del bundle veta waitForFunction con strings y el eval en página: la sonda
+  usa aserciones de locator + espera acotada por condición + espejo DOM
+  (#probe-calls). Patrón reutilizable para Todos 14/16/17.
+- Decisión de diseño: los adjuntos se en línea en el texto del prompt (bloques
+  cercados) sin cambiar el IPC; el motivo de cancelación por defecto es texto
+  del renderer (el evento no siempre trae error). Ninguno cambia semántica
+  plan/build.

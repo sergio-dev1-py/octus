@@ -357,6 +357,113 @@ pre.detail {
   font-size: var(--oc-text-sm);
 }
 
+/* Todo 13: marcos de streaming, virtualización, composer y cancelación.
+   Solo var(--oc-*): sin literales de diseño. */
+.frame-status {
+  display: inline-block;
+  font-size: var(--oc-text-xs);
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--oc-radius-pill);
+  padding: 0 var(--oc-space-3);
+  margin-left: var(--oc-space-2);
+  color: var(--muted);
+  background: var(--bg);
+  text-transform: none;
+}
+
+.frame-status[data-status="streaming"] {
+  color: var(--oc-info);
+  border-color: var(--oc-accent-border);
+  background: var(--oc-info-wash);
+}
+
+.frame-status[data-status="done"] {
+  color: var(--oc-success);
+  border-color: var(--oc-success);
+  background: var(--oc-success-wash);
+}
+
+.toolcall[data-tool-status="streaming"] {
+  border-left: 2px solid var(--oc-accent-border);
+  padding-left: var(--oc-space-2);
+}
+
+.toolcall[data-tool-status="done"] {
+  border-left: 2px solid var(--oc-success);
+  padding-left: var(--oc-space-2);
+}
+
+.older-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--oc-space-2);
+  padding: var(--oc-space-2) 0;
+}
+
+#timeline-older {
+  font-size: var(--oc-text-sm);
+}
+
+#timeline-sentinel {
+  height: var(--oc-space-1);
+  width: 100%;
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-gap);
+}
+
+.composer-row {
+  display: flex;
+  gap: var(--oc-gap);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.composer-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--oc-text-sm);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--oc-radius-md);
+  padding: var(--oc-space-1) var(--oc-space-2);
+}
+
+.chips {
+  display: flex;
+  gap: var(--oc-space-2);
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  gap: var(--oc-space-2);
+  align-items: center;
+  font-size: var(--oc-text-xs);
+  background: var(--oc-accent-wash);
+  border: 1px solid var(--oc-accent-border);
+  color: var(--text);
+  border-radius: var(--oc-radius-pill);
+  padding: var(--oc-space-1) var(--oc-space-2) var(--oc-space-1) var(--oc-space-3);
+}
+
+.chip button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 var(--oc-space-1);
+}
+
+#cancel-notice {
+  margin: 0 var(--oc-space-2);
+}
+
 .toolname {
   font-weight: 600;
   color: var(--accent);
@@ -603,4 +710,89 @@ code.muted {
   border: 1px solid var(--danger);
   border-radius: var(--oc-radius-pill);
   padding: 0 var(--oc-space-2);
+}
+
+/* Todo 14: tool calls expandibles, errores, archivos y aprobaciones.
+   Solo var(--oc-*): sin literales de diseño. */
+.tc-card {
+  display: block;
+}
+
+.tc-toggle {
+  display: flex;
+  gap: var(--oc-gap);
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text);
+  font-size: var(--oc-text-sm);
+}
+
+.tc-dur {
+  font-size: var(--oc-text-xs);
+}
+
+.tc-caret {
+  color: var(--muted);
+}
+
+.tc-body {
+  margin-top: var(--oc-space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-space-2);
+}
+
+.tc-label {
+  font-size: var(--oc-text-xs);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tc-artifact {
+  font-size: var(--oc-text-xs);
+}
+
+.tc-error {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--oc-panel-sunken);
+  border: 1px solid var(--border);
+  padding: var(--oc-space-3);
+  border-radius: var(--oc-radius-md);
+  font-size: var(--oc-text-xs);
+  font-family: var(--oc-font-mono);
+  color: var(--danger);
+}
+
+.err-list,
+.file-list {
+  list-style: none;
+  margin: var(--oc-space-2) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-space-2);
+}
+
+.err-item,
+.file-item {
+  display: flex;
+  gap: var(--oc-gap);
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: var(--oc-text-sm);
+}
+
+.err-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.q-timeout {
+  font-size: var(--oc-text-xs);
 }

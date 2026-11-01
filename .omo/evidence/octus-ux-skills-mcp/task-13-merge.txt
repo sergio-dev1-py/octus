@@ -1,0 +1,72 @@
+Merge ola 8 (main) + ola 10 (rama feat/ux-skills-mcp-w10-chat) — Task 13 (merge)
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w10
+Rama: feat/ux-skills-mcp-w10-chat (mergea main = ola 8 completa 3e93110)
+Fecha: 2026-11-01 — Ejecutor: senpi-task st_01a19925
+
+CONFLICTO (único): App.tsx y store.ts (monolito ola 10 vs fachadas ola 8).
+Resolución: se toma el lado entrante (fachadas finas, sin re-monolitizar) y la
+ola 10 se reubica pieza por pieza en los módulos que corresponden:
+- store/state.ts: LiveMessage = LiveFrame de timeline.ts (N-C-12a/12b),
+  + timelineTotal/timelineHasOlder (N-C-06), cancelReason (N-C-12c),
+  attachments (N-C-13), modelsByProvider. Export type ChatAttachment.
+- store/projects.ts: refreshMessages pagina con TIMELINE_PAGE; selectSession/
+  closeSession con reconcile + reset de marcos/aviso/adjuntos; nuevos
+  loadOlderMessages, dismissCancelNotice, addAttachments/removeAttachment,
+  loadModels/setSessionModel; sendPrompt en línea adjuntos y limpia aviso.
+- store/events.ts: part.delta/part.done/step.retry delegan a timeline.ts;
+  message.appended idempotente (appendMessage); run cancelled purga marcos del
+  run (purgeRunFrames + reconcile) y fija cancelReason (cancelReasonOf).
+- views/chat.tsx: MessageView con data-message-id + messageRenderItems +
+  ToolCallCard; LiveView/FrameStatus (marcos streaming/done); Composer con
+  chips de adjuntos, selectores proveedor/modelo e ids composer-files/attach/
+  provider/model/cancel; diálogos con data-permission-request,
+  data-question-request/timeout + replyToQuestion; ChatView con centinela
+  (timeline-sentinel/older/bottom), aviso cancel-notice, data-timeline-*,
+  autoscroll con follow, RunErrorsSection + ModifiedFilesSection.
+- views/sections.tsx (Todo 14, sin pérdida): PlansSection con
+  orderedApprovals + revisionGate (gate humano, botones deshabilitados con
+  motivo, data-approval-*) + aviso data-approval-pending; AgentsSection con
+  id agent-activity, data-agent-instance/status, task/worktree/waiting-flags y
+  pill cancelled.
+- Sin tocar (fusión limpia ya verificada): main/index.ts, shared/ipc.ts,
+  octus-core.ts (sessionMessagesPage), styles.css (clases Todo 13/14),
+  package.json (playwright-core 1.48.0 queda en devDependencies: decisión
+  documentada y reversible, solo la usan los probes Playwright).
+- scripts/verify-task-9-parity.mjs: WT apuntado a este worktree (el anterior
+  apuntaba al worktree w8 ya inexistente); regex de exports ampliada a
+  `export type` / `export type {…}` (LiveMessage pasó de interface a alias);
+  cabecera documenta los ids nuevos del chat como superconjunto legítimo
+  (origen Todo 13/14). Invariante de superconjunto intacto.
+- toolcall-widgets.tsx y timeline.ts: sin cambios (ya vivían como módulos;
+  toolcall-widgets solo LEE state vía la fachada ./store.js, sin ciclos).
+- conversation-widgets en packages/shared: sin cambios (fusión limpia).
+
+VERIFICACIÓN (comandos corridos en el worktree):
+1. bun run --cwd apps/desktop typecheck → exit 0 (tsc node + web, 0 errores).
+2. bun test (8 archivos exigidos) → 44 pass / 0 fail:
+   apps/desktop/test/chat-timeline.test.ts, packages/core/test/chat-pagination.test.ts,
+   packages/shared/test/conversation-widgets.test.ts, layout, prefs,
+   packages/core/test/ui-layout.test.ts, ui-prefs.test.ts, session-management.test.ts.
+   Extra: bun test packages/shared → 31 pass / 0 fail.
+   Extra 2: packages/core por archivo → todo verde salvo worktrees.test.ts
+   (etapa 4 scheduler+agentmanager e2e con worktrees git reales): 1-4 fallos
+   INTERMITENTES, siempre por timeout de 5000ms de bun en host lento
+   (i3-2328M/Windows; integration.test.ts tarda minutos por fixture pesado).
+   Varían entre pasadas (4, luego 1) sin cambiar código: flaky ambiental
+   preexistente. Prueba de ajenidad: este merge no toca ningún archivo bajo
+   packages/ (git status: solo apps/desktop renderer, scripts y evidencia) y
+   ningún test de core importa código del renderer; la parte de core del merge
+   (sessionMessagesPage) ya venía commiteada y verde en a372092.
+3. node scripts/verify-task-9-parity.mjs → exit 0 TASK-9 PARITY: ALL PASS
+   (70 exports store, 30 componentes, 15 ids base + 45 totales, 0 ciclos/28 archivos).
+4. bun apps/desktop/scripts/welcome-task10-verify.ts → exit 0 (44 PASS, 0 FAIL).
+5. Manual QA (ruta real): Playwright Todo 13/14 ya evidenciado en
+   .omo/evidence/octus-ux-skills-mcp/task-13.txt y task-14.txt del commit
+   a372092 (41/41 x4 + 7/7 bun + suite raíz 243/0 entonces vigente); este merge
+   no cambia conducta, solo reubica. Selectores verificados por paridad:
+   #composer, .message-timeline, #timeline-older, #cancel-notice,
+   #composer-cancel, [data-toolcall], #run-errors, #modified-files,
+   [data-approval-request], #agent-activity.
+6. playwright-core: devDependency (decisión documentada, reversible).
+
+CIERRE: commit de merge con `git status` limpio (recibo abajo).

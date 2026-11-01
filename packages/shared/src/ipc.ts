@@ -95,7 +95,10 @@ export interface OctusIPC {
   "sessions.rename": { request: { sessionId: string; title: string }; response: { ok: boolean } };
   "sessions.setProfile": { request: { sessionId: string; profile: "plan" | "build" }; response: { ok: boolean } };
   "sessions.setModel": { request: { sessionId: string; model: ModelSelection }; response: { ok: boolean; error?: string } };
-  "sessions.messages": { request: { sessionId: string; runId?: string }; response: { messages: Message[] } };
+  "sessions.messages": {
+    request: { sessionId: string; runId?: string; limit?: number; beforeId?: string };
+    response: { messages: Message[]; total?: number; hasOlder?: boolean };
+  };
   "sessions.recover": { request: { sessionId: string }; response: { session: Session; messages: Message[]; recovered: boolean; skippedMessages: string[]; skippedEvents: number } };
   "sessions.prompt": { request: PromptRequest; response: { runId: string } };
   "sessions.interrupt": { request: { sessionId: string }; response: { ok: boolean } };

@@ -1,0 +1,131 @@
+TODO 14 - TOOL CALLS, APROBACIONES, PREGUNTAS Y ACTIVIDAD DE AGENTES
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 10) | Rama: feat/ux-skills-mcp-w10-chat (compartida con Todo 13)
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a19900) | Sin commit (no solicitado; Archivos listados abajo)
+Alcance: widgets sobre eventos reales (runs.get, tasks, approvals, questions, agents,
+error.raised). Sin backend nuevo: N-C-03/N-C-05 se referencian como pendientes (Todo 17).
+
+============================================================
+1. COMANDOS EXACTOS Y SALIDAS
+============================================================
+
+$ bun install   (worktree sin node_modules; resuelve workspace para tests)
+98 packages installed [5.77s]
+
+$ bun test test/plans.test.ts test/tools.test.ts test/conversation.test.ts \
+    test/permissions.test.ts test/session-management.test.ts test/runtime.test.ts \
+    test/delegation.test.ts --timeout 30000   (cwd packages/core, BASELINE previo)
+45 pass, 0 fail, 178 expect() calls
+
+$ bun test test/conversation-widgets.test.ts   (cwd packages/shared, 2 vueltas)
+Vuelta 1: 14 pass, 0 fail, 50 expect() calls
+Vuelta 2: 14 pass, 0 fail, 50 expect() calls
+
+$ bun C:/tmp/octus-qa-14/probe.ts   (servicios reales, core efímero, datos fijos; 2 vueltas)
+Vuelta 1 y 2: SONDA TODO 14: 20/20 PASS
+PASS A1 run con tool call (roles user,assistant,tool,assistant; read ok "hola fichero")
+PASS A2 expandir empareja (call+result cruzando mensajes: "1: hola fichero")
+PASS A3 runs.get toolCalls (read completed, duración 12 ms)
+PASS A4 actividad (1 instancia coordinator-build completed)
+PASS A5 request idempotente + pending visible + gate humano + solo-gesto-humano + aprobada
+PASS A6 duplicada rechazada (decideApproval → invalid_state no longer pending)
+PASS A6 fuera de revisión (approveRevision → invalid_state already approved)
+PASS A7 pregunta pendiente + respondida (reply true, answers=[zod])
+PASS A8 duplicada rechazada (reply duplicado=false, desconocido=false)
+PASS A9 run failed real (bad_request) + banda unificada (item run-<id> scope run)
+PASS A10 archivos tool-artifact (art_qa01 vía runs.get)
+
+$ node scripts/probe-task-14-playwright.cjs   (Chromium sobre out/renderer + stub window.octus)
+SONDA PLAYWRIGHT TODO 14: todo PASS (33/33):
+toolcall visible/completed/píldora/args-expandidos/resultado-inline/artifact/duración 320 ms;
+pregunta visible/timeout/responde-zod/diálogo-cierra;
+approval visible/gate-solo-humano/habilitada/decide-llamado/desaparece/duplicada-ok:false;
+actividad visible/running/tarea-tsk_qa02/cancelar;
+errores visible/run-run_qa02/causa-30s/task-tsk_qa03/reintento;
+archivos visible/src/form.ts;
+failure réplica-pregunta ok:false + vencida visible/expired + error-banner + diálogo-sigue-abierto.
+
+$ bun run typecheck   (cwd packages/shared y apps/desktop)
+shared: tsc --noEmit EXIT 0 | desktop: node+web EXIT 0
+
+$ bun run build   (cwd apps/desktop; valida el árbol combinado con Todo 13)
+electron-vite build EXIT 0 (solo warnings preexistentes INEFFECTIVE_DYNAMIC_IMPORT)
+
+$ bun run test   (raíz: shared 31/31 PASS; core 242 pass, 1 fail)
+FALLO ÚNICO: etapa 5.2 J4 workbase (timeout 30 s, máquina i3, git pesado).
+PREEXISTENTE: fallaba idéntico en el baseline previo a mis cambios (ver sección 5).
+Suite tocada por Todo 14 (plans/tools/conversation/permissions/session/runtime/delegation): 45/45 verde.
+chat-pagination.test.ts (Todo 13, N-C-06): verde con mis cambios.
+
+============================================================
+2. MANUAL QA DE SUPERFICIE REAL (Playwright + capturas vistas) — PASS/FAIL
+============================================================
+
+MQ-1 Expandir tool call: tarjeta [data-toolcall=tc_qa01] con pill completed y "320 ms";
+  click en toggle expone args (src/form.ts) y resultado inline (42 líneas) + artifact art_qa01.
+  PASS (sonda 33/33 + task-14-toolcall.png revisada: pill, duración y caret visibles).
+MQ-2 Aprobar: gate "Solo tú puedes decidir" visible; botón habilitado solo en revisión;
+  click aprueba, la solicitud desaparece (duplicada imposible en UI); duplicada por canal → ok:false.
+  PASS.
+MQ-3 Responder pregunta: timeout "Timeout:" visible; radio zod + Answer registra;
+  réplica duplicada → banner err "réplica duplicada rechazada por idempotencia";
+  vencida muestra "expired", su error deja el diálogo abierto para reintentar. PASS.
+MQ-4 Actividad: #agent-activity con ins_qa_impl running + task tsk_qa02 + Cancel. PASS.
+MQ-5 Errores: #run-errors con run-run_qa02 ("provider timeout tras 30 s") y task-tsk_qa03
+  (Blocked: needs-approval) + botón Reintentar. PASS (task-14-surface.png revisada).
+MQ-6 Archivos: #modified-files con src/form.ts +38,-4 (task) y read-output (tool). PASS.
+MQ-7 Tokens/tema: solo var(--oc-*) en toolcall-widgets.tsx y bloque Todo 14 de styles.css
+  (grep sin #hex/rgb/px literales); pills/cards coherentes con el sistema en ambas capturas. PASS.
+MQ-8 No regresión Todo 13: timeline/composer intactos (hunks disjuntos), chat-pagination verde,
+  typecheck y build del árbol combinado en verde. PASS.
+MQ-9 Modelos no aprueban: plan-tools.ts solo crea/actualiza/consulta/solicita
+  (sin plan.approve); decide solo vía IPC desde onClick humano. PASS.
+
+============================================================
+3. CLASES ADVERSARIALES
+============================================================
+
+- stale_state: APLICABLE. El Todo 13 edita en paralelo el mismo worktree/rama
+  (App.tsx, store.ts, styles.css, main/index.ts, octus-core.ts, ipc.ts + timeline.ts).
+  Mitigación: leí regiones frescas antes de cada edición; mis hunks son disjuntos
+  (PartView/MessageView/QuestionDialogs/PlansSection/AgentsSection/lista-de-secciones
+  frente a timeline/Composer/LiveView del Todo 13); verificado con git diff por hunk.
+  store.ts/main/ipc/octus-core NO tocados por mí: mi estado vive en toolcall-widgets.tsx.
+- misleading_success_output: APLICABLE. Todo veredicto sale de exit codes y asserts
+  (bun test, probe exit 1 en fallo, Playwright failures>0 → exit 1), no de texto.
+- dirty_worktree: APLICABLE. Míos: packages/shared/src/conversation-widgets.ts,
+  packages/shared/test/conversation-widgets.test.ts (+1 línea en index.ts),
+  apps/desktop/.../toolcall-widgets.tsx, hunks en App.tsx/styles.css,
+  scripts/probe-task-14-playwright.cjs, .omo/evidence/.../task-14.{txt,png×2}.
+  Del Todo 13 (NO tocar): timeline.ts, chat-pagination/timeline tests, probe-13*,
+  task-13*; compartidos sucios por el 13: store.ts, main/index.ts, octus-core.ts,
+  ipc.ts, package.json/bun.lock. node_modules/ y out/ ignorados (gitignore).
+- flaky_tests: APLICABLE. conversation-widgets 14/14 en 2 vueltas; probe 20/20 en 2
+  vueltas; Playwright 33/33 en la vuelta final (3 intentos previos cayeron por orden
+  de modales, no por flakiness del producto; reordenado y verde).
+- k.txt/secretos/red/live-créditos: NO-APLICABLE (sin secretos tocados ni red;
+  fakes locales). Migraciones: NO-APLICABLE (cero cambios de esquema).
+
+============================================================
+4. LIMPIEZA TOTAL CON RECIBO
+============================================================
+
+$ git status --porcelain (filtrado node_modules): solo ficheros míos + del Todo 13
+  (listados en §3); ningún temporal mío en el repo.
+Fuera del repo: C:/tmp/octus-qa-14/probe.ts (sonda reutilizable, se conserva);
+  C:/tmp/octus-qa-14/root-test.log eliminado (transitorio).
+Sonda Playwright y bundle out/ reproducibles con: bun run build + node scripts/probe-task-14-playwright.cjs.
+Sin commit (no solicitado por el usuario; Hard Block). Recibo: este archivo +
+  task-14-toolcall.png (72720 B) + task-14-surface.png (93562 B) en
+  C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w10/.omo/evidence/octus-ux-skills-mcp/.
+
+============================================================
+5. COORDINACIÓN TODO 13 (constancia de solape)
+============================================================
+
+Rama compartida feat/ux-skills-mcp-w10-chat con trabajo sin commitear del Todo 13.
+No edité sus regiones (timeline/virtualización/composer/LiveView/cancel-notice) ni
+store.ts/main/ipc/octus-core. Toqué App.tsx solo en PartView/MessageView,
+QuestionDialogs, PermissionDialogs(atributo), PlansSection, AgentsSection y una
+línea de montaje en ChatView; styles.css solo con bloque propio al final.
+Si el Todo 13 reordena ChatView, los puntos de montaje (<RunErrorsSection />,
+<ModifiedFilesSection /> tras <PlansSection />) pueden necesitar rebase menor.
