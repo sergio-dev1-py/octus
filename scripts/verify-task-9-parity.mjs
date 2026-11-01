@@ -1,21 +1,30 @@
 // Todo 9 — paridad de la modularización (App.tsx + store.ts): sin display, solo exit codes.
-// PASS/FAIL por aserción: (1) API pública del store idéntica a HEAD,
-// (2) mismos componentes y selectores fijos en las vistas,
+// Uso: node scripts/verify-task-9-parity.mjs (también vale bun). Exit 0 = todo PASS.
+// PASS/FAIL por aserción: (1) API pública del store: superconjunto de la base,
+// (2) componentes de la base presentes y sus selectores id fijos preservados (superconjunto),
 // (3) cero imports circulares en renderer/src (store/ + views/).
+// BASE_REF es el último commit pre-partición (todos 6-8 aterrizados); se fija por hash para que el
+// chequeo sea estable en cualquier HEAD futuro (tras commitear la partición, HEAD ya es el shell
+// adelgazado y compararse contra él sería vacuo). Los ids ADICIONALES respecto a la base son
+// legítimos: paneles del workbench de los Todos 6-8 (sidebar, inspector, bottom, activities) y el
+// gate ?catalog=1 del Todo 7, ya presentes en la base y conservados por el particionado.
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 const WT = "C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w8";
 const R = WT + "/apps/desktop/src/renderer/src";
+// Último commit pre-partición (base de comparación inmutable del Todo 9).
+const BASE_REF = "2bc2dc9";
+const atBase = (p) => execSync(`git -C ${WT} show ${BASE_REF}:${p}`, { encoding: "utf8" });
 let failures = 0;
 const check = (name, cond, detail = "") => {
   console.log(`${cond ? "PASS" : "FAIL"} ${name}${detail ? " — " + detail : ""}`);
   if (!cond) failures++;
 };
 
-// 1. API pública del store: exports en HEAD vs fachada nueva
-const headStore = execSync(`git -C ${WT} show HEAD:apps/desktop/src/renderer/src/store.ts`, { encoding: "utf8" });
+// 1. API pública del store: exports de la base vs fachada nueva (superconjunto: la base no pierde nada)
+const headStore = atBase("apps/desktop/src/renderer/src/store.ts");
 const collectExports = (src) =>
   new Set(
     [...src.matchAll(/^export\s+(?:async\s+function|function|const|interface)\s+(\w+)|^export\s*\{\s*([^}]+?)\s*\}/gm)].flatMap((m) =>
@@ -30,8 +39,8 @@ const missing = [...headExports].filter((e) => !newExports.has(e));
 check("store: ningun export de HEAD se pierde", missing.length === 0, missing.length ? "perdidos: " + missing.join(",") : `${headExports.size} exports de HEAD presentes`);
 check("store: facade conserva la ruta ./store.js", fs.readFileSync(R + "/store.ts", "utf8").includes('export * from "./store/'));
 
-// 2. Paridad de vistas: componentes y selectores
-const headApp = execSync(`git -C ${WT} show HEAD:apps/desktop/src/renderer/src/App.tsx`, { encoding: "utf8" });
+// 2. Paridad de vistas: componentes y selectores (superconjunto sobre la base pre-partición)
+const headApp = atBase("apps/desktop/src/renderer/src/App.tsx");
 const headComps = new Set([...headApp.matchAll(/^function\s+(\w+)\s*\(/gm)].map((m) => m[1]));
 const viewFiles = ["App.tsx", ...fs.readdirSync(R + "/views").filter((f) => f.endsWith(".tsx")).map((f) => "views/" + f)];
 const viewSrc = viewFiles.map((f) => fs.readFileSync(R + "/" + f, "utf8")).join("\n");
@@ -40,10 +49,16 @@ const newComps = new Set(
 );
 const missingComps = [...headComps].filter((c) => !newComps.has(c));
 check("views: ningun componente de HEAD se pierde", missingComps.length === 0, missingComps.length ? "perdidos: " + missingComps.join(",") : `${headComps.size} componentes presentes`);
-const idsOf = (src) => [...src.matchAll(/id="([^"]+)"/g)].map((m) => m[1]).sort();
-const headIds = idsOf(headApp);
-const newIds = idsOf(viewSrc);
-check("views: mismos selectores id fijos", JSON.stringify(headIds) === JSON.stringify(newIds), `${headIds.length} ids en HEAD, ${newIds.length} tras partir`);
+const idsOf = (src) => [...src.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
+const count = (xs) => { const m = new Map(); for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1); return m; };
+const headIds = count(idsOf(headApp));
+const newIds = count(idsOf(viewSrc));
+const lostIds = [...headIds.entries()].filter(([id, n]) => (newIds.get(id) ?? 0) < n);
+check(
+  "views: ningun id fijo de la base se pierde (superconjunto)",
+  lostIds.length === 0,
+  lostIds.length ? "perdidos: " + lostIds.map(([id]) => id).join(",") : `${headIds.size} ids base presentes; ${newIds.size} totales tras partir`,
+);
 for (const needle of ['id="workbench"', 'id="composer"', 'message-timeline', 'id="layout-notice"', "CatalogView", "?catalog=1"]) {
   check(`views: marcador fijo presente (${needle})`, viewSrc.includes(needle));
 }
