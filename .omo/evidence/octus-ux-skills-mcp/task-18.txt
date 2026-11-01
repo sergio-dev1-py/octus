@@ -1,0 +1,106 @@
+TODO 18 - FUENTE DE VALIDACION DE SKILLS FIJADA
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 12, abre) | Rama: feat/ux-skills-mcp-w12-skills
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a1993f) | Commit: si (ver recibo abajo)
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w12
+
+============================================================
+1. FUENTE FIJADA (por escrito, sin formato propietario)
+============================================================
+Fuente exacta: https://agentskills.io/specification.md
+  Recuperada 2026-11-01 22:33 UTC, HTTP 200, 7655 bytes.
+  Cabecera Last-Modified: Sat, 31 Oct 2026 18:33:25 GMT.
+  La pagina NO expone `dateModified 2026-08-09` como versionado formal;
+  por eso se fija la URL + Last-Modified + hash de clausulas, no un numero
+  de version inventado.
+Validador de referencia citado por la propia spec (no vendorizado: requiere
+red; se implementan sus mismas clausulas offline):
+  https://github.com/agentskills/agentskills/tree/main/skills-ref
+  (`skills-ref validate ./my-skill` — "checks that your SKILL.md frontmatter
+  is valid and follows all naming conventions").
+
+Clausulas verificables fijadas (C1..C8, 1:1 con la spec), implementadas en
+scripts/validate-agent-skill.mjs (cabecera del script las cita):
+  C1 Estructura: directorio con SKILL.md ("Directory structure").
+  C2 Formato: frontmatter YAML entre `---` + cuerpo Markdown ("SKILL.md format").
+  C3 `name`: 1-64 chars, solo [a-z0-9-], sin `-` inicial/final ni `--` ("`name` field").
+  C4 `name` == nombre del directorio padre ("Must match the parent directory name").
+  C5 `description`: requerida, no vacia, 1-1024 chars ("`description` field").
+  C6 `compatibility` opcional: si presente, 1-500 chars.
+  C7 `metadata` opcional: si presente, mapa string->string.
+  C8 `allowed-tools` opcional: si presente, cadena separada por espacios.
+  (`license` libre segun spec; `version` vive en `metadata` arbitrario:
+  el fixture qa-skill declara metadata.version "1.0" como marcador @1.0.0.)
+
+Rationale si no hay red en el futuro: la lista C1..C8 de este archivo +
+la cabecera del script ES la fuente (clausulas copiadas verbatim de la spec
+recuperada arriba); no se inventa ningun campo ni restriccion extra.
+
+============================================================
+2. COMANDOS EXACTOS Y SALIDAS (script ejecutado de verdad, prohibido dry-run)
+============================================================
+Fixtures efimeros en C:/tmp/octus-qa-18 (eliminados tras la corrida; recibo §4).
+
+$ bun scripts/validate-agent-skill.mjs C:/tmp/octus-qa-18/qa-skill
+  (qa-skill/SKILL.md: name `qa-skill`, description 133 chars, license MIT,
+   metadata author/version; version "1.0" = marcador qa-skill@1.0.0)
+exit=0 out=PASS qa-skill (description 133 chars)
+
+$ bun scripts/validate-agent-skill.mjs C:/tmp/octus-qa-18/Bad_Name
+exit=1 out=FAIL C3 [name: 1-64 chars, [a-z0-9-], sin - inicial/final ni -- consecutivos]: `name` con caracteres fuera de [a-z0-9-]: "Bad_Name"
+
+$ bun scripts/validate-agent-skill.mjs C:/tmp/octus-qa-18/empty-desc
+exit=1 out=FAIL C5 [description: requerida, no vacia, 1-1024 chars]: `description` ausente o vacia
+
+$ bun scripts/validate-agent-skill.mjs C:/tmp/octus-qa-18/mismatch
+  (SKILL.md con name `other-name` dentro del directorio `mismatch`)
+exit=1 out=FAIL C4 [name == nombre del directorio]: `name`="other-name" != directorio "mismatch"
+
+$ bun scripts/validate-agent-skill.mjs   (sin args)
+exit=2 out=Uso: bun scripts/validate-agent-skill.mjs <dir-skill> [--json]
+
+Aserciones: happy exit 0 con PASS nominal; los 3 failure exit 1 citando la
+clausula (C3/C5/C4); uso exit 2. Criterio del plan cumplido: valida
+qa-skill@1.0.0 correcta y rechaza frontal con nombre invalido y descripcion
+vacia, mas el failure extra exigido (directorio != name -> C4).
+
+============================================================
+3. CLASES ADVERSARIALES
+============================================================
+APLICABLES (con resultado):
+  - Frontmatter adverso / nombre invalido: RECHAZADO (C3, exit 1, caso Bad_Name).
+  - Descripcion vacia / ausente: RECHAZADO (C5, exit 1, caso empty-desc).
+  - Suplantacion por directorio (name != dir): RECHAZADO (C4, exit 1, caso mismatch).
+NO-APLICABLES (con motivo):
+  - SSRF / red: el script solo lee disco local; la unica red fue el fetch manual
+    de lectura de la spec, sin enviar datos.
+  - Secretos en logs/evidencia: no hay secretos; los fixtures son datos fijos
+    publicos; este archivo no contiene claves.
+  - Ejecucion de codigo de la skill (scripts/): el validador NUNCA ejecuta
+    nada dentro del directorio validado, solo lee SKILL.md (C1 exige no
+    ejecutar al descubrir, Todo 20).
+  - Path traversal / zip-slip: fuera de alcance (esto es solo validacion de
+    formato; la instalacion desde zip es Todo 21 y su failure ya esta nombrado
+    alli); el script solo abre <dir>/SKILL.md sin seguir enlaces remotos.
+  - k.txt: jamas citado ni abierto (restriccion del goal cumplida; no existe
+    lectura de C:/Users/UserPy/Desktop/PromtHack/k.txt en esta sesion).
+
+============================================================
+4. LIMPIEZA TOTAL (recibo)
+============================================================
+$ rm -Force -Recurse C:/tmp/octus-qa-18
+Verificado: Test-Path C:/tmp/octus-qa-18 -> False (tras la corrida).
+En el worktree solo quedan: scripts/validate-agent-skill.mjs + este archivo
+de evidencia. Nada en C:/tmp, nada fuera del worktree.
+
+============================================================
+5. COMMIT
+============================================================
+Rama feat/ux-skills-mcp-w12-skills: add scripts/validate-agent-skill.mjs +
+.omo/evidence/octus-ux-skills-mcp/task-18.txt
+Mensaje: feat(skills): pinned agent skills validation source
+Rama feat/ux-skills-mcp-w12-skills: add scripts/validate-agent-skill.mjs +
+.omo/evidence/octus-ux-skills-mcp/task-18.txt
+Mensaje: feat(skills): pinned agent skills validation source
+Verificacion: `git log -1 --format='%H %s'` en el worktree muestra el commit
+con ese mensaje como HEAD de la rama (SHA autoevidente en el repo, no se
+duplica aqui para evitar auto-referencia tras amend).
