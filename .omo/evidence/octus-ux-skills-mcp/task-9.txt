@@ -1,0 +1,92 @@
+Todo 9 — Modularización de App.tsx y store.ts por responsabilidades · evidencia de verificación
+Fecha: 2026-11-01 · Rama: feat/ux-skills-mcp-w8-foundations · Base: 2bc2dc9 (todos 6, 7 y 8 intactos, sin revertir)
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w8
+
+TODO 9 LEÍDO COMPLETO ANTES DE EMPEZAR. api.ts leído (envoltorio tipado del puente IPC, 424 bytes, sin cambios).
+App.tsx (1803 líneas, 33 componentes) y store.ts (1086 líneas) leídos íntegros en esta rama.
+
+LÍNEA BASE (antes de editar, todo en verde — hallazgo: ninguno, se edita porque todo estaba verde)
+- `bun run --cwd packages/shared test` → 17 pass / 0 fail (ids + layout Todo 8 + prefs Todo 6)
+- `bun test packages/core/test/ui-prefs.test.ts packages/core/test/ui-layout.test.ts` → 4 pass / 0 fail
+- `bun run --cwd apps/desktop typecheck` → exit 0
+
+PARTICIÓN (código movido byte-exacto; script de partición con aserción de reconstrucción exacta = true en ambos archivos)
+store.ts (fachada, conserva la ruta "./store.js" y los 70 exports públicos) + store/:
+- store/state.ts — estado raíz: UIState, LiveMessage, createStore, state/setState, setView, setError
+- store/projects.ts — proyectos, sesiones, mensajes, proveedores, presupuestos, pendientes, uso, prompt, interrupt, perfil
+- store/plans.ts — planes, revisiones, aprobaciones humanas y agentes (incl. cancelAgent)
+- store/settings.ts — definiciones/límites de agentes y ajustes de proyecto
+- store/tasks.ts — tareas, dependencias, intentos y revisiones
+- store/worktrees.ts — worktrees y repositorio del proyecto
+- store/integrations.ts — integraciones, conflictos, validaciones, previews, aprobaciones, promociones
+- store/memory.ts — memorias visibles y reconciliación de recuperación
+- store/prefsLayout.ts — preferencias UI y layout persistente del workbench
+- store/events.ts — applyEvent (aplicación de eventos del core al estado)
+- store/bootstrap.ts — initStore y reloadStage2 (recargas compuestas)
+DAG de imports acíclico: state ← {settings, tasks, worktrees, plans} ← integrations ← memory; projects/session y events/bootstrap solo consumen hacia abajo.
+App.tsx (raíz: App + gate ?catalog=1 + atajos de teclado, sin cambios) + views/:
+- views/chat.tsx — PartView, MessageView, Composer, PermissionDialogs, QuestionDialogs, ChatView
+- views/workbench.tsx — ExplorerPanel, Activity*, Sidebar, InspectorPanel, BottomPanel, ResizeHandle
+- views/sections.tsx — Provider/BudgetSettings, Plans/Tasks/Worktrees/Integrations/Memory/AgentsSection
+- views/settings.tsx — Agent/Project/AppearanceSettings, SettingsView
+Sin cambios de comportamiento ni de APIs de eventos: solo reubicación + import/export.
+
+CHEQUEO CIRCULAR (integrado en scripts/verify-task-9-parity.mjs, 24 archivos de renderer/src)
+- ciclos: NONE. Criterio de reversión del Todo (circular nuevo → revertir) no activado.
+
+TYPECHECK
+- `bun run typecheck` (raíz: shared + core + desktop) → exit 0
+- Incidencias de partición durante el trabajo (resueltas, verificadas): import de valores de @octus/shared
+  capturado con regex al bloque de tipos (duplicados) → imports regenerados por intersección exacta con el bloque
+  real; LiveMessage vivía antes de UIState y se repuso en state.ts; ActivityId en App.tsx. Todo verde tras corregir.
+
+PARIDAD scripts/verify-task-9-parity.mjs → EXIT 0, ALL PASS
+- PASS store: ningun export de HEAD se pierde — 70 exports de HEAD presentes
+- PASS store: facade conserva la ruta ./store.js
+- PASS views: ningun componente de HEAD se pierde — 30 componentes presentes
+- PASS views: mismos selectores id fijos — 16 ids en HEAD, 16 tras partir
+- PASS views: marcador fijo presente (id="workbench")
+- PASS views: marcador fijo presente (id="composer")
+- PASS views: marcador fijo presente (message-timeline)
+- PASS views: marcador fijo presente (id="layout-notice")
+- PASS views: marcador fijo presente (CatalogView)
+- PASS views: marcador fijo presente (?catalog=1)
+- PASS imports: cero ciclos en renderer/src — 24 archivos
+- TASK-9 PARITY: ALL PASS
+(Rerun post-stash-pop por stale_state: typecheck desktop exit 0 + parity ALL PASS de nuevo.)
+
+SUITE RAÍZ `bun run test` (ventana programada ~340 s; duró 361 s la 1ª, 485 s la 2ª)
+- 1ª pasada: 238 pass / 1 fail — único fallo: etapa 5.2 J4 "task con dos predecesores escritores" (timeout 30000ms).
+- Repetición 1× extra (flaky_tests): 238 pass / 1 fail — el MISMO J4 con timeout 30002.01ms. Dispersión descartada.
+- Prueba decisiva en HEAD limpio (`git stash -u`, `bun test integration.test.ts -t "J4"`, `git stash pop`):
+  J4 falla IGUAL sin mis cambios (timeout 5001.69ms en filtro). HALLAZGO PREEXISTENTE/AMBIENTAL: se reporta,
+  no se edita. Justificación: el refactor toca SOLO apps/desktop/src/renderer/src + scripts/; ningún test de
+  core/shared importa el renderer (grep: cero refs salvo el nombre del test de layout); J4 hace git real pesado
+  en Temp y esta máquina i3 se degrada entre pasadas (361 s → 485 s). No bloquea el Todo 9: paridad 238/239 idéntica.
+- Nota: `bun test integration.test.ts` suelto (37 tests, fuera de la suite) muestra 30 fallos ambientales en cascada
+  (git en Temp, procesos colgados); solo es válido dentro de la suite completa. No se usa como señal.
+
+MANUAL-QA (smoke por paridad, sin display en esta máquina)
+- Ruta: scripts/verify-task-9-parity.mjs — PASS/FAIL por aserción sobre vistas y API. Resultado: ALL PASS (11/11).
+- Selectores fijos afirmados: #workbench, #composer, .message-timeline, #layout-notice, gate ?catalog=1 + 16 ids idénticos.
+
+CLASES ADVERSARIALES
+- stale_state: re-ejecutado typecheck desktop + parity tras el stash-pop final → ambos verdes.
+- misleading_success_output: solo se afirman exit codes (typecheck 0, parity 0, suite con colas reales).
+- dirty_worktree: entregables = App.tsx, store.ts, store/ (11), views/ (4), scripts/verify-task-9-parity.mjs,
+  este task-9.txt. Status final limpio tras commit (ver recibo).
+- flaky_tests: suite lenta repetida 1× extra; J4 determinista en dos pasadas → prueba en HEAD limpio.
+- cancel_resume: la suite se programó con ventana suficiente y archivo; la 1ª celda de suite perdió su notificación
+  y se relanzó con volcado a archivo para no afirmar nada sin evidencia.
+- Resto no-aplicable: sin secretos (no se abrió ni citó k.txt), sin red, sin cambios de conducta.
+
+ENTREGABLES (commit refactor(frontend): split App and store by responsibility)
+- M apps/desktop/src/renderer/src/App.tsx (de 1803 líneas a raíz de ~100)
+- M apps/desktop/src/renderer/src/store.ts (fachada export *)
+- NUEVO apps/desktop/src/renderer/src/store/*.ts (11 módulos) y views/*.tsx (4 vistas)
+- NUEVO scripts/verify-task-9-parity.mjs (paridad + circular, exit codes)
+- NUEVO .omo/evidence/octus-ux-skills-mcp/task-9.txt (este archivo)
+Limpieza: interim task-9-*.raw.txt eliminados tras plegar sus colas aquí.
+
+RECIBO DE LIMPIEZA
+- `git status --short` final: (limpio — solo el commit del Todo 9 sobre 2bc2dc9)
