@@ -1,0 +1,56 @@
+# Merge main (olas 7+9) into ola 8 — resolución del conflicto App.tsx / store.ts
+Fecha: 2026-11-01. Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w8
+Rama: feat/ux-skills-mcp-w8-foundations. Lado nuestro: 87535eb. Lado entrante: b9685f9.
+
+Estado inicial: índice con stages 1/2/3 en App.tsx y store.ts (UU), resto
+fusionado por git (main/index.ts, shared/ipc.ts, styles.css, core, scripts).
+Sin MERGE_HEAD en el gitdir del worktree: el cierre es commit normal.
+
+## Estrategia
+Nada de re-monolitizar. Cada pieza entrante se reubicó en su módulo:
+- store/state.ts: + sessionNotice?, welcomeError?, brokenProjectIds[] (+ init).
+- store/welcome.ts (NUEVO): setWelcomeError, markProjectBroken,
+  isProjectBroken, validateDirectory. Fachada store.ts lo reexporta.
+- store/projects.ts: refreshProjects/refreshSessions sin auto-selección,
+  refreshMessages con catch → sessionNotice, selectSession con guarda de
+  aislamiento por proyecto, createSession limpia notice, + dismissSessionNotice,
+  renameSession, closeSession (cierre + continuación explícita con la primera
+  restante), recoverActiveSession.
+- views/welcome.tsx (NUEVO): WelcomeView + pathsFromDrop + formatRecentDate,
+  verbatim del entrante, imports contra ../store.js y ./settings.jsx.
+- views/workbench.tsx: ExplorerPanel → #project-nav, #session-new,
+  #session-list, data-session-id/close; InspectorPanel → rename/close/recover
+  + estado de recuperación; imports closeSession/recoverActiveSession/
+  renameSession/reconcileRecovery.
+- views/chat.tsx: banner #session-notice + dismissSessionNotice.
+- App.tsx: raíz fina + <WelcomeView /> bajo #welcome-shell cuando no hay
+  proyecto activo (sin auto-selección). Sin cambios de conducta.
+- apps/desktop/scripts/welcome-task10-verify.ts (sección E): la ola 8 partió
+  el renderer, así que el contrato se verifica sobre el árbol unido
+  (App.tsx + views/*.tsx, store.ts + store/*.ts), igual que el parity de la
+  tarea 9. Ninguna aserción cambió; solo dónde se lee el fuente.
+
+No se tocó main/index.ts ni shared/ipc.ts (ya bien fusionados; canales
+sessions.get/rename/delete/recover y app.validateDirectory presentes).
+
+## Piezas entrantes verificadas una a una
+e6e8089 (welcome): WelcomeView+helpers, render condicional sin proyecto,
+welcomeError/brokenProjectIds, setWelcomeError/mark/isBroken/validateDirectory,
+no-auto-select en refreshProjects/refreshSessions/refreshMessages,
+app.pickDirectory+app.validateDirectory en main/ipc, estilos welcome. → TODAS reubicadas.
+aef7da9 (sesiones): guarda sessions.get en selectSession, dismissSessionNotice,
+createSession limpia notice, rename/close/recover, continuación explícita al
+cerrar la activa, banner sessionNotice, botones cerrar por sesión, panel
+inspector rename/recover, core octus-core.ts + test + ipc. → TODAS reubicadas.
+
+## Verificación (comandos y salidas, todo ejecutado en el worktree)
+1. `"C:\Users\UserPy\AppData\Roaming\npm\bun.cmd" run --cwd apps/desktop typecheck`
+   → exit 0 (tsc node + web, sin errores). Nota: un error intermedio propio
+   (`skippedEvents.length` donde el IPC tipa number) se corrigió al texto
+   exacto del entrante (`${result.skippedEvents}`); re-run exit 0.
+2. `node scripts/verify-task-9-parity.mjs` → exit 0, TASK-9 PARITY: ALL PASS
+   (70 exports, 30 componentes, 15 ids base presentes / 35 totales, 0 ciclos en 26 archivos).
+3. `bun test packages/shared/test/layout.test.ts packages/shared/test/prefs.test.ts packages/core/test/ui-layout.test.ts packages/core/test/ui-prefs.test.ts packages/core/test/session-management.test.ts`
+   → 23 pass, 0 fail (114 expects), exit 0.
+4. `bun apps/desktop/scripts/welcome-task10-verify.ts`
+   → TOTAL: 44 PASS, 0 FAIL, 0 SKIP, exit 0.

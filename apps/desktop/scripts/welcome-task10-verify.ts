@@ -123,8 +123,12 @@ for (let pass = 1; pass <= 2; pass++) {
 }
 
 // E. Aserciones sobre el contrato UI/IPC ------------------------------------
-const appTsx = src("apps/desktop/src/renderer/src/App.tsx");
-const storeTs = src("apps/desktop/src/renderer/src/store.ts");
+// La ola 8 partió el renderer por responsabilidad (App.tsx raíz fina, vistas en
+// views/, estado en store/ con fachada): el contrato se verifica sobre el árbol
+// unido, igual que scripts/verify-task-9-parity.mjs. Ninguna aserción cambia.
+const RR = "apps/desktop/src/renderer/src";
+const appTsx = [`${RR}/App.tsx`, `${RR}/views/welcome.tsx`, `${RR}/views/workbench.tsx`, `${RR}/views/chat.tsx`].map(src).join("\n");
+const storeTs = [`${RR}/store.ts`, ...fs.readdirSync(path.join(ROOT, RR, "store")).filter((f) => f.endsWith(".ts")).map((f) => `${RR}/store/${f}`)].map(src).join("\n");
 const mainTs = src("apps/desktop/src/main/index.ts");
 const ipcTs = src("packages/shared/src/ipc.ts");
 const css = src("apps/desktop/src/renderer/src/styles.css");
