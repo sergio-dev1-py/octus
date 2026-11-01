@@ -450,6 +450,73 @@ export class OctusCore {
     return rows.map(deserializeMessage);
   }
 
+  /**
+   * Recuperación de sesión (Todo 11, contrato C-02): lectura defensiva
+   * fila a fila sobre las mismas tablas (`messages`, `events`).
+   * Una fila corrupta se omite y el incidente queda registrado con el
+   * evento existente `error.raised` (agregado session): sesión vacía
+   * registrada, nunca pérdida silenciosa. Sin SessionManager duplicado,
+   * sin segunda jerarquía de persistencia; las filas corruptas se
+   * conservan para forense (no se borran).
+   */
+  async recoverSession(sessionId: string): Promise<{
+    session: Session;
+    messages: Message[];
+    recovered: boolean;
+    skippedMessages: string[];
+    skippedEvents: number;
+  }> {
+    const session = await this.requireSession(sessionId);
+    const rows = await this.db.query<Record<string, string | number | null>>(
+      "SELECT m.* FROM messages m JOIN runs r ON r.id = m.run_id WHERE m.session_id = ? ORDER BY r.created_at ASC, m.seq ASC",
+      [sessionId],
+    );
+    const messages: Message[] = [];
+    const skippedMessages: string[] = [];
+    for (const row of rows) {
+      try {
+        messages.push(deserializeMessage(row));
+      } catch {
+        skippedMessages.push(String(row.id ?? "?"));
+      }
+    }
+    // Eventos del agregado sesión: conteo defensivo sin deserializar de
+    // golpe (EventStore.listByAggregate abortaría en la primera fila corrupta).
+    let skippedEvents = 0;
+    try {
+      const eventRows = await this.db.query<Record<string, string | number | null>>(
+        "SELECT id, payload FROM events WHERE aggregate_kind = 'session' AND aggregate_id = ?",
+        [sessionId],
+      );
+      for (const row of eventRows) {
+        try {
+          JSON.parse(String(row.payload ?? "{}"));
+        } catch {
+          skippedEvents += 1;
+        }
+      }
+    } catch {
+      // Tabla ilegible: se registra como incidente sin tumbar la recuperación.
+      skippedEvents = -1;
+    }
+    const recovered = skippedMessages.length > 0 || skippedEvents !== 0;
+    if (recovered) {
+      const event = await this.events.append({
+        type: "error.raised",
+        aggregate: { kind: "session", id: sessionId },
+        correlationId: createId("cor"),
+        payload: {
+          reason: "session-recovery",
+          sessionId,
+          skippedMessages,
+          skippedEvents,
+        },
+      });
+      this.bus.publish(event);
+    }
+    return { session, messages, recovered, skippedMessages, skippedEvents };
+  }
+
   // ------------------------------------------------------------------ prompt / runs
   async prompt(
     sessionId: string,

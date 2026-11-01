@@ -80,6 +80,7 @@ interface UIState {
   budgetUsage: BudgetUsage[];
   usage: UsageRecord[];
   view: "chat" | "settings";
+  sessionNotice?: string;
   prefs: UiPrefs;
   layout: WorkbenchLayout;
   layoutNotice?: string;
@@ -89,6 +90,8 @@ interface UIState {
   approvals: ApprovalRequest[];
   agentInstances: AgentInstance[];
   definitions: AgentDefinition[];
+  welcomeError?: string;
+  brokenProjectIds: string[];
   agentLimits: { maxPerSession: number; maxPerProject: number; maxDepth: number };
   isolatedDirs: Array<{ id: string; path: string; realPath: string; kind: string; branch?: string }>;
   testAllowlist: Array<{ id: string; name: string; argv: string[] }>;
@@ -128,6 +131,7 @@ const [state, setState] = createStore<UIState>({
   budgetUsage: [],
   usage: [],
   view: "chat",
+  sessionNotice: undefined,
   prefs: { ...DEFAULT_UI_PREFS },
   layout: { ...DEFAULT_LAYOUT },
   layoutNotice: undefined,
@@ -136,6 +140,7 @@ const [state, setState] = createStore<UIState>({
   approvals: [],
   agentInstances: [],
   definitions: [],
+  brokenProjectIds: [],
   agentLimits: { maxPerSession: 4, maxPerProject: 6, maxDepth: 2 },
   isolatedDirs: [],
   testAllowlist: [],
@@ -170,11 +175,35 @@ export function setError(message?: string): void {
   setState("error", message);
 }
 
+// ---------------------------------------------------------------- bienvenida (Todo 10, F-1)
+// La bienvenida valida rutas en main (app.validateDirectory) y solo crea
+// proyectos con carpetas existentes y legibles; el error nunca crea nada.
+export function setWelcomeError(message?: string): void {
+  setState("welcomeError", message);
+}
+
+export function markProjectBroken(projectId: string): void {
+  if (!state.brokenProjectIds.includes(projectId)) {
+    setState("brokenProjectIds", [...state.brokenProjectIds, projectId]);
+  }
+}
+
+export function isProjectBroken(projectId: string): boolean {
+  return state.brokenProjectIds.includes(projectId);
+}
+
+export async function validateDirectory(path: string): Promise<{ ok: boolean; error?: string; realPath?: string }> {
+  return invoke("app.validateDirectory", { path });
+}
+
 async function refreshProjects(): Promise<void> {
   const { projects } = await invoke("projects.list", {});
   setState("projects", projects);
-  if (!state.activeProjectId && projects.length > 0) {
-    await selectProject(projects[0]!.id);
+  // Todo 10 (F-1): sin auto-selección al arrancar; la bienvenida decide.
+  if (state.activeProjectId && !projects.some((p) => p.id === state.activeProjectId)) {
+    setState("activeProjectId", undefined);
+    setState("activeSessionId", undefined);
+    setState("sessions", []);
   }
 }
 
@@ -189,9 +218,7 @@ async function refreshSessions(): Promise<void> {
     setState("activeSessionId", undefined);
     setState("messages", []);
   }
-  if (!state.activeSessionId && sessions.length > 0) {
-    await selectSession(sessions[0]!.id);
-  }
+  // Todo 10 (F-1/F-3): la sesión la elige el usuario (continuar o nueva); nada auto.
 }
 
 async function refreshMessages(): Promise<void> {
@@ -199,8 +226,15 @@ async function refreshMessages(): Promise<void> {
     setState("messages", []);
     return;
   }
-  const { messages } = await invoke("sessions.messages", { sessionId: state.activeSessionId });
-  setState("messages", messages);
+  try {
+    const { messages } = await invoke("sessions.messages", { sessionId: state.activeSessionId });
+    setState("messages", messages);
+  } catch {
+    // Lectura estricta rota (p. ej. fila corrupta): no se pierde la sesión;
+    // el banner ofrece la recuperación defensiva (Todo 11).
+    setState("messages", []);
+    setState("sessionNotice", "No se pudieron leer los mensajes (posible corrupción). Usa «Recuperar sesión» para degradar a sesión vacía registrada.");
+  }
 }
 
 async function refreshProviders(): Promise<void> {
@@ -255,7 +289,25 @@ export async function selectProject(projectId: string): Promise<void> {
   await refreshMemory();
 }
 
+export function dismissSessionNotice(): void {
+  setState("sessionNotice", undefined);
+}
+
 export async function selectSession(sessionId: string): Promise<void> {
+  // Guarda de aislamiento por proyecto (Todo 11): la sesión debe pertenecer
+  // al proyecto activo; el servidor ya filtra listSessions por proyecto.
+  if (state.activeProjectId) {
+    try {
+      const { session } = await invoke("sessions.get", { sessionId });
+      if (session.projectId !== state.activeProjectId) {
+        setError(`Session ${sessionId} does not belong to the active project`);
+        return;
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
   setState("activeSessionId", sessionId);
   setState("live", {});
   await Promise.all([refreshMessages(), refreshPending(), refreshUsage(), refreshPlans(), refreshApprovals(), refreshAgents(), refreshTasks(), refreshIntegrations(), refreshMemory()]);
@@ -270,8 +322,54 @@ export async function createProject(name: string, rootPath: string): Promise<voi
 export async function createSession(): Promise<void> {
   if (!state.activeProjectId) return;
   const { session } = await invoke("sessions.create", { projectId: state.activeProjectId });
+  setState("sessionNotice", undefined);
   await refreshSessions();
   await selectSession(session.id);
+}
+
+export async function renameSession(title: string): Promise<void> {
+  if (!state.activeSessionId || !title.trim()) return;
+  await invoke("sessions.rename", { sessionId: state.activeSessionId, title: title.trim() });
+  await refreshSessions();
+}
+
+export async function closeSession(sessionId?: string): Promise<void> {
+  const target = sessionId ?? state.activeSessionId;
+  if (!target) return;
+  setError(undefined);
+  setState("sessionNotice", undefined);
+  await invoke("sessions.delete", { sessionId: target });
+  const wasActive = target === state.activeSessionId;
+  if (wasActive) {
+    setState("activeSessionId", undefined);
+    setState("messages", []);
+    setState("live", {});
+  }
+  await refreshSessions();
+  // Sin auto-selección en refreshSessions (Todo 10): al cerrar la activa se
+  // continúa explícitamente con la primera restante del mismo proyecto.
+  if (wasActive && !state.activeSessionId && state.sessions.length > 0) {
+    await selectSession(state.sessions[0]!.id);
+  }
+}
+
+export async function recoverActiveSession(): Promise<void> {
+  if (!state.activeSessionId) return;
+  setError(undefined);
+  try {
+    const result = await invoke("sessions.recover", { sessionId: state.activeSessionId });
+    setState("messages", result.messages);
+    if (result.recovered) {
+      setState(
+        "sessionNotice",
+        `Sesión recuperada: ${result.skippedMessages.length} mensaje(s) y ${result.skippedEvents} evento(s) ilegibles omitidos. Incidente registrado (error.raised), filas conservadas.`,
+      );
+    } else {
+      setState("sessionNotice", "Sesión verificada: sin filas corruptas.");
+    }
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 export async function sendPrompt(text: string): Promise<void> {

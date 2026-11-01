@@ -1,0 +1,132 @@
+# Todo 10 — Bienvenida (W-01): 2026-11-01T20:59:28.613Z
+
+## welcome-task10-verify.ts (bun, ejecutado de verdad)
+
+```
+[PASS] fixture C:\tmp\octus-qa-proj existe — C:\tmp\octus-qa-proj
+[PASS] soltar carpeta válida (drop→validate) — {"ok":true,"realPath":"C:\\tmp\\octus-qa-proj"}
+[PASS] failure: carpeta inexistente → error — {"ok":false,"error":"not-found"}
+[PASS] failure: ruta no-carpeta → error — {"ok":false,"error":"not-directory"}
+[PASS] failure: drop vacío "" → error — {"ok":false,"error":"empty"}
+[PASS] failure: drop vacío "   " → error — {"ok":false,"error":"empty"}
+[PASS] failure: sin permiso bajo node (runtime de main) — {"ok":false,"error":"unreadable"}
+[PASS] pasada 1: arranque sin estado heredado — 0 proyectos
+[PASS] pasada 1: reciente con fecha — octus-qa-proj updatedAt=1/11/2026, 15:59:28
+[PASS] pasada 1: abrir proyecto existente — prj_69a9dd577a0a
+[PASS] pasada 1: crear sesión — ses_527117b511f2
+[PASS] pasada 1: continuar sesión — runs=0
+[PASS] pasada 1: failure sin crear proyecto — 1→1
+[PASS] pasada 2: arranque sin estado heredado — 0 proyectos
+[PASS] pasada 2: reciente con fecha — octus-qa-proj updatedAt=1/11/2026, 15:59:28
+[PASS] pasada 2: abrir proyecto existente — prj_07a5cbc8e7e4
+[PASS] pasada 2: crear sesión — ses_fa7a48e8c2c4
+[PASS] pasada 2: continuar sesión — runs=0
+[PASS] pasada 2: failure sin crear proyecto — 1→1
+[PASS] selector #welcome-dropzone presente — App.tsx
+[PASS] selector #welcome-pick presente — App.tsx
+[PASS] selector #welcome-recents presente — App.tsx
+[PASS] selector #welcome-continue presente — App.tsx
+[PASS] selector #welcome-new-session presente — App.tsx
+[PASS] selector #welcome-open presente — App.tsx
+[PASS] selector #welcome-create presente — App.tsx
+[PASS] selector #welcome-name presente — App.tsx
+[PASS] selector #welcome-settings presente — App.tsx
+[PASS] selector #welcome-error presente — App.tsx
+[PASS] selector #welcome-back presente — App.tsx
+[PASS] drop usa selector nativo app.pickDirectory — WelcomeView.pickNative
+[PASS] drop valida en main (app.validateDirectory) — store+main
+[PASS] recientes con fecha — lista + toLocaleString
+[PASS] continuar sesión desde bienvenida — continueLatest
+[PASS] acceso a configuración desde bienvenida — modo settings en welcome
+[PASS] sin auto-selección de proyecto — refreshProjects ya no auto-entra
+[PASS] sin auto-selección de sesión — refreshSessions ya no auto-entra
+[PASS] bienvenida decide al arrancar — App muestra Welcome sin proyecto
+[PASS] canal IPC tipado — OctusIPC
+[PASS] canal registrado en main — CHANNELS
+[PASS] IPC validado (payload + emisor) — registerIpc + handler
+[PASS] projects.create valida antes de crear — valida→crea
+[PASS] reciente roto se marca y deja elegir — F-1 fallo
+[PASS] estilos welcome solo con tokens — 2193 chars, literales=false
+---
+TOTAL: 44 PASS, 0 FAIL, 0 SKIP
+```
+
+## Comandos ejecutados (salidas reales)
+
+### `bun run typecheck` (raiz: shared + core + desktop) -> exit 0
+
+```
+$ bun run --cwd packages/shared typecheck && bun run --cwd packages/core typecheck && bun run --cwd apps/desktop typecheck
+$ tsc --noEmit
+$ tsc --noEmit
+$ tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json
+```
+
+### `bun test test/session-management.test.ts` x2 (conducta tocada) -> 3 pass, 0 fail en cada pasada
+
+```
+(pass) ciclo crear, cambiar, cerrar y recuperar con aislamiento por proyecto
+(pass) cerrar liquida runs activos y el reinicio recupera a estado final (continuable por mensaje)
+(pass) failure: recuperacion con evento corrupto -> sesion vacia registrada, sin perdida silenciosa
+3 pass, 0 fail, 28 expect() calls (x2 pasadas)
+```
+
+Nota: el fichero de sesion incluye el trabajo del Todo 11 (hermano, misma worktree):
+sigue en verde con mis cambios.
+
+### `bun run build` (apps/desktop) -> exit 0
+
+```
+out/main/index.js 1,970.81 kB | out/preload/index.cjs 0.65 kB
+out/renderer/index.html + assets (CSS 22.43 kB, JS 363.23 kB)
+[copy-assets] worker + definitions copiados
+```
+
+### `electron --octus-smoke` (perfil temporal) -> exit 0
+
+```
+[smoke] node:sqlite in main process: smoke-ok
+[smoke] safeStorage roundtrip ok
+[smoke] persistence worker roundtrip ok
+[smoke] budget gate blocks unconfigured paid calls ok
+[smoke] core boot + gate + clean auth failure ok
+[smoke] ALL OK
+```
+
+### GUI real `--octus-autoquit=12000` (perfil temporal vacio) -> exit 0
+
+0 = renderer cargo sin did-fail-load. Ruido GPU/disk-cache del entorno, sin efecto.
+`welcome-dropzone` presente en el bundle que arranco: 1 coincidencia.
+
+## MANUAL-QA de superficie real (ejecutado, no simulado)
+
+| # | Comprobacion | Resultado |
+| --- | --- | --- |
+| 1 | Build produce renderer con W-01 (`welcome-dropzone` en bundle) | PASS |
+| 2 | App arranca sin proyecto auto-seleccionado (perfil vacio, exit 0, sin pantalla en blanco) | PASS |
+| 3 | Soltar carpeta valida abre flujo crear/abrir (validador real sobre `C:\tmp\octus-qa-proj`) | PASS |
+| 4 | Dialogo nativo `app.pickDirectory` cableado en `#welcome-pick` | PASS |
+| 5 | Recientes con fecha (`updatedAt` formateada) y continuar sesion (core real, 2 pasadas) | PASS |
+| 6 | Crear proyecto + abrir + nueva/continuar sesion (core real, `C:\tmp\octus-qa-proj`) | PASS |
+| 7 | Carpeta inexistente / sin permiso / drop vacio -> error sin crear proyecto | PASS |
+| 8 | Acceso a Configuracion desde bienvenida (modo settings con `SettingsView`) | PASS |
+| 9 | Inspeccion visual pixel a pixel (sin herramienta de captura headless) | N/A: sin display automatizable; bundle + arranque + selectores verificados |
+
+## Clases adversariales
+
+| Clase | Tratamiento | Resultado |
+| --- | --- | --- |
+| stale_state | dataDirs frescos por pasada + arranque con 0 proyectos | PASS |
+| misleading_success_output | el script falla (exit 1) ante cualquier FAIL; typecheck/tests/build/smoke/GUI con exit 0 comprobado | PASS |
+| dirty_worktree | `git status`: solo mis 5 ficheros + 3 nuevos son del Todo 10; `octus-core.ts` y ficheros task-11 son del hermano (no tocados) | PASS con nota |
+| flaky_tests | sesion-management x2 + flujo funcional x2 (pasadas 1 y 2) en verde | PASS |
+| malformed_input | inexistente, sin permiso (node), no-carpeta, drop vacio x2: error sin crear | PASS |
+| resto | sin red, sin secretos, sin creditos live, sin concurrencia nueva | N/A con motivo |
+
+## Limpieza
+
+- Temporales `octus-smoke10-*`, `octus-gui10-*`, `octus-noperm-*`, `octus-test-*`: eliminados (0 restos en `%TEMP%`, verificado).
+- Proceso Electron huerfano del primer arranque (flag erroneo, PID 2628 + hijos): terminado; su `OCTUS_DATA_DIR` ya borrado.
+- Fixture `C:\tmp\octus-qa-proj`: eliminado tras verificar (ENOENT confirmado).
+- Perfil real `%APPDATA%\Electron\data\octus.db`: intacto (ultima escritura 30/10, anterior a este trabajo).
+- Sin commit (lo hara el orquestador al cerrar la ola).

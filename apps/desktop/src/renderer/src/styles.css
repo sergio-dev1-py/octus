@@ -487,3 +487,120 @@ code.muted {
   display: block;
   margin: var(--oc-space-2) 0;
 }
+
+/* Bienvenida W-01 (Todo 10): solo tokens var(--oc-*) / alias, sin literales. */
+#welcome-shell {
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+}
+
+#welcome {
+  width: 100%;
+  max-width: 720px;
+  margin: var(--oc-space-7) auto;
+  padding: var(--oc-pad);
+}
+
+.welcome-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--oc-radius-lg);
+  box-shadow: var(--oc-shadow-raised);
+  padding: var(--oc-space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-gap);
+}
+
+.welcome-head h1 {
+  font-size: var(--oc-text-xl);
+  margin: 0;
+}
+
+.welcome-head .muted,
+.muted {
+  color: var(--muted);
+  font-size: var(--oc-text-sm);
+}
+
+#welcome-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-gap);
+  background: var(--err-bg);
+  border: 1px solid var(--danger);
+  border-radius: var(--oc-radius-md);
+  padding: var(--oc-space-2) var(--oc-space-3);
+  font-size: var(--oc-text-sm);
+}
+
+#welcome-dropzone {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--oc-radius-lg);
+  background: var(--oc-panel-sunken);
+  padding: var(--oc-space-7);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--oc-text-base);
+}
+
+#welcome-dropzone.dragging {
+  border-color: var(--accent);
+  background: var(--oc-accent-wash);
+  color: var(--text);
+}
+
+.welcome-actions {
+  flex-wrap: wrap;
+}
+
+.welcome-create {
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-space-2);
+}
+
+#welcome-recents,
+.welcome-sessions {
+  list-style: none;
+  margin: var(--oc-space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-space-2);
+}
+
+#welcome-recents .recent {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--oc-space-1) var(--oc-space-3);
+  text-align: left;
+  align-items: baseline;
+}
+
+.recent-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.recent-path {
+ grid-column: 1 / -1;
+  font-size: var(--oc-text-xs);
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.recent-date {
+  font-size: var(--oc-text-xs);
+  color: var(--muted);
+}
+
+.recent-broken {
+  font-size: var(--oc-text-xs);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--oc-radius-pill);
+  padding: 0 var(--oc-space-2);
+}

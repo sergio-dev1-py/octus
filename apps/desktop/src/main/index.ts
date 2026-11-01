@@ -23,6 +23,7 @@ import {
   type StreamEvent,
 } from "@octus/shared";
 import { ElectronSecretStore } from "./secret-store.js";
+import { checkDirectoryReadable, directoryErrorMessage } from "./validate-directory.js";
 import { resolveDefinitionsDir, resolveWorkerPath } from "./worker-path.js";
 
 const CHANNELS: IpcChannel[] = [
@@ -32,6 +33,7 @@ const CHANNELS: IpcChannel[] = [
   "layout.set",
   "app.versions",
   "app.pickDirectory",
+  "app.validateDirectory",
   "projects.list",
   "projects.create",
   "sessions.list",
@@ -42,6 +44,7 @@ const CHANNELS: IpcChannel[] = [
   "sessions.setProfile",
   "sessions.setModel",
   "sessions.messages",
+  "sessions.recover",
   "sessions.prompt",
   "sessions.interrupt",
   "runs.get",
@@ -214,10 +217,21 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
       const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
       return { path: result.canceled ? undefined : result.filePaths[0] };
     },
+    // Todo 10: el drop del renderer solo propone rutas; main valida existencia
+    // y legibilidad y nunca lanza por casos de filesystem (responde ok:false).
+    "app.validateDirectory": async (payload) => {
+      if (typeof payload.path !== "string") throw new Error("invalid payload");
+      const check = checkDirectoryReadable(payload.path);
+      if (check.ok) return { ok: true as const, realPath: check.realPath };
+      return { ok: false as const, error: directoryErrorMessage(check) };
+    },
     "projects.list": async () => ({ projects: await need().listProjects() }),
     "projects.create": async (payload) => {
       if (!isNonEmptyString(payload.name) || !isNonEmptyString(payload.rootPath)) throw new Error("invalid payload");
-      return { project: await need().createProject(payload.name, payload.rootPath) };
+      // Todo 10 (failure): carpeta inexistente o sin permiso → error sin crear nada.
+      const check = checkDirectoryReadable(payload.rootPath);
+      if (!check.ok) throw new Error(directoryErrorMessage(check));
+      return { project: await need().createProject(payload.name.trim(), check.realPath) };
     },
     "sessions.list": async (payload) => ({ sessions: await need().listSessions(payload.projectId) }),
     "sessions.create": async (payload) => {
@@ -255,6 +269,10 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     "sessions.messages": async (payload) => {
       if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
       return { messages: await need().sessionMessages(payload.sessionId, payload.runId) };
+    },
+    "sessions.recover": async (payload) => {
+      if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
+      return need().recoverSession(payload.sessionId);
     },
     "sessions.prompt": async (payload) => {
       if (!isNonEmptyString(payload.sessionId) || typeof payload.text !== "string" || !payload.text.trim()) throw new Error("invalid payload");
