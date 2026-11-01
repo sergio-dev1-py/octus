@@ -51,6 +51,7 @@ import {
   selectSession,
   sendPrompt,
   setError,
+  setUiPrefs,
   setProfile,
   setView,
   setWorktreesRoot,
@@ -1041,7 +1042,7 @@ function ChatView() {
           </div>
         </Show>
       </header>
-      <div class="timeline">
+      <div class="timeline message-timeline">
         <For each={state.messages}>{(message) => <MessageView message={message} />}</For>
         <For each={Object.values(state.live)}>
           {(live) =>
@@ -1302,6 +1303,38 @@ function ProjectSettings() {
   );
 }
 
+function AppearanceSettings() {
+  return (
+    <section>
+      <h2>Appearance</h2>
+      <div class="row">
+        <label for="prefs-theme">Theme</label>
+        <select id="prefs-theme" value={state.prefs.theme} onChange={(e) => void setUiPrefs({ theme: e.currentTarget.value as "light" | "dark" | "system" })}>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="system">System</option>
+        </select>
+        <label for="prefs-density">Density</label>
+        <select id="prefs-density" value={state.prefs.density} onChange={(e) => void setUiPrefs({ density: e.currentTarget.value as "compact" | "normal" | "comfortable" })}>
+          <option value="compact">Compact</option>
+          <option value="normal">Normal</option>
+          <option value="comfortable">Comfortable</option>
+        </select>
+        <label for="prefs-font-size">Size</label>
+        <select id="prefs-font-size" value={state.prefs.fontSize} onChange={(e) => void setUiPrefs({ fontSize: Number(e.currentTarget.value) })}>
+          <option value="12">12</option>
+          <option value="13">13</option>
+          <option value="14">14</option>
+          <option value="15">15</option>
+          <option value="16">16</option>
+          <option value="17">17</option>
+          <option value="18">18</option>
+        </select>
+      </div>
+    </section>
+  );
+}
+
 function SettingsView() {
   return (
     <main class="settings-view">
@@ -1311,6 +1344,7 @@ function SettingsView() {
           <button onClick={() => setError(undefined)}>×</button>
         </div>
       </Show>
+      <AppearanceSettings />
       <ProviderSettings />
       <BudgetSettings />
       <AgentSettings />
@@ -1324,7 +1358,7 @@ export default function App() {
     void initStore().catch((error: unknown) => setError(error instanceof Error ? error.message : String(error)));
   });
   return (
-    <div class="app">
+    <div class="app" id="workbench">
       <Sidebar />
       <Show when={state.view === "chat"} fallback={<SettingsView />}>
         <ChatView />

@@ -9,6 +9,9 @@ import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "el
 import { OctusCore } from "@octus/core";
 import {
   IPC_EVENT_CHANNEL,
+  UI_PREFS_KEY,
+  isUiPrefs,
+  parseStoredUiPrefs,
   type CoreEvent,
   type IpcChannel,
   type IpcRequest,
@@ -20,6 +23,8 @@ import { ElectronSecretStore } from "./secret-store.js";
 import { resolveDefinitionsDir, resolveWorkerPath } from "./worker-path.js";
 
 const CHANNELS: IpcChannel[] = [
+  "prefs.get",
+  "prefs.set",
   "app.versions",
   "app.pickDirectory",
   "projects.list",
@@ -162,6 +167,20 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     return core;
   };
   return {
+    "prefs.get": async () => {
+      // Degradación del caso failure del Todo 6: kv ausente o corrupta → defecto, sin romper el arranque.
+      const row = await need().db.queryOne<{ value: string }>("SELECT value FROM kv WHERE key = ?", [UI_PREFS_KEY]).catch(() => null);
+      return { prefs: parseStoredUiPrefs(row?.value) };
+    },
+    "prefs.set": async (payload) => {
+      if (!isUiPrefs(payload.prefs)) throw new Error("invalid prefs");
+      await need().db.exec("INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", [
+        UI_PREFS_KEY,
+        JSON.stringify(payload.prefs),
+        Date.now(),
+      ]);
+      return { prefs: payload.prefs };
+    },
     "app.versions": async () => ({ octus: "0.1.0", electron: process.versions.electron ?? "", node: process.versions.node ?? "" }),
     "app.pickDirectory": async () => {
       const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });

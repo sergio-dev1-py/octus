@@ -45,6 +45,7 @@ import type {
   SavedPermissionRule,
 } from "./permissions.js";
 import type { Budget, BudgetUsage, UsageRecord } from "./costs.js";
+import type { UiPrefs } from "./prefs.js";
 
 export const IPC_EVENT_CHANNEL = "octus:event";
 
@@ -77,6 +78,8 @@ export interface ConfigureBudgetsRequest {
 
 /** Canal → { request, response }. */
 export interface OctusIPC {
+  "prefs.get": { request: Record<string, never>; response: { prefs: UiPrefs } };
+  "prefs.set": { request: { prefs: UiPrefs }; response: { prefs: UiPrefs } };
   "app.versions": { request: Record<string, never>; response: { octus: string; electron: string; node: string; bun?: string } };
   "app.pickDirectory": { request: Record<string, never>; response: { path?: string } };
   "projects.list": { request: Record<string, never>; response: { projects: Project[] } };

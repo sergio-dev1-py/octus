@@ -30,12 +30,15 @@ import type {
   Task,
   TaskDependency,
   TaskAttempt,
+  UiPrefs,
   UsageRecord,
   Validation,
   Worktree,
   WorktreeOperation,
 } from "@octus/shared";
+import { DEFAULT_UI_PREFS } from "@octus/shared";
 import { invoke, onEvent } from "./api.js";
+import { applyUiPrefs, loadUiPrefs, saveUiPrefs } from "./prefs.js";
 
 export interface LiveMessage {
   id: string;
@@ -61,6 +64,7 @@ interface UIState {
   budgetUsage: BudgetUsage[];
   usage: UsageRecord[];
   view: "chat" | "settings";
+  prefs: UiPrefs;
   error?: string;
   plans: Plan[];
   planRevisions: Record<string, PlanRevision[]>;
@@ -106,6 +110,7 @@ const [state, setState] = createStore<UIState>({
   budgetUsage: [],
   usage: [],
   view: "chat",
+  prefs: { ...DEFAULT_UI_PREFS },
   plans: [],
   planRevisions: {},
   approvals: [],
@@ -959,7 +964,23 @@ function applyEvent(event: CoreEvent): void {
   }
 }
 
+export async function setUiPrefs(patch: Partial<UiPrefs>): Promise<void> {
+  const next = { ...state.prefs, ...patch };
+  applyUiPrefs(next);
+  setState("prefs", next);
+  try {
+    const saved = await saveUiPrefs(next);
+    applyUiPrefs(saved);
+    setState("prefs", saved);
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 export async function initStore(): Promise<void> {
+  const prefs = await loadUiPrefs();
+  applyUiPrefs(prefs);
+  setState("prefs", prefs);
   onEvent(applyEvent);
   await refreshProjects();
   await refreshSessions();
