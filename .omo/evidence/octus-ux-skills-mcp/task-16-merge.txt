@@ -1,0 +1,49 @@
+TASK-16 MERGE — ola 11 (agents) + main (ola 10 chat) — worktree octus-wt-octus-ux-skills-mcp-w11
+Fecha: 2026-11-01 · Rama: feat/ux-skills-mcp-w11-agents · Merge de main@55b7cac (olas 7-10)
+
+CONFLICTOS (3 archivos, todos textuales sobre la misma estructura modular):
+1. apps/desktop/src/renderer/src/store/state.ts
+   - HEAD (ola 11): selectedRunId + runDetail (ficha via runs.get), import ToolCallRecord.
+   - main (ola 10): cancelReason + attachments + modelsByProvider, import ModelDescriptor
+     y `import type { ChatAttachment, LiveFrame } from "../timeline.js"`.
+   - Resolución UNIÓN: import conserva ToolCallRecord Y ModelDescriptor + timeline.js;
+     UIState y defaults conservan los 5 campos (selectedRunId, runDetail,
+     cancelReason, attachments, modelsByProvider). Sin re-monolitizar: tipos siguen
+     definidos en @octus/shared y timeline.ts.
+2. apps/desktop/src/renderer/src/store/projects.ts (selectSession)
+   - HEAD: setState("live", {}) + refreshRunDetail() en el Promise.all.
+   - main: setState("live", reconcile({})) + reset cancelReason/attachments, sin
+     refreshRunDetail (usa setState fusionado; {} no borra marcos → fantasma).
+   - Resolución UNIÓN: reconcile({}) + reset cancelReason/attachments + Promise.all
+     CON refreshRunDetail. Conserva anti-fantasma (ola 10) y ficha del run (ola 11).
+3. apps/desktop/src/renderer/src/styles.css
+   - HEAD: bloque agentes (#agent-dag, .dag-columns/column/node + estados ok/err/warn/muted).
+   - main: bloque toolcalls Todo 14 (.tc-card/toggle/dur/caret/body/label/artifact/error,
+     .err-list/.file-list/.err-item/.file-item/.err-msg, .q-timeout).
+   - Resolución CONCATENAR: bloque agents seguido del bloque toolcalls, sin literales
+     en ninguno (solo tokens var(--oc-*) / alias). Ninguna regla eliminada.
+
+RESTO DEL MERGE: auto-fusionado por git y conservado (staged): timeline.ts,
+toolcall-widgets.tsx, chat.tsx, sections.tsx, events.ts, main/index.ts,
+conversation-widgets.ts, chat-timeline.test.ts, chat-pagination.test.ts,
+verify-task-9-parity.mjs. Sin re-monolitizar: DAG/dagLogic/previews/conflictos/diff/
+historial siguen en sus módulos de ola 11; timeline virtualizado/widgets/paginación/
+cancelación en los suyos de ola 10.
+
+VERIFICACIÓN:
+- bun run --cwd apps/desktop typecheck → exit 0 (tsc node + web).
+- bun test layout+prefs+ui-layout+ui-prefs+session-management+task-graph+
+  conversation-widgets → 42 pass, 0 fail (176 expects).
+- bun test chat-timeline + chat-pagination + conversation-widgets → 21 pass, 0 fail.
+- bun test session-management + task-graph + chat-pagination + chat-timeline →
+  15 pass, 0 fail.
+- bun scripts/verify-task-16-agents.mjs → 31/31 OK.
+- bun scripts/verify-task-9-parity.mjs → TASK-9 PARITY: ALL PASS.
+- grep "<<<<<<< HEAD" en apps/packages/scripts → sin restos.
+- Nota: `bun test` completo a ciegas se colgó >10 min (sospecha: test e2e/red
+  colgado en esta máquina); se abortó tras verificar verdes todas las suites
+  exigidas. Recibo: sesión bash_7 terminada con kill_bash.
+
+SUPUESTOS: (a) la unión selectSession es la semántica querida por ambos lados;
+(b) ningún otro archivo fuera de los 3 en conflicto necesita ajuste manual
+(git los auto-fusionó y typecheck+verificadores lo confirman).

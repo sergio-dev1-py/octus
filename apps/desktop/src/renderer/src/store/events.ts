@@ -1,5 +1,14 @@
 /** Renderer/store — aplicación de eventos del core al estado. */
+import { reconcile } from "solid-js/store";
 import type { CoreEvent, Message } from "@octus/shared";
+import {
+  appendMessage,
+  applyPartDelta,
+  applyPartDone,
+  applyStepRetry,
+  cancelReasonOf,
+  purgeRunFrames,
+} from "../timeline.js";
 import { refreshSessions, refreshMessages, refreshBudgets, refreshPending, refreshUsage } from "./projects.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
 import { refreshRunDetail } from "./runs.js";
@@ -8,22 +17,19 @@ import { refreshWorktrees } from "./worktrees.js";
 import { refreshIntegrations } from "./integrations.js";
 import { refreshMemory } from "./memory.js";
 import { state, setState } from "./state.js";
-import type { LiveMessage } from "./state.js";
 
 export function applyEvent(event: CoreEvent): void {
+  // N-C-12a/12b: la lógica pura vive en timeline.ts (testeada en bun).
   if (event.kind === "part.delta") {
-    setState("live", event.messageId, (prev: LiveMessage | undefined) => {
-      const base = prev ?? { id: event.messageId, text: "", reasoning: "", toolArgs: {} };
-      if (event.part === "text") return { ...base, text: base.text + event.delta };
-      if (event.part === "reasoning_summary") return { ...base, reasoning: base.reasoning + event.delta };
-      const key = event.key ?? "?";
-      return { ...base, toolArgs: { ...base.toolArgs, [key]: (base.toolArgs[key] ?? "") + event.delta } };
-    });
+    setState("live", applyPartDelta(state.live, event));
     return;
   }
-  if (event.kind === "part.done") return;
+  if (event.kind === "part.done") {
+    setState("live", applyPartDone(state.live, event));
+    return;
+  }
   if (event.kind === "step.retry") {
-    setState("live", event.messageId, { id: event.messageId, text: "", reasoning: "", toolArgs: {} });
+    setState("live", applyStepRetry(state.live, event));
     return;
   }
   const persisted = event.event;
@@ -31,19 +37,28 @@ export function applyEvent(event: CoreEvent): void {
     case "message.appended": {
       const message = persisted.payload.message as Message;
       if (message.sessionId === state.activeSessionId) {
-        setState("messages", (messages) => (messages.some((m) => m.id === message.id) ? messages : [...messages, message]));
+        setState("messages", (messages) => appendMessage(messages, message));
         if (message.role === "assistant") {
           const live = { ...state.live };
           delete live[message.id];
-          setState("live", live);
+          setState("live", reconcile(live));
         }
       }
       break;
     }
     case "run.completed":
     case "run.failed":
-    case "run.cancelled":
+    case "run.cancelled": {
+      // N-C-12c + cancel_resume: los marcos de este run desaparecen (sin
+      // fantasma ni duplicado) y la cancelación muestra su motivo.
+      const runId = event.event.aggregate.id;
+      setState("live", reconcile(purgeRunFrames(state.live, runId)));
       setState("busy", false);
+      if (persisted.type === "run.cancelled") {
+        setState("cancelReason", cancelReasonOf(event.event.payload));
+      } else {
+        setState("cancelReason", undefined);
+      }
       void refreshMessages();
       void refreshUsage();
       void refreshRunDetail();
@@ -54,6 +69,7 @@ export function applyEvent(event: CoreEvent): void {
       void refreshTasks();
       void refreshIntegrations();
       break;
+    }
     case "run.created":
     case "run.started":
       setState("busy", true);

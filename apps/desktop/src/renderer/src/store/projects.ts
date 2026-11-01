@@ -1,5 +1,13 @@
 /** Renderer/store — proyectos, sesiones, mensajes, proveedores, presupuestos y prompts. */
+import { reconcile } from "solid-js/store";
 import { invoke } from "../api.js";
+import {
+  TIMELINE_MAX_ATTACHMENT_BYTES,
+  TIMELINE_MAX_ATTACHMENTS,
+  TIMELINE_PAGE,
+  buildPromptText,
+  type ChatAttachment,
+} from "../timeline.js";
 import { setError, state, setState } from "./state.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
 import { refreshRunDetail } from "./runs.js";
@@ -34,14 +42,22 @@ export async function refreshSessions(): Promise<void> {
   // Todo 10 (F-1/F-3): la sesión la elige el usuario (continuar o nueva); nada auto.
 }
 
+/** Ventana inicial del timeline (N-C-06): últimos TIMELINE_PAGE + totales. */
 export async function refreshMessages(): Promise<void> {
   if (!state.activeSessionId) {
     setState("messages", []);
+    setState("timelineTotal", 0);
+    setState("timelineHasOlder", false);
     return;
   }
   try {
-    const { messages } = await invoke("sessions.messages", { sessionId: state.activeSessionId });
+    const { messages, total, hasOlder } = await invoke("sessions.messages", {
+      sessionId: state.activeSessionId,
+      limit: TIMELINE_PAGE,
+    });
     setState("messages", messages);
+    setState("timelineTotal", total ?? messages.length);
+    setState("timelineHasOlder", hasOlder ?? false);
   } catch {
     // Lectura estricta rota (p. ej. fila corrupta): no se pierde la sesión;
     // el banner ofrece la recuperación defensiva (Todo 11).
@@ -122,7 +138,10 @@ export async function selectSession(sessionId: string): Promise<void> {
     }
   }
   setState("activeSessionId", sessionId);
-  setState("live", {});
+  // reconcile: setState fusiona y un {} no borraría marcos viejos (fantasma).
+  setState("live", reconcile({}));
+  setState("cancelReason", undefined);
+  setState("attachments", []);
   await Promise.all([refreshMessages(), refreshPending(), refreshUsage(), refreshRunDetail(), refreshPlans(), refreshApprovals(), refreshAgents(), refreshTasks(), refreshIntegrations(), refreshMemory()]);
 }
 
@@ -156,7 +175,11 @@ export async function closeSession(sessionId?: string): Promise<void> {
   if (wasActive) {
     setState("activeSessionId", undefined);
     setState("messages", []);
-    setState("live", {});
+    setState("live", reconcile({}));
+    setState("cancelReason", undefined);
+    setState("attachments", []);
+    setState("timelineTotal", 0);
+    setState("timelineHasOlder", false);
   }
   await refreshSessions();
   // Sin auto-selección en refreshSessions (Todo 10): al cerrar la activa se
@@ -172,6 +195,8 @@ export async function recoverActiveSession(): Promise<void> {
   try {
     const result = await invoke("sessions.recover", { sessionId: state.activeSessionId });
     setState("messages", result.messages);
+    setState("timelineTotal", result.messages.length);
+    setState("timelineHasOlder", false);
     if (result.recovered) {
       setState(
         "sessionNotice",
@@ -185,12 +210,93 @@ export async function recoverActiveSession(): Promise<void> {
   }
 }
 
+/** Carga la página anterior del historial delante de lo visible (N-C-06). */
+export async function loadOlderMessages(): Promise<void> {
+  if (!state.activeSessionId || !state.timelineHasOlder || state.messages.length === 0) return;
+  setError(undefined);
+  try {
+    const firstId = state.messages[0]!.id;
+    const { messages, total, hasOlder } = await invoke("sessions.messages", {
+      sessionId: state.activeSessionId,
+      limit: TIMELINE_PAGE,
+      beforeId: firstId,
+    });
+    const known = new Set(state.messages.map((m) => m.id));
+    const fresh = messages.filter((m) => !known.has(m.id));
+    setState("messages", [...fresh, ...state.messages]);
+    setState("timelineTotal", total ?? state.timelineTotal);
+    setState("timelineHasOlder", hasOlder ?? false);
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export function dismissCancelNotice(): void {
+  setState("cancelReason", undefined);
+}
+
+/** Adjunta archivos de texto al composer (se en línea en el prompt, sin IPC nuevo). */
+export async function addAttachments(files: FileList | File[]): Promise<void> {
+  setError(undefined);
+  const list = Array.from(files);
+  const room = TIMELINE_MAX_ATTACHMENTS - state.attachments.length;
+  if (list.length > room) {
+    setError(`Como máximo ${TIMELINE_MAX_ATTACHMENTS} adjuntos por mensaje`);
+    return;
+  }
+  const next: ChatAttachment[] = [];
+  for (const file of list) {
+    if (file.size > TIMELINE_MAX_ATTACHMENT_BYTES) {
+      setError(`«${file.name}» supera ${TIMELINE_MAX_ATTACHMENT_BYTES / 1024} KB`);
+      return;
+    }
+    try {
+      const text = await file.text();
+      next.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: file.name, size: file.size, text });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
+  setState("attachments", [...state.attachments, ...next]);
+}
+
+export function removeAttachment(id: string): void {
+  setState("attachments", state.attachments.filter((a) => a.id !== id));
+}
+
+/** Selector de modelos sobre canales existentes (sessions.setModel). */
+export async function loadModels(providerId: string): Promise<void> {
+  if (state.modelsByProvider[providerId]) return;
+  try {
+    const { models } = await invoke("providers.models", { providerId });
+    setState("modelsByProvider", { ...state.modelsByProvider, [providerId]: models });
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function setSessionModel(model: { providerId: string; modelId: string }): Promise<void> {
+  if (!state.activeSessionId) return;
+  setError(undefined);
+  try {
+    const result = await invoke("sessions.setModel", { sessionId: state.activeSessionId, model });
+    if (!result.ok) setError(result.error ?? "Could not set model");
+    else await refreshSessions();
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 export async function sendPrompt(text: string): Promise<void> {
   if (!state.activeSessionId || !text.trim()) return;
   setError(undefined);
   setState("busy", true);
+  setState("cancelReason", undefined);
+  const full = buildPromptText(text, state.attachments);
   try {
-    await invoke("sessions.prompt", { sessionId: state.activeSessionId, text });
+    await invoke("sessions.prompt", { sessionId: state.activeSessionId, text: full });
+    setState("attachments", []);
   } catch (error) {
     setState("busy", false);
     setError(error instanceof Error ? error.message : String(error));

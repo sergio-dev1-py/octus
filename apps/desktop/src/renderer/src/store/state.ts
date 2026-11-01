@@ -1,14 +1,12 @@
 /** Renderer/store — estado raíz, tipos de UI y banderas globales. */
 import { DEFAULT_LAYOUT, DEFAULT_UI_PREFS } from "@octus/shared";
 import { createStore } from "solid-js/store";
-import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
+import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
+import type { ChatAttachment, LiveFrame } from "../timeline.js";
 
-export interface LiveMessage {
-  id: string;
-  text: string;
-  reasoning: string;
-  toolArgs: Record<string, string>;
-}
+/** Marco de streaming visible (Todo 13, N-C-12a/12b): forma pura en timeline.ts. */
+export type LiveMessage = LiveFrame;
+export type { ChatAttachment };
 
 
 interface UIState {
@@ -20,6 +18,9 @@ interface UIState {
   runs: Run[];
   busy: boolean;
   live: Record<string, LiveMessage>;
+  /** Ventana cargada del historial (N-C-06): el timeline solo pinta lo cargado. */
+  timelineTotal: number;
+  timelineHasOlder: boolean;
   permissions: PermissionRequest[];
   questions: QuestionRequest[];
   providers: ProviderDescriptor[];
@@ -30,6 +31,12 @@ interface UIState {
   /** Todo 16 — run seleccionado en la vista de agentes y su ficha (runs.get). */
   selectedRunId?: string;
   runDetail?: { run: Run; instances: AgentInstance[]; toolCalls: ToolCallRecord[] };
+  /** Motivo de la última cancelación visible (N-C-12c). */
+  cancelReason?: string;
+  /** Adjuntos del composer pendientes de envío (N-C-13). */
+  attachments: ChatAttachment[];
+  /** Modelos por proveedor para el selector (caché de providers.models). */
+  modelsByProvider: Record<string, ModelDescriptor[]>;
   view: "chat" | "settings";
   sessionNotice?: string;
   welcomeError?: string;
@@ -74,6 +81,8 @@ const [state, setState] = createStore<UIState>({
   runs: [],
   busy: false,
   live: {},
+  timelineTotal: 0,
+  timelineHasOlder: false,
   permissions: [],
   questions: [],
   providers: [],
@@ -83,6 +92,9 @@ const [state, setState] = createStore<UIState>({
   usage: [],
   selectedRunId: undefined,
   runDetail: undefined,
+  cancelReason: undefined,
+  attachments: [],
+  modelsByProvider: {},
   view: "chat",
   sessionNotice: undefined,
   brokenProjectIds: [],

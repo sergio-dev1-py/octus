@@ -2,6 +2,7 @@
 import { For, Show, createSignal } from "solid-js";
 import { invoke } from "../api.js";
 import { renderMarkdown } from "../markdown.js";
+import { orderedApprovals, revisionGate } from "../toolcall-widgets.jsx";
 import {
   abortConflict,
   abortIntegration,
@@ -212,20 +213,26 @@ export function PlansSection() {
       <Show when={state.approvals.length > 0}>
         <div class="card warn">
           <h3>Pending approvals (only you can decide)</h3>
-          <For each={state.approvals}>
-            {(request) => (
-              <div class="row">
-                <code>
-                  {request.planId} · {request.revisionId}
-                </code>
-                <button class="primary" onClick={() => void decideApproval(request.id, "approved")}>
-                  Approve
-                </button>
-                <button class="danger" onClick={() => void decideApproval(request.id, "rejected")}>
-                  Reject
-                </button>
-              </div>
-            )}
+          <For each={orderedApprovals()}>
+            {(request) => {
+              const gate = () => revisionGate(request.planId, request.revisionId);
+              return (
+                <div class="row" data-approval-request={request.id} data-approval-status={request.status}>
+                  <code>
+                    {request.planId} · {request.revisionId}
+                  </code>
+                  <span class="muted" data-approval-gate>
+                    {gate().decidable ? "Solo tú puedes decidir (ningún modelo aprueba)" : gate().reason}
+                  </span>
+                  <button class="primary" disabled={!gate().decidable} title={gate().reason} onClick={() => void decideApproval(request.id, "approved")}>
+                    Approve
+                  </button>
+                  <button class="danger" disabled={!gate().decidable} title={gate().reason} onClick={() => void decideApproval(request.id, "rejected")}>
+                    Reject
+                  </button>
+                </div>
+              );
+            }}
           </For>
         </div>
       </Show>
@@ -255,13 +262,18 @@ export function PlansSection() {
                     <div class="md" innerHTML={renderMarkdown(revision.contentMarkdown.slice(0, 8000))} />
                   </details>
                   <div class="row">
-                    <Show when={revision.lifecycle === "presented" && revision.approval === "pending"}>
+                    <Show when={revisionGate(plan.id, revision.id).decidable}>
                       <button class="primary" onClick={() => void approveRevision(plan.id, revision.id)}>
                         Approve v{revision.version}
                       </button>
                       <button class="danger" onClick={() => void rejectRevision(plan.id, revision.id)}>
                         Reject
                       </button>
+                    </Show>
+                    <Show when={state.approvals.some((entry) => entry.revisionId === revision.id && entry.status === "pending")}>
+                      <span class="muted" data-approval-pending={revision.id}>
+                        Awaiting your decision — ningún modelo puede aprobar.
+                      </span>
                     </Show>
                     <Show when={plan.approvedRevisionId === revision.id}>
                       <button onClick={() => void implementRevision(plan.id, revision.id)}>Implement this approved revision</button>
@@ -753,7 +765,7 @@ export function MemorySection() {
 
 export function AgentsSection() {  const active = () => state.agentInstances.filter((i) => ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
   return (
-    <details class="stage2">
+    <details class="stage2" id="agent-activity">
       <summary>
         Agents ({active().length} active / {state.agentInstances.length} total)
       </summary>
@@ -762,15 +774,24 @@ export function AgentsSection() {  const active = () => state.agentInstances.fil
       </Show>
       <For each={state.agentInstances}>
         {(instance) => (
-          <div class="card">
+          <div class="card" data-agent-instance={instance.id}>
             <div class="row">
               <code>{instance.definitionId}</code>
-              <span class={`pill ${instance.status === "completed" ? "ok" : instance.status === "failed" ? "err" : "warn"}`}>{instance.status}</span>
+              <span
+                class={`pill ${instance.status === "completed" ? "ok" : instance.status === "failed" ? "err" : instance.status === "cancelled" ? "" : "warn"}`}
+                data-agent-status={instance.status}
+              >
+                {instance.status}
+              </span>
               <code class="muted">{instance.id}</code>
             </div>
             <p class="muted">
               {instance.directory}
+              <Show when={instance.taskId}> · task {instance.taskId}</Show>
+              <Show when={instance.worktreeId}> · worktree {instance.worktreeId}</Show>
               <Show when={instance.parentInstanceId}> · parent {instance.parentInstanceId}</Show>
+              <Show when={instance.status === "waiting_permission"}> · esperando tu permiso</Show>
+              <Show when={instance.status === "waiting_input"}> · esperando tu respuesta</Show>
               <Show when={instance.error}> · error: {instance.error}</Show>
             </p>
             <Show when={["created", "running", "waiting_permission", "waiting_input"].includes(instance.status)}>
