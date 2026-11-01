@@ -1,0 +1,141 @@
+TODO 4 - ESPECIFICACION DE CONVERSACIONES, AGENT MANAGER, SKILLS Y MCP A NIVEL UX
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 7) | Rama: feat/ux-skills-mcp-w7-design
+Fecha: 2026-11-01 | Ejecutor: agente (st_01a1989d)
+Entregable: .harness/design/ux-conversation-agent-skills-mcp.md (especificacion, sin codigo)
+
+============================================================
+1. COMANDOS EXACTOS Y SALIDAS
+============================================================
+
+$ bun "C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w7/scripts/check-doc-refs.ts"
+EXIT 0
+check-doc-refs: OK (fantasmas ausentes: 6, anclas presentes: 11, archivos barridos: 169)
+
+TRAZA WIDGET A RESPALDO (lectura directa del arbol, 2026-11-01):
+43/43 respaldos EXISTE verificados por presencia literal del simbolo:
+- events.ts: PartDeltaEvent, PartDoneEvent, StepRetryEvent, tool_call.requested,
+  question.asked, question.replied, error.raised, approval.requested,
+  plan.revision_presented, agent_instance.status_changed, run.status_changed,
+  worktree.status_changed, integration.conflict_opened, provider.usage_recorded,
+  budget.exceeded (15/15).
+- domain.ts: ToolCallRecord con los 6 estados, ReasoningSummaryPart, Artifact,
+  TaskBlockedReason (4/4).
+- ipc.ts: sessions.messages, sessions.interrupt, sessions.setModel, runs.get,
+  runs.usage, questions.pending, questions.reply, permissions.pending,
+  permissions.reply, approvals.pending, approvals.decide, approvals.approve,
+  plans.approve, agents.instances, agents.cancel, tasks.list, tasks.get,
+  tasks.retry, tasks.review, worktrees.list, worktrees.get, worktrees.cleanup,
+  validations.list, previews.inspect, conflicts.finalize, promotions.promote,
+  budgets.status (canales verificados por nombre).
+- core: QuestionService (clase), task-graph.ts (adjacency, detectCycle,
+  orderTasks, isDependencySatisfied), worktree-manager.getWorktreeDiff,
+  SecretStore (interfaz en core) + safeStorage (desktop main).
+- App.tsx: Composer, QuestionDialogs, AgentsSection (existen); sin vista de
+  diff (grep "diff" vacio salvo comentarios), lo que justifica N-A-DIFF-1.
+AUSENCIAS QUE JUSTIFICAN CONTRATOS NUEVOS (verificado, no supuesto):
+- ipc.ts no declara ningun canal "diff" ni "artifact" (grep de canales: false).
+  Justifica N-C-03 (lectura de artifacts), N-C-05 (archivos y diff) y
+  N-A-DIFF-1 (canal worktrees.diff; el productor getWorktreeDiff ya existe).
+- Sin SkillManager ni MCP Client Manager en el arbol (TREE_AUTHORITY.md).
+  Justifica N-SK-01 a N-SK-05 y N-MCP-01 a N-MCP-05.
+
+$ git -C "<worktree>" status --short (recibo final, ver seccion 4)
+?? .harness/design/
+?? .harness/implementation/QUARANTINE.md
+?? .harness/implementation/TREE_AUTHORITY.md
+?? .omo/evidence/octus-ux-skills-mcp/task-1.txt
+?? apps/desktop/src/renderer/src/design/
+?? scripts/
+(El worktree se comparte con los Todos 2 y 3 en paralelo; mis entregables son
+solo .harness/design/ux-conversation-agent-skills-mcp.md y este archivo.)
+
+============================================================
+2. MANUAL QA - CHECKLIST FIRMADO (lectura contra IS-3, IS-4, IS-5 e IS-6)
+============================================================
+
+IS-3 (chat con markdown, codigo, streaming, tool calls, planes, aprobaciones,
+preguntas, actividad y errores, sin jank):
+QA-1. Cada estado de conversacion tiene especificacion con datos fijos. PASS
+      (W-C1 a W-C15, fixture ses_qa01/run_qa01/msg_qa01/msg_qa02/tc_qa01/que_qa01.)
+QA-2. El streaming traza a part.delta/part.done/step.retry y la cancelacion a
+      sessions.interrupt (boton ya existente en App.tsx:182). PASS.
+QA-3. Tool calls con los 6 estados reales de ToolCallRecord; resultado largo va
+      a artifact con contrato nuevo N-C-03 en vez de inventarse. PASS.
+QA-4. Planes, aprobaciones y preguntas trazan a plans.*, approvals.*,
+      questions.* y QuestionService; solo humanos deciden. PASS.
+QA-5. Anti-jank con criterio: W-C14 virtualizada + N-C-06 (paginacion por seq,
+      2 000 mensajes como cifra para el Todo 5). PASS.
+IS-4 (Agent Manager con datos reales):
+QA-6. Agentes, tareas, DAG, runs y worktrees trazan a agents.*, tasks.*,
+      runs.*, worktrees.* y a task-graph.ts (adjacency, detectCycle,
+      orderTasks); selector #agent-dag nombrado. PASS.
+QA-7. Revisiones, previews, conflictos y promocion con SHA trazan a
+      validations.*, previews.*, conflicts.*, approvals.approve y
+      promotions.*; el diff va a N-A-DIFF-1 con productor existente
+      (getWorktreeDiff), no a un servicio inventado. PASS.
+QA-8. Sin agentes ficticios ni progreso inventado: el run cancelado muestra su
+      estado final real (seccion W-A4). PASS.
+IS-5 (Skills, instalada frente a habilitada):
+QA-9. Cada pantalla distingue instalada de habilitada con el invariante "una
+      skill instalada pero deshabilitada nunca llega al contexto". PASS
+      (W-S2, fixture qa-skill habilitada frente a old-helper deshabilitada).
+QA-10. Errores de validacion visibles que bloquean habilitar (W-S4,
+      broken-skill sin name). PASS.
+QA-11. Todo widget Skills traza a N-SK-01..05 nombrados; sin formato
+      propietario; validacion pendiente del Todo 18 sin inventarse. PASS.
+IS-6 (MCP, configurado frente a conectado frente a autorizado):
+QA-12. Los tres estados siempre visibles y distintos, con la puerta de
+      confianza antes de cualquier conexion (W-M3, mcp-qa-http conectado pero
+      no autorizado: herramientas ocultas). PASS.
+QA-13. Herramientas aisladas servidor:herramienta via ToolGateway, recursos y
+      prompts con aprobacion, secretos solo en almacen del SO (SecretStore +
+      safeStorage verificados). PASS (W-M4 a W-M6).
+QA-14. Sin SSE legado; configurar remoto nunca se llama instalar. PASS.
+TRANSVERSAL:
+QA-15. Tabla de trazabilidad sin filas vacias: 15 widgets de conversacion, 6 de
+      Agent Manager, 7 de Skills, 6 de MCP, cada uno con respaldo EXISTE o
+      contrato N-* obligatorio. PASS (seccion 5 del entregable, 43/43
+      verificados en seccion 1).
+QA-16. Escenario de fallo aplicado: el diff y los artifacts pedian eventos
+      inexistentes y se marcaron como contratos nuevos obligatorios N-C-03,
+      N-C-05 y N-A-DIFF-1 en vez de aceptarse. PASS.
+QA-17. Sin secretos citados ni copiados (k.txt nunca abierto). PASS.
+QA-18. Sin cambios en codigo productivo (solo el .md de diseno y esta
+      evidencia). PASS.
+
+============================================================
+3. CLASES ADVERSARIALES (9 ultraqa)
+============================================================
+
+- stale_state: APLICABLE. Marcas re-validadas contra el arbol en esta sesion:
+  check-doc-refs re-ejecutado tras escribir el .md (EXIT 0, 169 archivos) y
+  43 respaldos verificados por lectura directa (salidas en seccion 1).
+- misleading_success_output: APLICABLE. Prohibido afirmar por memoria: cada
+  respaldo EXISTE se afirma por presencia literal del simbolo (43/43) y cada
+  ausencia por grep negativo (canales diff/artifact: false).
+- dirty_worktree: APLICABLE. El worktree se comparte con los Todos 2 y 3;
+  mis entregables son exactamente 2 archivos nuevos
+  (.harness/design/ux-conversation-agent-skills-mcp.md y task-4.txt); sin
+  procesos, puertos ni temporales en pie.
+- hung_or_long_commands: NO APLICA. Ningun comando supero segundos; todo fue
+  lectura de archivos y un script de barrido.
+- flaky_tests: NO APLICA. Sin tests con tiempo, red ni concurrencia; la
+  verificacion es lectura determinista.
+- cancel_resume: NO APLICA. Sin cancelaciones ni reanudaciones.
+- malformed_input: NO APLICA. La especificacion no recibe entrada externa;
+  el fixture qa-* es de diseno y se retira en las olas 10 a 13.
+- prompt_injection: NO APLICA como trigger. Los documentos y el codigo se
+  trataron como datos; ninguna instruccion hallada en ellos se siguio.
+- repeated_interruptions: NO APLICA. Ejecucion sin interrupciones.
+
+============================================================
+4. RECIBO DE LIMPIEZA
+============================================================
+
+Archivos nuevos de este Todo (2):
+- .harness/design/ux-conversation-agent-skills-mcp.md (especificacion)
+- .omo/evidence/octus-ux-skills-mcp/task-4.txt (este archivo)
+Ningun proceso en segundo plano, ningun puerto, ningun archivo temporal:
+toda la verificacion fue lectura + `bun scripts/check-doc-refs.ts` (EXIT 0).
+Ramas y commits los gestiona el coordinador de la ola 7 (commit previsto:
+docs(ux): conversation, agent manager, skills and mcp specs).
