@@ -1,0 +1,99 @@
+TODO 1 - CUARENTENA DOCUMENTAL Y AUTORIDAD DEL REPO VIVO
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 7) | Rama: feat/ux-skills-mcp-w7-design
+Fecha: 2026-11-01 | Ejecutor: agente (st_01a19898)
+
+============================================================
+1. COMANDOS EXACTOS Y SALIDAS
+============================================================
+
+$ git -C "C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w7" branch --show-current
+EXIT 0
+feat/ux-skills-mcp-w7-design
+
+$ bun --version
+EXIT 0
+1.4.2
+
+$ bun "C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w7/scripts/check-doc-refs.ts"
+EXIT 0
+check-doc-refs: OK (fantasmas ausentes: 6, anclas presentes: 11, archivos barridos: 157)
+
+CASO NEGATIVO (referencia ficticia temporal):
+$ (crear TMP-negative-check.md con "Integra con packages/core/src/mcp.ts ...")
+$ bun scripts/check-doc-refs.ts
+EXIT 1
+check-doc-refs: FAIL (1)
+  - DOC-REF: TMP-negative-check.md cita packages/core/src/mcp.ts fuera de .harness como referencia viva.
+$ (eliminar TMP-negative-check.md)
+$ bun scripts/check-doc-refs.ts
+EXIT 0
+check-doc-refs: OK (fantasmas ausentes: 6, anclas presentes: 11, archivos barridos: 157)
+TMP-negative-check.md existe despues? false (retirado, sin restos)
+
+$ git -C "<worktree>" status --porcelain   (recibo final, ver seccion 4)
+EXIT 0
+?? .harness/implementation/QUARANTINE.md
+?? .harness/implementation/TREE_AUTHORITY.md
+?? scripts/
+
+VERIFICACION DEL ARBOL (lectura directa, 2026-11-01):
+- Ausentes (6/6): packages/core/src/engine.ts, mcp.ts, skills.ts, codemode.ts,
+  tools/browser.ts, mcp-auth. Secret stores PRESENTES en ambos lados
+  (packages/core/src/secrets/secret-store.ts, apps/desktop/src/main/secret-store.ts).
+- packages/core/package.json: dependencias openai, yaml, zod. Sin SDK MCP, sin node-pty.
+- Referencias del plan comprobadas: 31 de 32 existen.
+- HALLAZGO 1: el Todo 17 abrevia "promotion" y el archivo real es
+  promotion-manager.ts; no existe promotion-service.ts. Reportado, no editado.
+
+============================================================
+2. MANUAL QA - CHECKLIST FIRMADO (lectura contra IS-1 e IS-2)
+============================================================
+
+QA-1. Cada documento o seccion obsoleta del archivo de cuarentena tiene motivo. PASS
+      (QUARANTINE.md trae tabla con 9 filas, cada una con alcance y motivo.)
+QA-2. La nota de autoridad del arbol vivo existe y nombra el arbol como unica
+      autoridad. PASS (TREE_AUTHORITY.md con declaracion, 11 anclas y 6 ausencias.)
+QA-3. La cuarentena no contradice IS-1 (bienvenida sin auto-seleccion). PASS
+      (el archivo no impone conducta de UI; no toca bienvenida ni seleccion.)
+QA-4. La cuarentena no contradice IS-2 (workbench con paneles). PASS (mismo motivo.)
+QA-5. No se reabren contratos de etapas 1-6. PASS (TARGET/ROADMAP/DECISIONS quedan
+      vigentes; solo se marca historia lo que describe OpenOrch.)
+QA-6. El chequeo se afirma por ejecucion con bun y exit code observado, no por
+      grep. PASS (salidas de la seccion 1.)
+QA-7. Caso negativo rechazado y fixture retirada. PASS (EXIT 1, luego EXIT 0.)
+QA-8. Sin secretos citados ni copiados (k.txt nunca abierto). PASS
+QA-9. Sin cambios en codigo productivo. PASS (solo docs de cuarentena + script.)
+
+============================================================
+3. CLASES ADVERSARIALES (9 ultraqa)
+============================================================
+
+- stale_state: APLICABLE. Marcas re-validadas: script re-ejecutado tras cada
+  edicion (verde inicial, FAIL con fixture, verde tras retirar). Salidas arriba.
+- misleading_success_output: APLICABLE. Prohibido afirmar por grep: solo valen
+  los exit code observados de `bun scripts/check-doc-refs.ts` (0 y 1).
+- dirty_worktree: APLICABLE. Worktree fresco; `git status --porcelain` final
+  lista solo los 3 entregables (recibo en seccion 4).
+- hung_or_long_commands: NO APLICA. Ningun comando supero segundos; bun test
+  mas largo tardo menos de 5 s y no hubo procesos en segundo plano.
+- flaky_tests: NO APLICA. El chequeo es un barrido determinista de archivos,
+  sin tiempos, red ni concurrencia.
+- cancel_resume: NO APLICA. No hubo cancelaciones ni reanudaciones en la tarea.
+- malformed_input: NO APLICA. El script no recibe entrada externa; lee el
+  arbol y falla cerrado si falta package.json.
+- prompt_injection: NO APLICA como trigger. Los documentos analizados se
+  trataron como datos; ninguna instruccion hallada en ellos se siguio.
+- repeated_interruptions: NO APLICA. La ejecucion no sufrio interrupciones.
+
+============================================================
+4. RECIBO DE LIMPIEZA
+============================================================
+
+$ git -C "<worktree>" status --porcelain
+?? .harness/implementation/QUARANTINE.md
+?? .harness/implementation/TREE_AUTHORITY.md
+?? scripts/
+
+Solo los entregables. Ningun proceso, puerto ni archivo temporal en pie:
+el fixture TMP-negative-check.md se creo, se uso y se elimino (verificado
+con existsSync = false).

@@ -1,0 +1,237 @@
+/* Octus componentes reutilizables — Todo 3. Solo var(--oc-*): ningun color,
+   tamano de fuente ni espaciado literal. Si falta un token, se anade en
+   tokens.css y luego se usa aqui. Nunca al reves. */
+
+.oc-btn {
+  font: inherit;
+  font-size: var(--oc-font-base);
+  padding: var(--oc-space-2) var(--oc-space-4);
+  border: 1px solid var(--oc-border-strong);
+  border-radius: var(--oc-radius-md);
+  background: var(--oc-panel);
+  color: var(--oc-text);
+  cursor: pointer;
+  line-height: var(--oc-line-base);
+}
+
+.oc-btn--primary {
+  background: var(--oc-accent);
+  border-color: var(--oc-accent);
+  color: var(--oc-accent-ink);
+}
+
+.oc-btn--danger {
+  border-color: var(--oc-danger);
+  color: var(--oc-danger);
+  background: var(--oc-panel);
+}
+
+.oc-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--oc-text-muted);
+}
+
+.oc-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.oc-input,
+.oc-select,
+.oc-textarea {
+  font: inherit;
+  font-size: var(--oc-font-base);
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border: 1px solid var(--oc-border-strong);
+  border-radius: var(--oc-radius-md);
+  background: var(--oc-panel);
+  color: var(--oc-text);
+  width: 100%;
+}
+
+.oc-textarea { min-height: var(--oc-space-7); }
+
+.oc-card {
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-lg);
+  padding: var(--oc-message-pad);
+  box-shadow: var(--oc-shadow-raised);
+}
+
+.oc-banner {
+  padding: var(--oc-space-3) var(--oc-pad);
+  border-radius: var(--oc-radius-md);
+  border: 1px solid var(--oc-border);
+  background: var(--oc-panel);
+  color: var(--oc-text);
+  font-size: var(--oc-text-sm);
+}
+
+.oc-banner--warn {
+  background: var(--oc-warning-wash);
+  border-color: var(--oc-warning);
+}
+
+.oc-banner--err {
+  background: var(--oc-danger-wash);
+  border-color: var(--oc-danger);
+}
+
+.oc-banner--info {
+  background: var(--oc-info-wash);
+  border-color: var(--oc-info);
+}
+
+.oc-pill {
+  font-size: var(--oc-text-xs);
+  padding: var(--oc-space-1) var(--oc-space-3);
+  border-radius: var(--oc-radius-pill);
+  background: var(--oc-bg-raised);
+  color: var(--oc-text-muted);
+  border: 1px solid var(--oc-border);
+}
+
+.oc-pill--ok {
+  background: var(--oc-success-wash);
+  color: var(--oc-success);
+  border-color: var(--oc-success);
+}
+
+.oc-pill--warn {
+  background: var(--oc-warning-wash);
+  color: var(--oc-warning);
+  border-color: var(--oc-warning);
+}
+
+.oc-pill--err {
+  background: var(--oc-danger-wash);
+  color: var(--oc-danger);
+  border-color: var(--oc-danger);
+}
+
+.oc-pill--accent {
+  background: var(--oc-accent-wash);
+  color: var(--oc-accent);
+  border-color: var(--oc-accent-border);
+}
+
+.oc-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--oc-neutral-900);
+  opacity: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.oc-dialog {
+  background: var(--oc-panel);
+  color: var(--oc-text);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-lg);
+  box-shadow: var(--oc-shadow-dialog);
+  padding: var(--oc-space-6);
+  min-width: var(--oc-space-7);
+  max-width: 100%;
+}
+
+.oc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--oc-text-sm);
+}
+
+.oc-table th {
+  text-align: left;
+  font-size: var(--oc-text-xs);
+  text-transform: uppercase;
+  color: var(--oc-text-muted);
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border-bottom: 1px solid var(--oc-border-strong);
+}
+
+.oc-table td {
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border-bottom: 1px solid var(--oc-border);
+  color: var(--oc-text);
+}
+
+.oc-empty {
+  text-align: center;
+  color: var(--oc-text-muted);
+  font-size: var(--oc-text-sm);
+  padding: var(--oc-space-6) var(--oc-pad);
+  border: 1px dashed var(--oc-border-strong);
+  border-radius: var(--oc-radius-lg);
+}
+
+.oc-tabs {
+  display: flex;
+  gap: var(--oc-gap);
+  border-bottom: 1px solid var(--oc-border);
+}
+
+.oc-tab {
+  font-size: var(--oc-text-sm);
+  padding: var(--oc-space-2) var(--oc-space-3);
+  color: var(--oc-text-muted);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.oc-tab[aria-selected="true"] {
+  color: var(--oc-text);
+  border-bottom: 2px solid var(--oc-accent);
+  font-weight: 600;
+}
+
+.oc-icon {
+  width: var(--oc-space-5);
+  height: var(--oc-space-5);
+  stroke: currentcolor;
+  fill: none;
+  stroke-width: 1.5;
+  flex-shrink: 0;
+}
+
+.oc-message {
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-lg);
+  padding: var(--oc-message-pad);
+}
+
+.oc-message__role {
+  font-size: var(--oc-text-xs);
+  text-transform: uppercase;
+  color: var(--oc-text-faint);
+  margin-bottom: var(--oc-gap);
+}
+
+.oc-toolcall {
+  display: flex;
+  gap: var(--oc-gap);
+  align-items: baseline;
+  font-size: var(--oc-text-sm);
+}
+
+.oc-toolcall__name {
+  font-weight: 600;
+  color: var(--oc-accent);
+}
+
+.oc-code {
+  font-family: var(--oc-font-mono);
+  font-size: var(--oc-text-xs);
+  background: var(--oc-panel-sunken);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-sm);
+  padding: var(--oc-space-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--oc-text);
+}

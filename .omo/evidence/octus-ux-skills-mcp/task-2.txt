@@ -1,0 +1,49 @@
+# Evidencia Todo 2: arquitectura de información, navegación, inventario y flujos
+
+Ejecutor: agente (lectura y redacción propias, sin delegar). Fecha: 2026-11-01.
+Rama: `feat/ux-skills-mcp-w7-design`, worktree `octus-wt-octus-ux-skills-mcp-w7`.
+
+## Comandos ejecutados (por el ejecutor, en este turno)
+
+1. Lectura real de `apps/desktop/src/renderer/src/App.tsx` (1337 líneas): un solo `Sidebar` que mezcla proyectos y sesiones, `ChatView` con secciones apiladas (`PlansSection`, `TasksSection`, `WorktreesSection`, `IntegrationsSection`, `MemorySection`, `AgentsSection`), `ChatView`/`SettingsView` como únicas vistas, `D-01` sin "siempre" para shell, `D-02` con opciones y respuesta propia.
+2. Lectura real de `apps/desktop/src/renderer/src/store.ts` (971 líneas): estado global con proyectos, sesiones, mensajes, runs, permisos, preguntas, proveedores, presupuestos, planes, tareas, worktrees, integraciones, memoria, agentes; vistas solo `chat` y `settings`; sin proyecto auto-seleccionado al arrancar.
+3. Lectura real de `.harness/implementation/QUARANTINE.md` y `TREE_AUTHORITY.md` (Todo 1): árbol vivo como autoridad; ausencias vigentes (`engine.ts`, `mcp.ts`, `skills.ts`, `codemode.ts`, `tools/browser.ts`); nada de este diseño resucita esos nombres.
+4. `intrucion.txt` no existe en el worktree ni en el checkout principal: se diseñó desde IS-1/IS-2 del plan más el código real. Se anota como laguna, no se inventa su contenido.
+5. Re-verificación tras cada edición (clase stale_state): 15 pantallas del inventario trazan a flujo con actor, 8 flujos con estado de error, ver checklist.
+6. `git status --porcelain`: mis entregables son `docs/ux/01-information-architecture.md`, `docs/ux/02-screen-inventory.md`, `docs/ux/03-flows.md` y este archivo. El resto de untracked (`QUARANTINE.md`, `TREE_AUTHORITY.md`, `.omo/`, `scripts/`, `apps/.../design/`) pertenece a los Todos 1 y 3 en paralelo y no se toca.
+
+## Checklist de lectura (firmado por el ejecutor)
+
+Pantalla a flujo (actor y estado final entre paréntesis):
+
+- [x] W-01 a F-1 (usuario; dentro del proyecto o fuera sin nada seleccionado)
+- [x] SB-01 a F-0 (usuario; destino conmutado sin perder el centro)
+- [x] SB-02 a F-2 y F-3 (usuario; proyecto abierto o sesión continuada)
+- [x] C-01 a F-4 y F-5 (usuario y coordinador; run terminado, fallido o cancelado; revisión presentada)
+- [x] C-02 a F-4 y F-5 (usuario; petición enviada o run interrumpido)
+- [x] C-03 a F-4 (usuario; revisión aprobada, rechazada o archivada)
+- [x] I-01 a F-4 y F-5 (usuario; selección comprendida)
+- [x] I-02 a F-6 (usuario, solo el humano; aprobación decidida y registrada)
+- [x] D-01 a F-5 (usuario; permiso concedido o denegado y auditado)
+- [x] D-02 a F-5 (usuario; pregunta respondida o run detenido)
+- [x] P-01 a F-5 (usuario y agente; salida consultada, terminal reutilizable)
+- [x] P-02 a F-5 (usuario; archivo visto, diff revisado)
+- [x] S-01 a F-0 y F-7 (usuario; límite guardado o defecto restaurado)
+- [x] S-02 a F-5 (usuario; tarea reintentada, cancelada o en estado final real)
+- [x] S-03 a F-7 (usuario; cero pendientes o degradado marcado)
+
+Flujo a IS (todo flujo con estado de error nombrado; sin él se habría redactado de nuevo):
+
+- [x] F-0 a IS-2 (fallo: layout corrupto, defecto con aviso)
+- [x] F-1 a IS-1 (fallo: error visible sin crear nada, sin auto-selección)
+- [x] F-2 a IS-1 (fallo: carpeta inválida, proyecto no creado)
+- [x] F-3 a IS-1 (fallo: evento corrupto, sesión vacía degradada y registrada)
+- [x] F-4 a IS-2 (fallo: revisión rechazada sin efectos laterales)
+- [x] F-5 a IS-2 (fallo: run fallido con reintento; cancelado en estado final real; permiso denegado auditado)
+- [x] F-6 a IS-2 (fallo: duplicada o fuera de revisión, rechazada por idempotencia)
+- [x] F-7 a IS-1 e IS-2 (fallo: degradado visible y registrado)
+
+## Clases adversariales
+
+- Aplicadas: stale_state (re-verificación del inventario tras cada edición, ver punto 5); misleading_success_output (ninguna afirmación por grep: todo lo citado viene de lectura real con ruta y línea aproximada, punto 1 a 3); dirty_worktree (`git status` final y alcance limitado a mis entregables, punto 6).
+- No aplicables: ninguna otra clase del plan toca a este todo porque no se ejecuta código, no hay red ni credenciales, no se llama a ningún servicio y no se citó ni se abrió `k.txt` en ningún momento.

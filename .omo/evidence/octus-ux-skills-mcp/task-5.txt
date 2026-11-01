@@ -1,0 +1,66 @@
+Todo 5. Contratos nuevos, mapa de integracion, matriz de permisos y presupuestos
+Rama: feat/ux-skills-mcp-w7-design | Worktree: octus-wt-octus-ux-skills-mcp-w7
+Fecha: 2026-11-01 | Ejecutor: senpi-task st_01a1989e (diseno, sin programar servicios)
+
+Fuentes leidas (todas vivas, verificadas en el arbol):
+- packages/core/src/tools/tool-gateway.ts
+- packages/core/src/permissions/permission-manager.ts
+- packages/core/src/orchestration/agent-manager.ts
+- packages/core/src/runtime/context-builder.ts (capas, linea 50+)
+- packages/shared/src/ipc.ts
+- packages/core/src/persistence/persistence-service.ts (+ schema.ts, domain.ts,
+  tools.ts, permissions.ts, secret-store.ts, tool-definitions.ts y manifiestos
+  de agent/plans/task/memory/git/web/test-tools para la matriz)
+- Notas del Todo 1 (cuarentena y autoridad del arbol vivo)
+
+Entregables:
+- .omo/design/octus-ux-skills-mcp/task-5-contracts.md (14 contratos C-01..C-14,
+  mapa §2, matriz §3 con 29 herramientas x 5 scopes, persistencia §4,
+  seguridad §5, pruebas §6, presupuesto §7 con 11 cifras, trazabilidad §8)
+- scripts/task-5-map.json (mapa legible por maquina)
+- scripts/verify-task-5-map.mjs (verificador de integridad)
+
+COMANDO 1 (happy): node scripts/verify-task-5-map.mjs
+SALIDA (exit 0):
+verify-task-5-map: OK (contratos completos: 14/14; herramientas en matriz: 29/29; scopes cubiertos: I,P,R,S,T; presupuestos con cifra: 11/11)
+
+COMANDO 2 (cuarentena documental): bun scripts/check-doc-refs.ts
+SALIDA (exit 0):
+check-doc-refs: OK (fantasmas ausentes: 6, anclas presentes: 11, archivos barridos: 173)
+
+COMANDO 3 (failure): mapa mutado en C:\tmp\task5neg (C-09 sin consumidor)
+> node scripts/verify-task-5-map.mjs
+SALIDA (exit 1):
+verify-task-5-map: FAIL (1)
+  - CONTRACT-INCOMPLETE: C-09 (Carga progresiva de Skills en runtime) sin consumer
+Conclusion: contrato sin consumidor se rechaza como incompleto, segun el plan.
+
+COMANDO 4: git status --short (antes de escribir este archivo)
+SALIDA:
+?? .harness/design/
+?? .harness/implementation/QUARANTINE.md
+?? .harness/implementation/TREE_AUTHORITY.md
+?? .omo/design/
+?? .omo/evidence/octus-ux-skills-mcp/task-1.txt
+?? .omo/evidence/octus-ux-skills-mcp/task-4.txt
+?? apps/desktop/src/renderer/src/design/
+?? scripts/
+Conclusion: cero archivos rastreados modificados. Los untracked ajenos a este
+Todo (Todo 1 y salidas de Todos paralelos de la ola 7) no se tocaron.
+
+CLASES ADVERSARIALES:
+- Aplicable: stale_state. Mitigado: ambos scripts leen los archivos en cada
+  pasada (readFileSync + existsSync), sin cache entre corridas; la evidencia
+  vuelca salidas de esta sesion, no de corridas previas.
+- Aplicable: misleading_success_output. Mitigado: se exige exit 0 Y texto OK
+  con conteos exactos (14/14, 29/29, 11/11); el caso failure demuestra que el
+  script si falla (exit 1) ante un mapa roto.
+- Aplicable: dirty_worktree. Mitigado: git status confirma cero modificaciones
+  a rastreados; solo archivos nuevos (.omo/design, scripts/task-5-*, este
+  task-5.txt). Untracked de otros Todos intactos.
+- No aplicable: live_credentials (diseno sin red ni claves; no se cita ni se
+  lee ningun archivo de claves externas); timing_flake (verificador sincrono,
+  sin temporizadores ni red); prompt_injection (entradas solo del arbol vivo y
+  del plan; contenido MCP/web tratado como no confiable en §5); schema_drift
+  (tablas nuevas entran por migracion versionada, §4); i18n_garble (prosa en
+  espanol del plan, sin plantillas localizadas).

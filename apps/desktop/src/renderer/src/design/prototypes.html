@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light" data-density="normal" data-font-size="14">
+<head>
+<meta charset="utf-8">
+<title>Octus — prototipos visuales (Todo 3)</title>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./components.css">
+<style>
+  body {
+    margin: 0;
+    font-family: var(--oc-font-sans);
+    font-size: var(--oc-font-base);
+    background: var(--oc-bg);
+    color: var(--oc-text);
+    line-height: var(--oc-line-base);
+  }
+  .proto-toolbar {
+    display: flex;
+    gap: var(--oc-gap);
+    align-items: center;
+    padding: var(--oc-pad);
+    background: var(--oc-panel);
+    border-bottom: 1px solid var(--oc-border);
+    position: sticky;
+    top: 0;
+  }
+  .proto-toolbar .oc-select { width: auto; }
+  .proto-screen {
+    padding: var(--oc-space-6);
+    border-bottom: 1px solid var(--oc-border-strong);
+  }
+  .proto-screen > h2 {
+    font-size: var(--oc-text-xl);
+    margin: 0 0 var(--oc-gap);
+  }
+  .proto-screen > p { color: var(--oc-text-muted); font-size: var(--oc-text-sm); }
+  #workbench {
+    display: grid;
+    grid-template-columns: var(--oc-space-7) 220px 1fr 240px;
+    grid-template-rows: 1fr auto;
+    height: 480px;
+    background: var(--oc-bg);
+    border: 1px solid var(--oc-border-strong);
+    border-radius: var(--oc-radius-lg);
+    overflow: hidden;
+  }
+  #workbench .wb-activity {
+    background: var(--oc-panel);
+    border-right: 1px solid var(--oc-border);
+    display: flex;
+    flex-direction: column;
+    gap: var(--oc-gap);
+    padding: var(--oc-space-3);
+    align-items: center;
+  }
+  #workbench .wb-sidebar {
+    background: var(--oc-panel);
+    border-right: 1px solid var(--oc-border);
+    padding: var(--oc-pad);
+    overflow: auto;
+  }
+  #workbench .wb-main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #workbench .wb-inspector {
+    background: var(--oc-panel);
+    border-left: 1px solid var(--oc-border);
+    padding: var(--oc-pad);
+    overflow: auto;
+  }
+  #workbench .wb-panel {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--oc-border);
+    background: var(--oc-panel);
+    padding: var(--oc-pad);
+  }
+  .message-timeline {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--oc-gap);
+    padding: var(--oc-pad);
+  }
+  .wb-composer {
+    border-top: 1px solid var(--oc-border);
+    padding: var(--oc-pad);
+    background: var(--oc-panel);
+  }
+  #welcome {
+    max-width: 560px;
+    margin: 0 auto;
+    text-align: left;
+  }
+  #welcome .oc-card { margin-top: var(--oc-gap); }
+  .proto-drop {
+    border: 1px dashed var(--oc-border-strong);
+    border-radius: var(--oc-radius-lg);
+    padding: var(--oc-space-7);
+    text-align: center;
+    color: var(--oc-text-muted);
+    background: var(--oc-panel-sunken);
+  }
+  .proto-row { display: flex; gap: var(--oc-gap); margin-top: var(--oc-gap); }
+  .proto-grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--oc-gap);
+    margin-top: var(--oc-gap);
+  }
+</style>
+</head>
+<body>
+<div class="proto-toolbar">
+  <strong>Octus · prototipos Todo 3</strong>
+  <label>Tema
+    <select class="oc-select" id="sel-theme">
+      <option value="light">claro</option>
+      <option value="dark">oscuro</option>
+      <option value="system">sistema</option>
+    </select>
+  </label>
+  <label>Densidad
+    <select class="oc-select" id="sel-density">
+      <option value="compact">compacta</option>
+      <option value="normal" selected>normal</option>
+      <option value="comfortable">comoda</option>
+    </select>
+  </label>
+  <label>Tamano
+    <select class="oc-select" id="sel-font">
+      <option value="12">12</option>
+      <option value="14" selected>14</option>
+      <option value="16">16</option>
+      <option value="18">18</option>
+    </select>
+  </label>
+</div>
+
+<section class="proto-screen" id="screen-welcome">
+  <h2>Bienvenida</h2>
+  <p>Entrada predecible: arrastrar carpeta, selector nativo, recientes con fecha, crear o continuar. Nunca auto-selecciona proyecto.</p>
+  <div id="welcome">
+    <div class="proto-drop" id="welcome-dropzone">Arrastra una carpeta aqui o usa el selector</div>
+    <div class="proto-row">
+      <button class="oc-btn oc-btn--primary" type="button">Abrir carpeta…</button>
+      <button class="oc-btn" type="button">Nuevo proyecto</button>
+    </div>
+    <div class="oc-card">
+      <div class="oc-message__role">Recientes</div>
+      <table class="oc-table">
+        <thead><tr><th>Proyecto</th><th>Ruta</th><th>Ultimo acceso</th></tr></thead>
+        <tbody>
+          <tr><td>octus</td><td class="muted">C:\tmp\octus-qa-proj</td><td>2026-11-01</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="proto-screen" id="screen-workbench">
+  <h2>Workbench</h2>
+  <p>Activity bar, sidebar, conversacion central, inspector y panel inferior. Paneles ocultables, redimensionables y restaurables.</p>
+  <div id="workbench">
+    <div class="wb-activity">
+      <svg class="oc-icon" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2"/></svg>
+      <svg class="oc-icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/></svg>
+      <svg class="oc-icon" viewBox="0 0 16 16"><path d="M3 13 L8 3 L13 13 Z"/></svg>
+    </div>
+    <div class="wb-sidebar">
+      <div class="oc-message__role">Explorador</div>
+      <div class="oc-toolcall"><span class="oc-toolcall__name">src</span><span>design/</span></div>
+      <div class="oc-toolcall"><span class="oc-toolcall__name">src</span><span>store.ts</span></div>
+    </div>
+    <div class="wb-main">
+      <div class="message-timeline">
+        <div class="oc-message">
+          <div class="oc-message__role">usuario</div>
+          <p>Resume el estado del proyecto en dos lineas.</p>
+        </div>
+        <div class="oc-message">
+          <div class="oc-message__role">coordinador</div>
+          <p>Rama de diseno creada; tokens y prototipos listos para revision.</p>
+          <div class="oc-toolcall"><span class="oc-toolcall__name">read</span><span class="oc-code">tokens.css (2 KB)</span></div>
+        </div>
+      </div>
+      <div class="wb-composer">
+        <textarea class="oc-textarea" id="composer" placeholder="Escribe un mensaje…"></textarea>
+        <div class="proto-row">
+          <button class="oc-btn oc-btn--primary" type="button">Enviar</button>
+          <button class="oc-btn" type="button">Adjuntar</button>
+        </div>
+      </div>
+    </div>
+    <div class="wb-inspector">
+      <div class="oc-message__role">Inspector</div>
+      <div class="oc-card"><span class="oc-pill oc-pill--ok">plan</span> Sesion activa</div>
+      <div class="oc-card"><span class="oc-pill oc-pill--accent">build</span> Run 42 en curso</div>
+    </div>
+    <div class="wb-panel">
+      <div class="oc-tabs">
+        <button class="oc-tab" aria-selected="true" type="button">Terminal</button>
+        <button class="oc-tab" aria-selected="false" type="button">Problemas</button>
+        <button class="oc-tab" aria-selected="false" type="button">Pruebas</button>
+      </div>
+      <pre class="oc-code">$ bun run test — 128 passed</pre>
+    </div>
+  </div>
+</section>
+
+<section class="proto-screen" id="screen-agents">
+  <h2>Agent Manager</h2>
+  <p>Agentes, tareas, DAG, runs y worktrees con datos reales. Sin agentes ficticios ni progreso inventado.</p>
+  <div class="proto-grid2">
+    <div class="oc-card">
+      <div class="oc-message__role">Agentes</div>
+      <table class="oc-table">
+        <thead><tr><th>Agente</th><th>Estado</th></tr></thead>
+        <tbody>
+          <tr><td>explorer</td><td><span class="oc-pill oc-pill--ok">idle</span></td></tr>
+          <tr><td>implementer</td><td><span class="oc-pill oc-pill--accent">running</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="oc-card">
+      <div class="oc-message__role">DAG</div>
+      <pre class="oc-code" id="agent-dag">explorer -&gt; implementer -&gt; reviewer</pre>
+    </div>
+  </div>
+  <div class="oc-banner oc-banner--info">Run 42: 3 de 7 tareas completadas (datos simulados fijos).</div>
+</section>
+
+<section class="proto-screen" id="screen-skills">
+  <h2>Skills</h2>
+  <p>Catalogo e instaladas. Instalado frente a habilitado siempre distintos.</p>
+  <div class="proto-grid2">
+    <div class="oc-card">
+      <div class="oc-message__role">Instaladas</div>
+      <table class="oc-table">
+        <thead><tr><th>Skill</th><th>Alcance</th><th>Estado</th></tr></thead>
+        <tbody>
+          <tr><td>qa-skill@1.0.0</td><td>proyecto</td><td><span class="oc-pill oc-pill--ok">habilitada</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="oc-card">
+      <div class="oc-message__role">Detalle</div>
+      <p>Origen: carpeta local · <span class="oc-pill">instalada</span> <span class="oc-pill oc-pill--ok">habilitada</span></p>
+      <div class="proto-row">
+        <button class="oc-btn" type="button">Importar zip</button>
+        <button class="oc-btn oc-btn--danger" type="button">Desinstalar</button>
+      </div>
+    </div>
+  </div>
+  <div class="oc-banner oc-banner--warn">qa-skill con frontal invalido: muestra el error y bloquea habilitar.</div>
+</section>
+
+<section class="proto-screen" id="screen-mcp">
+  <h2>MCP</h2>
+  <p>Servidores con estado. Configurado, conectado y autorizado siempre distintos.</p>
+  <div class="oc-card">
+    <table class="oc-table">
+      <thead><tr><th>Servidor</th><th>Transporte</th><th>Conexion</th><th>Confianza</th></tr></thead>
+      <tbody>
+        <tr><td>mcp-qa-stdio</td><td>STDIO</td><td><span class="oc-pill oc-pill--ok">conectado</span></td><td><span class="oc-pill oc-pill--accent">workspace</span></td></tr>
+      </tbody>
+    </table>
+    <div class="proto-row">
+      <button class="oc-btn" type="button">Agregar servidor</button>
+      <button class="oc-btn" type="button">Importar JSON</button>
+      <button class="oc-btn oc-btn--danger" type="button">Revocar confianza</button>
+    </div>
+  </div>
+  <div class="oc-empty">Sin herramientas descubiertas hasta conectar un servidor autorizado.</div>
+</section>
+
+<script>
+  var root = document.documentElement;
+  document.getElementById("sel-theme").addEventListener("change", function (e) {
+    root.setAttribute("data-theme", e.target.value);
+  });
+  document.getElementById("sel-density").addEventListener("change", function (e) {
+    root.setAttribute("data-density", e.target.value);
+  });
+  document.getElementById("sel-font").addEventListener("change", function (e) {
+    root.setAttribute("data-font-size", e.target.value);
+  });
+</script>
+</body>
+</html>
