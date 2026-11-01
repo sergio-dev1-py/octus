@@ -1,0 +1,152 @@
+TODO 12 - SONDA DEL MODELO DE CONVERSACION Y STREAMING ACTUALES
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 10, abre) | Rama: feat/ux-skills-mcp-w10-chat (arranca de main con olas 7-9 aterrizadas)
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a198fc)
+Alcance: SOLO lectura + sonda minima. Sin cambios de comportamiento (Commit: N).
+
+============================================================
+1. COMANDOS EXACTOS Y SALIDAS
+============================================================
+
+$ bun C:/tmp/octus-qa-probe-12/probe.ts   (sonda: run simulado, 13 eventos)
+EVENTOS RECIBIDOS (13):
+ - part.delta/text
+ - part.delta/text
+ - part.delta/reasoning_summary
+ - part.delta/tool_arguments[call_1]
+ - part.delta/tool_arguments[call_1]
+ - part.done/tool_arguments[call_1]
+ - step.retry
+ - part.delta/text
+ - part.done/text
+ - persisted/message.appended
+ - persisted/tool_call.requested
+ - persisted/tool_call.completed
+ - persisted/run.cancelled
+LIVE FINAL msg_probe1 text="Reintento tras error."
+ASSERTS:
+ text.delta acumulado tras retry = OK
+ part.done sin efecto en live (solo marca) = OK (rama store.ts:950 retorna)
+ sonda OK
+
+$ bun run typecheck
+$ bun run --cwd packages/shared typecheck && bun run --cwd packages/core typecheck && bun run --cwd apps/desktop typecheck
+$ tsc --noEmit   (x2 + node/web configs)
+EXIT 0 — en verde, sin errores.
+
+Archivos leidos (codigo vivo):
+- packages/shared/src/events.ts (164 lineas)
+- packages/shared/src/domain.ts (Message/ToolCallRecord/Artifact)
+- packages/shared/src/ipc.ts (canales + IPC_EVENT_CHANNEL)
+- packages/core/src/runtime/agent-runtime.ts (699 lineas)
+- packages/core/src/sessions/octus-core.ts (prompt/interrupt/sessionMessages)
+- apps/desktop/src/renderer/src/store.ts (1184 lineas, applyEvent 939-1083)
+- apps/desktop/src/renderer/src/App.tsx (2157 lineas, timeline 1459-1487, Composer 565-574)
+- Especificacion Todo 4: .omo/evidence/octus-ux-skills-mcp/task-4.txt + .harness/design/ux-conversation-agent-skills-mcp.md
+
+============================================================
+2. INFORME DE CAPACIDADES: EXISTE / FALTA (con ruta y linea)
+============================================================
+
+[EXISTE] Modelo de mensajes — domain.ts:152-202 (MessageRole, TextPart,
+  ReasoningSummaryPart, ToolCallPart, ToolResultPart, Message con mode,
+  trust, seq). Persistido en tabla messages con seq por instancia
+  (agent-runtime.ts:513-553) y evento message.appended (agent-runtime.ts:556-576).
+
+[EXISTE] Streaming efimero tipado — events.ts:104-142 (PartDeltaEvent con
+  part text|reasoning_summary|tool_arguments + key=providerCallId,
+  PartDoneEvent, StepRetryEvent; StreamEvent; CoreEvent). Emision en
+  agent-runtime.ts:269,272,278,281,294 (attemptStep), 172,180 (step.retry),
+  475 (closingStep). Nunca persistido (solo bus + IPC).
+
+[EXISTE] Tool calls con ciclo de vida — ToolCallRecord 6 estados
+  (domain.ts:211: pending|running|completed|failed|denied|cancelled);
+  ejecucion via ToolGateway con idempotencia por instancia+providerCallId
+  (agent-runtime.ts:320-359); resultado como parte tool_result en mensaje
+  tool separado (agent-runtime.ts:359). Eventos tool_call.requested/started/
+  completed/failed definidos en events.ts:40-43. NOTA: el runtime NO emite
+  eventos persistidos tool_call.* (solo message.appended con las partes);
+  la UI infiere tool calls desde Message.parts.
+
+[EXISTE] Cancelacion por AbortSignal — RunInstanceOptions.signal
+  (agent-runtime.ts:48); chequeos en 93, 109, 262, 301, 323, 347;
+  AbortController hijo con idleTimeoutMs (217-232); finish cancelled
+  (109-110, 675-683); octus-core.interrupt aborta controllers activos +
+  cancela permissions/questions/tasks de la sesion (octus-core.ts:686-694);
+  IPC sessions.interrupt (ipc.ts:101) -> main/index.ts:285-289 ->
+  octus.interrupt; UI cancelAgent (store.ts:545-547) y cancelTask (583-585).
+
+[EXISTE] Consumidor de streaming en renderer — store.applyEvent
+  (store.ts:939-954): part.delta acumula en state.live por messageId
+  (texto/reasoning/toolArgs), step.retry reinicia el live, message.appended
+  vuelca a messages y limpia el live (957-968). Render en App.tsx:1459-1487
+  (.message-timeline + live "assistant (streaming)" + Composer #composer
+  en 565-574/1494). run.cancelled/completed/failed refrescan y bajan busy
+  (969-981); permission/question/approval/plan refrescan pendientes
+  (1007-1035).
+
+[FALTA] part.done SIN CONSUMIDOR — store.ts:950 `if (event.kind ===
+  "part.done") return;` lo descarta. Contrato nuevo obligatorio N-C-12a
+  para Todos 13/14: definir que part.done cierre el frame de streaming en
+  UI (o eliminarlo del contrato si message.appended es la unica senal de
+  cierre). Ningun otro consumidor de part.done en el renderer.
+
+[FALTA] Paginacion de mensajes — sessions.messages acepta solo
+  {sessionId, runId?} (ipc.ts:98) y sessionMessages vuelca TODO el historial
+  (octus-core.ts:439-446, ORDER BY sin LIMIT); refreshMessages (store.ts:224)
+  reemplaza el array completo. Sin cursor/seq/limit ni virtualizacion en
+  App.tsx (For directo sobre state.messages:1460). Contrato nuevo
+  obligatorio N-C-06 (paginacion por seq, cifra orientativa 2 000 mensajes
+  del Todo 5) para el Todo 13 (virtualizacion).
+
+[FALTA] Progreso/estado intermedio de tool call en UI — ToolCallRecord
+  existe en dominio pero el runtime no publica tool_call.requested/started/
+  como eventos persistidos (solo filas internas del gateway); la UI no
+  muestra estados pending/running/denied de una llamada en vuelo: el live
+  solo acumula args crudos (App.tsx:1475-1482 muestra "tool {key}" + args
+  sin nombre real hasta message.appended). Contrato nuevo obligatorio
+  N-C-12b para el Todo 14: o bien emitir tool_call.requested/started/
+  completed persistidos, o bien especificar que la UI lea ToolCallRecord
+  via runs.get (ipc.ts:102 ya lo expone).
+
+[FALTA] Razon de cancelacion visible — run.cancelled llega sin payload de
+  motivo distintivo (usuario vs timeout vs idle) en applyEvent (969-981:
+  solo set busy=false + refresh). Contrato nuevo menor N-C-12c para el
+  Todo 13: incluir reason en payload o reutilizar error.raised.
+
+Todo lo demas que piden los Todos 13/14 (composer con adjuntos, selector de
+modelos, markdown/codigo, preguntas, aprobaciones, planes, actividad de
+agentes, errores, resenas) EXISTE a nivel de eventos/canales segun la traza
+del Todo 4 (43/43 respaldos) y no se re-verifica aqui.
+
+============================================================
+3. CLASES ADVERSARIALES
+============================================================
+- stale_state: APLICABLE — el informe cita lineas leidas en esta sesion
+  (store.ts:950, agent-runtime.ts:269-294, octus-core.ts:686-694); el
+  arbol vivo puede haber cambiado desde la especificacion del Todo 4, por
+  eso toda traza se re-leyo del codigo en vez de copiar task-4.txt.
+  Resultado: sin divergencias salvo las ausencias marcadas FALTA.
+- misleading_success_output: APLICABLE — typecheck EXIT 0 con salida de
+  tsc vacia; se confirma por codigo de salida, no por texto. La sonda
+  imprime asserts OK sobre su propio reducer espejo, no sobre el store
+  real (limitacion declarada: SolidJS no instanciable en bun sin harness).
+- dirty_worktree: APLICABLE — `git status --short` al inicio mostraba solo
+  ?? .omo/boulder.json, .omo/drafts/, .omo/plans/, .omo/ulw-execute/
+  (preexistentes, no mios); al cierre se verifica de nuevo abajo. No se
+  modifico ningun archivo productivo (Commit: N).
+- Resto: no-aplicable — sin secretos tocados (k.txt ni citado ni abierto),
+  sin red, sin dependencias nuevas, sin migraciones.
+
+============================================================
+4. LIMPIEZA TOTAL CON RECIBO
+============================================================
+$ git status --short   (post-sonda)
+?? .omo/boulder.json
+?? .omo/drafts/
+?? .omo/plans/
+?? .omo/ulw-execute/
+Recibo: identico al estado inicial; cero archivos productivos tocados.
+Sonda externa en C:/tmp/octus-qa-probe-12/probe.ts (fuera del repo, no
+ensucia el worktree; se deja como artefacto reproducible de la evidencia).
+Este informe: .omo/evidence/octus-ux-skills-mcp/task-12.txt (unico archivo
+nuevo dentro del repo, el exigido por el plan).
