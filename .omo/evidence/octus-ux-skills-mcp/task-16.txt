@@ -1,0 +1,151 @@
+TODO 16 - VISTA DE AGENTES, TAREAS, RUNS Y WORKTREES
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 11) | Rama: feat/ux-skills-mcp-w11-agents
+Fecha: 2026-11-01 | Ejecutor: st_01a19927
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w11 (evidencia solo aqui)
+Especificacion base: Todo 4 (W-A1..W-A5, contratos EXISTE + N-A-01; N-A-DIFF-1 es del Todo 17)
+Sonda previa: Todo 15 (.omo/evidence/octus-ux-skills-mcp/task-15.txt del WORKTREE)
+Regla: sin agentes ficticios, sin progreso inventado; run cancelado = estado final real.
+k.txt jamas citado ni abierto.
+
+============================================================
+0. TODO 16 LEIDO + SONDAS LEIDAS ANTES DE EMPEZAR
+============================================================
+Todo 16 completo del plan + sonda Todo 15 (existen TaskManager/Scheduler/
+AgentManager/WorktreeManager; FALTA solo worktrees.diff = contrato N-A-DIFF-1
+del Todo 4, subtodo aditivo del Todo 17, NO de este) + especificacion Todo 4
+(W-A1 agentes, W-A2 tareas, W-A3 DAG con #agent-dag, W-A4 runs con cancelado
+real, W-A5 worktrees, W-A6 diffs/promocion = Todo 17). DECISION CENTRAL (una
+sola, razonada): AgentsView nueva en el centro cuando activity=agents (hay
+sitio para el DAG; el chat queda intacto), ficha de run en store/runs.ts via
+runs.get EXISTENTE (sin canal nuevo), DAG calculado en el renderer sobre
+tasks.get (la espec lo permite) con semantica identica a task-graph.ts
+verificada por import directo del core en el script de verificacion.
+
+============================================================
+1. COMANDOS EXACTOS Y SALIDAS (verdes antes de editar)
+============================================================
+$ bun run --cwd packages/shared test   (base, antes de editar)
+17 pass / 0 fail (84 expect() calls)
+$ bun run --cwd apps/desktop typecheck   (base, antes de editar)
+TYPECHECK-EXIT-0 (tsc node + web)
+HALLAZGO (se reporta, no se edita): el renderer no tiene tests unitarios;
+la conducta tocada se verifica con scripts deterministas + sonda Electron
+real (patron de los Todos 8/11). `bun run test` en raiz no cabe en una sola
+ventana en esta maquina (i3-2328M): se ejecuto en segundo plano al cierre
+(ver seccion 3, con 1 flaky documentado y re-verificado).
+
+============================================================
+2. ENTREGABLES (archivos del Todo 16, y solo estos)
+============================================================
+NUEVOS:
+- apps/desktop/src/renderer/src/views/agents.tsx (AgentsView + secciones
+  W-A1..W-A5, #agent-dag con dagAdjacency/dagDetectCycle/dagLayout puros
+  de semantica identica a task-graph.ts, data-run-id/data-worktree-run/
+  data-run-final="cancelled", vacios honestos, sin Math.random ni progreso)
+- apps/desktop/src/renderer/src/store/runs.ts (selectedRunId + runDetail
+  via runs.get EXISTENTE; selectRun/refreshRunDetail)
+- scripts/verify-task-16-agents.mjs (31 aserciones deterministas, bun)
+- scripts/probe-task-16-preload.cjs + scripts/probe-task-16-surface.cjs
+  (sonda Electron real con fixture qa-*; ELIMINADOS tras cumplir, recibo
+  en seccion 6; los PNG quedan como evidencia)
+EDITADOS (hunks solo del Todo 16):
+- store/state.ts (selectedRunId, runDetail + tipo ToolCallRecord)
+- store.ts (reexporta store/runs.js; ruta ./store.js intacta)
+- store/projects.ts (selectSession refresca tambien la ficha)
+- store/events.ts (run.* y provider.usage_recorded refrescan la ficha)
+- App.tsx (centro: activity agents -> AgentsView, resto -> ChatView)
+- styles.css (bloque Todo 16: .agents + #agent-dag/.dag-*, solo
+  var(--oc-*) / alias; min-width via calc(var(--oc-space-7)*8),
+  sin hex, sin px>=2)
+NO TOCADOS POR ESTE TODO (del paralelo Todo 17, se commitean juntos pero
+no se re-trabajan): worktrees.diff en ipc.ts + main/index.ts, views/dag.tsx,
+dagLogic.ts, secciones Dag en chat.tsx, task-17.txt/png.
+
+============================================================
+3. PRUEBAS (comando + resultado)
+============================================================
+$ bun scripts/verify-task-16-agents.mjs
+31/31 OK, VERIFY-EXIT-0 (2 pasadas en verde). Cubre: task-graph REAL del
+core sobre fixture Todo 15 (adyacencia, ciclo con camino, ready-gate,
+insatisfechas, orden), cableado en fuentes (#agent-dag, runs.get, reexport,
+centro, eventos), tokens (sin literales en agents.tsx ni bloque css),
+alcance (sin worktrees.diff: es del Todo 17).
+$ bun run --cwd apps/desktop build
+BUILD-EXIT-0 (bundle out/ reconstruido con agents-view + agent-dag).
+$ ./apps/desktop/node_modules/.bin/electron.exe scripts/probe-task-16-surface.cjs
+probe-task-16-surface: 23/23 OK, 3 pasadas en verde (flaky 2x -> 3x).
+Cada PASS exige el DOM real del bundle (welcome -> proyecto -> sesion ->
+activity agents; clicks de verdad; 2 PNGs por pasada).
+$ bun run typecheck (raiz, tras todo, arbol con ola 11 junta)
+exit 0 (shared + core + desktop node/web).
+$ bun run test (raiz, segundo plano, arbol con ola 11 junta)
+241 pass / 1 fail / 992 expects / 419.04s. El unico fallo:
+"etapa 5.2 workbase multi-predecesor (J4): timeout 30s bajo carga".
+REINTENTO AISLADO: bun test integration.test.ts -t "J4..." --timeout 90000
+-> 1 pass / 0 fail (25.5s). Causa: test pesado de scheduler+git sensible
+a carga en este i3 (mis cambios son solo renderer; el core no se toco).
+Flaky documentado, no enmascarado.
+$ bun run --cwd packages/shared test (cierre): 17/0 (sin regresion).
+
+============================================================
+4. MANUAL QA DE SUPERFICIE REAL (agente, sin intervencion del usuario)
+============================================================
+S1 Entrada real bienvenida->workbench (click proyecto + continuar): PASS
+S2 [data-activity=agents] muestra #agents-view con #agent-dag: PASS
+S3 Definiciones explorer/implementer/reviewer + instancia ins_qa_impl en
+   running conCancelar (W-A1, datos simulados, nada ficticio): PASS
+S4 Tareas tsk_qa01 completed / tsk_qa02 running / tsk_qa03 draft con
+   "depende de tsk_qa01" (W-A2): PASS
+S5 #agent-dag: 3 nodos [data-dag-node], columnas 0,1,2 por profundidad,
+   sin banner de ciclo en fixture aciclico (W-A3): PASS
+S6 Runs run_qa01/run_qa02 seleccionables; ficha run_qa01 en executing con
+   tool call read expandida por el usuario (W-A4): PASS
+S7 PNG task-16-surface.png y task-16-surface-dag.png: vista renderizada en
+   tema oscuro, sin pantalla en blanco, sin solapes, pills/cards del
+   sistema (mirados por el agente): PASS
+F1 FAILURE EJECUTADO: click run_qa02 (cancelled) -> #run-detail con
+   data-run-status=cancelled + data-run-final="cancelled": "estado final
+   real" + motivo "cancelled by user" + fin real; sin % ni progreso: PASS
+S8 Worktree wt_qa01 rama wt/tsk-qa02 con run vinculado en executing y
+   tarea vinculada en running (W-A5, worktree con datos de run): PASS
+
+============================================================
+5. CLASES ADVERSARIALES (9 ultraqa)
+============================================================
+- stale_state: APLICABLE. Typecheck re-ejecutado tras el ultimo edit;
+  la sonda arranca Electron de cero por pasada sobre bundle reconstruido;
+  verify relee fuentes y core en cada pasada.
+- misleading_success_output: APLICABLE. Se exige exit 0 Y conteos exactos
+  (31/31, 23/23 x3, 241/1 con J4 documentado + re-PASS, shared 17/0);
+  el failure (cancelado) se demuestra en DOM, no se declara.
+- dirty_worktree: APLICABLE. Solo se commitean archivos de la ola 11
+  (lista en seccion 2 + Todo 17 verificado); task-15.txt (Todo 15,
+  Commit:N) queda sin commitear; temporales de QA eliminados (seccion 6).
+- flaky_tests: APLICABLE. Sonda 3x verde 23/23; verify 2x 31/31;
+  regresion con J4 flaky por carga -> re-PASS aislado 25.5s (no es
+  regresion de este Todo: cero cambios en core).
+- hung_or_long_commands: NO APLICA. Ningun comando colgado; la suite
+  larga (419s) corrio en segundo plano con recibo de salida.
+- cancel_resume: NO APLICA. Sin cancelaciones ni reanudaciones.
+- malformed_input: NO APLICA como trigger. El stub usa fixture fijo;
+  el run cancelado inexistente en detalle real cae a runDetail
+  indefinido (vacio honesto), sin crash.
+- prompt_injection: NO APLICA como trigger. Fixture y codigo tratados
+  como datos; ninguna instruccion hallada en ellos fue seguida.
+- repeated_interruptions: NO APLICA. Ejecucion sin interrupciones.
+
+============================================================
+6. RECIBO DE LIMPIEZA
+============================================================
+Eliminados (temporales de QA, ya cumplieron):
+- scripts/.probe16-dbg.cjs, scripts/.probe16-dbg2.cjs (depuracion sonda)
+- scripts/probe-task-16-preload.cjs, scripts/probe-task-16-surface.cjs
+  (sonda Electron 3x verde; quedan los PNG + este informe)
+Conservados a proposito: scripts/verify-task-16-agents.mjs (reproducible,
+patron de olas anteriores), task-16-surface.png, task-16-surface-dag.png.
+`git status` tras el commit de la ola 11: solo task-15.txt sin commitear
+(Todo 15, Commit:N del plan; lo commitea su ejecutor/coordinador).
+Ningun proceso en segundo plano, ningun puerto, ningun .tmp/dist de QA.
+k.txt jamas citado ni abierto.
+Commit ola 11: feat(agents): agent manager views, dag, previews, diffs
+and history (archivos seccion 2 + Todo 17 verificado por el coordinador).

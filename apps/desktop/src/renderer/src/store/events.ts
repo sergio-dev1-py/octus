@@ -2,6 +2,7 @@
 import type { CoreEvent, Message } from "@octus/shared";
 import { refreshSessions, refreshMessages, refreshBudgets, refreshPending, refreshUsage } from "./projects.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
+import { refreshRunDetail } from "./runs.js";
 import { refreshTasks } from "./tasks.js";
 import { refreshWorktrees } from "./worktrees.js";
 import { refreshIntegrations } from "./integrations.js";
@@ -45,6 +46,7 @@ export function applyEvent(event: CoreEvent): void {
       setState("busy", false);
       void refreshMessages();
       void refreshUsage();
+      void refreshRunDetail();
       void refreshBudgets();
       void refreshPlans();
       void refreshApprovals();
@@ -59,6 +61,7 @@ export function applyEvent(event: CoreEvent): void {
     case "run.status_changed":
       setState("busy", true);
       void refreshUsage();
+      void refreshRunDetail();
       void refreshIntegrations();
       break;
     case "task.created":
@@ -92,6 +95,7 @@ export function applyEvent(event: CoreEvent): void {
       break;
     case "provider.usage_recorded":
       void refreshUsage();
+      void refreshRunDetail();
       void refreshBudgets();
       break;
     case "plan.created":

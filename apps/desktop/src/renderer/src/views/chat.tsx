@@ -12,6 +12,7 @@ import {
   state,
 } from "../store.js";
 import { PlansSection, TasksSection, WorktreesSection, IntegrationsSection, MemorySection, AgentsSection } from "./sections.jsx";
+import { DagSection, WorktreeDiffSection, IntegrationHistorySection } from "./dag.jsx";
 
 export function PartView(props: { part: MessagePart }) {
   const part = () => props.part;
@@ -245,6 +246,9 @@ export function ChatView() {
       <TasksSection />
       <WorktreesSection />
       <IntegrationsSection />
+      <DagSection />
+      <WorktreeDiffSection />
+      <IntegrationHistorySection />
       <MemorySection />
       <AgentsSection />
       <Composer />

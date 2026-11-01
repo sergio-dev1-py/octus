@@ -278,7 +278,8 @@ select {
 }
 
 .chat,
-.settings-view {
+.settings-view,
+.agents {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -603,4 +604,56 @@ code.muted {
   border: 1px solid var(--danger);
   border-radius: var(--oc-radius-pill);
   padding: 0 var(--oc-space-2);
+}
+
+/* Vista de agentes (Todo 16, W-A1 a W-A5): solo tokens var(--oc-*) / alias, sin literales. */
+#agent-dag {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--oc-radius-md);
+  padding: var(--oc-space-3) var(--oc-pad);
+  margin: var(--oc-space-3) 0;
+}
+
+.dag-columns {
+  display: flex;
+  gap: var(--oc-space-4);
+  overflow-x: auto;
+  padding: var(--oc-space-2) 0;
+}
+
+.dag-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-space-2);
+  min-width: calc(var(--oc-space-7) * 8);
+  flex: 1;
+}
+
+.dag-node {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left-width: var(--oc-space-1);
+  border-radius: var(--oc-radius-md);
+  padding: var(--oc-space-2) var(--oc-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--oc-space-1);
+  font-size: var(--oc-text-sm);
+}
+
+.dag-node.ok {
+  border-left-color: var(--oc-success);
+}
+
+.dag-node.err {
+  border-left-color: var(--danger);
+}
+
+.dag-node.warn {
+  border-left-color: var(--oc-warning);
+}
+
+.dag-node.muted {
+  border-left-color: var(--muted);
 }

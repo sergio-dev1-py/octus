@@ -93,6 +93,7 @@ const CHANNELS: IpcChannel[] = [
   "worktrees.list",
   "worktrees.get",
   "worktrees.cleanup",
+  "worktrees.diff",
   "repos.inspect",
   "repos.setWorktreesRoot",
   "integrations.create",
@@ -557,6 +558,18 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
       try {
         await need().cleanupWorktree(payload.worktreeId, { deleteBranch: payload.deleteBranch });
         return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "worktrees.diff": async (payload) => {
+      // N-A-DIFF-1 (Todo 4): diff acotado de solo lectura; base opcional validada como SHA-40.
+      if (!isNonEmptyString(payload.worktreeId)) throw new Error("invalid payload");
+      if (payload.base !== undefined && !/^[0-9a-f]{40}$/.test(payload.base)) throw new Error("invalid payload");
+      try {
+        const diff = await need().worktrees.getWorktreeDiff(payload.worktreeId, payload.base);
+        const inspected = await need().worktrees.inspectWorktree(payload.worktreeId);
+        return { ok: true, diff, head: inspected.head, branch: inspected.branch };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }

@@ -176,6 +176,7 @@ export interface OctusIPC {
   "worktrees.list": { request: { projectId: string }; response: { worktrees: Worktree[] } };
   "worktrees.get": { request: { worktreeId: string }; response: { ok: boolean; worktree?: Worktree; operations?: WorktreeOperation[]; error?: string } };
   "worktrees.cleanup": { request: { worktreeId: string; deleteBranch?: boolean }; response: { ok: boolean; error?: string } };
+  "worktrees.diff": { request: { worktreeId: string; base?: string }; response: { ok: boolean; diff?: string; head?: string; branch?: string; error?: string } };
   "repos.inspect": { request: { projectId: string }; response: { summary: RepositorySummary } };
   "repos.setWorktreesRoot": { request: { projectId: string; path: string }; response: { ok: boolean; error?: string } };
   "memory.list": { request: { scope?: "project" | "session" | "run" | "task" | "instance"; scopeId?: string; status?: "proposed" | "verified" | "approved" | "stale" | "superseded" | "rejected" }; response: { entries: MemoryItem[] } };

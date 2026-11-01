@@ -1,7 +1,7 @@
 /** Renderer/store — estado raíz, tipos de UI y banderas globales. */
 import { DEFAULT_LAYOUT, DEFAULT_UI_PREFS } from "@octus/shared";
 import { createStore } from "solid-js/store";
-import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, Task, TaskDependency, TaskAttempt, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
+import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
 
 export interface LiveMessage {
   id: string;
@@ -27,6 +27,9 @@ interface UIState {
   budgets: Budget[];
   budgetUsage: BudgetUsage[];
   usage: UsageRecord[];
+  /** Todo 16 — run seleccionado en la vista de agentes y su ficha (runs.get). */
+  selectedRunId?: string;
+  runDetail?: { run: Run; instances: AgentInstance[]; toolCalls: ToolCallRecord[] };
   view: "chat" | "settings";
   sessionNotice?: string;
   welcomeError?: string;
@@ -78,6 +81,8 @@ const [state, setState] = createStore<UIState>({
   budgets: [],
   budgetUsage: [],
   usage: [],
+  selectedRunId: undefined,
+  runDetail: undefined,
   view: "chat",
   sessionNotice: undefined,
   brokenProjectIds: [],
