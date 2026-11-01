@@ -1,0 +1,145 @@
+TODO 20 — SKILLMANAGER CON DESCUBRIMIENTO EN TRES ÁMBITOS
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 12) | Rama: feat/ux-skills-mcp-w12-skills
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w12
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a19943) | Commit: sí (ver §5, solo archivos propios)
+Restricciones cumplidas: .omo/evidence en el WORKTREE; jamás citado ni abierto C:/Users/UserPy/Desktop/PromtHack/k.txt;
+NO ejecutados scripts al descubrir (el descubridor solo lee SKILL.md); no implementadas capas de permisos (brechas
+19-A..D intactas, solo se respeta el modelo existente); archivos del Todo 18/19/21 NO tocados (ver §6).
+
+============================================================
+1. DISEÑO (fijado tras leer Todo 18, Todo 19, agent-registry y persistence-service)
+============================================================
+- Nuevo servicio `packages/core/src/skills/skill-manager.ts`, clase `SkillManager`
+  (patrón AgentRegistry: registro con upsert/list/get, pero en memoria porque la
+  persistencia es el Todo 22; sin migración de esquema en este Todo).
+- Ámbitos: `global` | `project` | `managed` (gestionado por Octus). Precedencia ante
+  duplicados: project > global > managed (gana el más específico; `seenIn` guarda todos).
+- Registro por skill: id (= name), name, description, origin, path, scope, version
+  (de `metadata.version`, Todo 18), enabled (= false al descubrir; la administra el Todo 22),
+  compatibility, allowedTools (DATO descriptivo, sin efecto en PermissionManager),
+  errors (avisos no fatales, p.ej. duplicado en otro ámbito), seenIn[].
+- Validación: réplica exacta C1..C8 del Todo 18 (no inventa formato). Directorios sin
+  SKILL.md o con frontal inválido → entradas en `errors()` con cláusula, NUNCA skills.
+- `discover()` reconstruye desde cero: idempotente, sin cargas múltiples (readCount).
+  Ámbito ausente ≠ error. Cero ejecución: sin spawn/import dinámico/eval (grep §4-Q8).
+
+============================================================
+2. COMANDOS EXACTOS Y SALIDAS (todo ejecutado de verdad, prohibido dry-run)
+============================================================
+$ cd packages/core && bun test test/skill-discovery.test.ts --timeout 30000   (PASADA 1)
+bun test v1.4.2
+  (pass) misma skill en global + project: un solo registro, gana project, sin cargas múltiples
+  (pass) errores de validación visibles: nombre inválido y descripción vacía no son skills
+  (pass) failure: directorio sin SKILL.md se registra como error C1, no como skill
+  (pass) ámbito ausente no es error: solo descubre lo que existe
+  (pass) el registro expone id, origen, ruta, alcance, versión, activación y compatibilidad
+  5 pass, 0 fail, 46 expect() calls. EXIT 0.
+
+$ bun test test/skill-discovery.test.ts --timeout 30000   (PASADA 2, clase flaky_tests)
+  5 pass, 0 fail, 46 expect() calls. EXIT 0. Idéntico a pasada 1.
+
+$ bun run typecheck   (packages/core; `tsc --noEmit`)
+  Únicos errores, todos en `src/skills/skill-installer.ts` (Todo 21, EN VUELO, no tocado):
+    skill-installer.ts(211/212,87...): error TS1005/TS1109 (sintaxis, archivo a medio escribir)
+  CERO errores en skill-manager.ts, skill-discovery.test.ts e index.ts.
+  Evidencia de que el fallo es ajeno: `git status` muestra skill-installer.ts como
+  untracked del Todo 21 concurrente; `git diff packages/core/src/index.ts` = solo mi línea.
+
+$ bun test --timeout 30000   (SUITE COMPLETA packages/core, regresión)
+  256 pass, 0 fail, 1097 expect() calls. Ran 256 tests across 32 files. [336.00s]. EXIT 0.
+  Nota: lanzada antes de que existiera `test/skills-install.test.ts` del Todo 21;
+  cubre mi test (5) + las 251 preexistentes. Sin regresiones.
+
+$ bun C:/tmp/octus-qa-20-manual.ts   (MANUAL-QA agente-ejecutado, layout 3 ámbitos real)
+  REGISTRO: octus-helper origin=managed scope=managed version=1.0.0 enabled=false seenIn=managed;
+            qa-skill origin=project scope=project version=1.0.0 enabled=false seenIn=project+global
+  ERRORES: [C3] global Bad_Name :: `name` con caracteres fuera de [a-z0-9-];
+           [C1] managed empty-dir :: falta SKILL.md en el directorio
+  PASS Q1 dedupe: qa-skill un solo registro
+  PASS Q2 precedencia: gana project
+  PASS Q3 seenIn cubre global+project
+  PASS Q4 managed descubre octus-helper
+  PASS Q5 registro completo (10 campos)
+  PASS Q6 errores visibles C3 (Bad_Name)
+  PASS Q7 failure C1 (empty-dir sin SKILL.md, no es skill)
+  PASS Q8 señuelos sin ejecutar (3 PWNED.marker ausentes)
+  PASS Q9 re-descubrir no duplica
+  MANUAL-QA: 9 PASS, 0 FAIL. EXIT 0.
+
+$ git status --short (antes del commit; solo mis archivos + los ajenos intactos)
+   M packages/core/src/index.ts                                    (mía: 1 línea export)
+   ?? .omo/evidence/octus-ux-skills-mcp/task-19.txt                (Todo 19, NO tocado)
+   ?? packages/core/src/skills/                                    (mío skill-manager.ts + skill-installer.ts del 21)
+   ?? packages/core/test/skill-discovery.test.ts                   (mío)
+   ?? packages/core/test/skills-install.test.ts                    (Todo 21, NO tocado)
+
+Aserciones del plan: descubrir la misma skill en dos ámbitos → UN registro (Q1-Q3);
+errores de validación visibles con cláusula (Q6); failure sin SKILL.md → error C1, no skill (Q7). CUMPLIDO.
+
+============================================================
+3. MANUAL-QA (agente-ejecutado, con PASS/FAIL) — ver §2, script C:/tmp/octus-qa-20-manual.ts
+============================================================
+9 PASS, 0 FAIL (Q1..Q9 arriba). Superficie ejercitada: descubrimiento real en disco en los
+3 ámbitos con layout `C:/tmp/octus-qa-20-manual/{global,project,managed-octus}`, fixtures
+qa-skill duplicada + octus-helper + Bad_Name + empty-dir + 3 señuelos install.sh/run.sh.
+Tras la corrida, fixtures y script eliminados (recibo §4).
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+APLICABLES (con mitigación y resultado):
+- stale_state: el Todo 21 trabaja EN VUELO en el mismo worktree/rama (skill-installer.ts
+  con error de sintaxis transitorio; su test apareció a mitad de mi suite). Mitigado:
+  verifiqué por `git status`+`git diff`+grep qué archivo es de quién antes de cada
+  conclusión; mi suite completa se lanzó sobre árbol sin su test; el typecheck rojo se
+  atribuye archivo por archivo (solo el suyo falla); no edité ni leí más que sus
+  imports (cero matches con skill-manager) para confirmar no-dependencia.
+- misleading_success_output: se exige PASS nominal Y failure visible. Mitigado: el test
+  incluye casos failure (C3/C5/C1) que fallarían si el descubridor aceptara todo; el
+  typecheck en rojo (ajeno) se reporta en vez de ocultarse; la suite completa da
+  256/256, no un subconjunto.
+- dirty_worktree: mitigado con `git status --short` antes y después (único M: index.ts
+  con mi línea; untracked propios separados de task-19.txt y archivos del 21); el
+  commit usa `git add` por RUTA exacta, nunca `add -A` (que arrastraría lo del 21).
+- flaky_tests: test repetido 2× (46 expects, 5/5 ambas, idéntico); sin temporizadores ni
+  azar en fixtures (nombres fijos, sorts deterministas, rmSync en finally).
+NO-APLICABLES (con motivo):
+- live_credentials: sin red, sin claves; fixtures públicos de juguete; k.txt jamás citado/abierto.
+- timing_flake: descubrimiento síncrono (readdirSync/readFileSync/statSync); cero timeouts/sleeps.
+- prompt_injection: entradas solo del árbol vivo y el plan; SKILL.md se parsea como
+  texto (frontmatter plano), nunca se ejecuta ni se interpola.
+- schema_drift: sin migraciones (registro en memoria; el esquema SQLite no se toca; Todo 22 persistirá).
+- i18n_garble: mensajes en español con tildes; bun test los muestra intactos (ver §2).
+- secretos en evidencia: este archivo no contiene claves ni tokens (verificado por relectura).
+
+============================================================
+5. LIMPIEZA TOTAL (recibo) + COMMIT
+============================================================
+$ rm -rf C:/tmp/octus-qa-20-manual C:/tmp/octus-qa-20-manual.ts
+Verificado: Test-Path ambos → False (ver recibo en DoneClaim; /tmp/octus-test-* son de
+la propia suite con auto-limpieza por test y quedan fuera de mi alcance).
+En el worktree solo quedan mis 4 rutas (abajo); nada en C:/tmp, nada fuera del worktree.
+
+$ git add packages/core/src/skills/skill-manager.ts \
+        packages/core/test/skill-discovery.test.ts \
+        packages/core/src/index.ts \
+        .omo/evidence/octus-ux-skills-mcp/task-20.txt
+$ git commit -m "feat(skills): skill manager with three-scope discovery"
+Commit verificado con `git log -1 --format='%H %s'` (SHA en el repo, autoevidente).
+NO incluidos: task-19.txt, src/skills/skill-installer.ts, test/skills-install.test.ts.
+
+============================================================
+6. RIESGOS Y NOTAS PARA LA OLA
+============================================================
+- R1 (coordinación): `src/skills/skill-installer.ts` (Todo 21, en vuelo) define TAMBIÉN
+  `SkillScope`/`SkillRecord` con unión distinta (`"global"|"project"|"octus"` vs la mía
+  `"global"|"project"|"managed"`). Hoy no colisiona (el 21 aún no exporta desde index.ts
+  y no importa skill-manager). Cuando el 21 exporte, habrá conflicto de exportaciones.
+  Su propia cabecera anticipa adoptar/envolver el SkillRecord del Todo 20: el
+  orquestador debe dirigir esa convergencia (recomendado: el 21 importa mis tipos y
+  elimina los suyos; decidir etiqueta `managed` vs `octus`).
+- R2 (heredado del Todo 19): scopes run/tarea sin modelar en PermissionManager
+  (brechas 19-B/19-C). Mi manager registra skills sin filtrar por run/tarea; el
+  deny-by-default protege las herramientas, pero el Todo 23 debe acotar la exposición.
+- R3: typecheck del paquete queda en rojo por el borrador del 21 hasta que lo termine;
+  ningún gate debe atribuirme ese rojo (evidencia archivo-por-archivo en §2).
