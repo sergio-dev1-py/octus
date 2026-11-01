@@ -9,8 +9,11 @@ import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "el
 import { OctusCore } from "@octus/core";
 import {
   IPC_EVENT_CHANNEL,
+  UI_LAYOUT_KEY,
   UI_PREFS_KEY,
   isUiPrefs,
+  isWorkbenchLayout,
+  parseStoredLayout,
   parseStoredUiPrefs,
   type CoreEvent,
   type IpcChannel,
@@ -25,6 +28,8 @@ import { resolveDefinitionsDir, resolveWorkerPath } from "./worker-path.js";
 const CHANNELS: IpcChannel[] = [
   "prefs.get",
   "prefs.set",
+  "layout.get",
+  "layout.set",
   "app.versions",
   "app.pickDirectory",
   "projects.list",
@@ -180,6 +185,29 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
         Date.now(),
       ]);
       return { prefs: payload.prefs };
+    },
+    "layout.get": async () => {
+      // Degradación del caso failure del Todo 8: kv ausente o corrupta → defecto, sin pantalla en blanco.
+      const row = await need().db.queryOne<{ value: string }>("SELECT value FROM kv WHERE key = ?", [UI_LAYOUT_KEY]).catch(() => null);
+      const stored = row?.value;
+      let repaired = false;
+      if (typeof stored === "string" && stored.length > 0) {
+        try {
+          repaired = !isWorkbenchLayout(JSON.parse(stored) as unknown);
+        } catch {
+          repaired = true;
+        }
+      }
+      return { layout: parseStoredLayout(stored), repaired };
+    },
+    "layout.set": async (payload) => {
+      if (!isWorkbenchLayout(payload.layout)) throw new Error("invalid layout");
+      await need().db.exec("INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", [
+        UI_LAYOUT_KEY,
+        JSON.stringify(payload.layout),
+        Date.now(),
+      ]);
+      return { layout: payload.layout };
     },
     "app.versions": async () => ({ octus: "0.1.0", electron: process.versions.electron ?? "", node: process.versions.node ?? "" }),
     "app.pickDirectory": async () => {

@@ -1,0 +1,125 @@
+Todo 8 — Navegación principal y layout con paneles redimensionables · evidencia de verificación
+Fecha: 2026-11-01 · Rama: feat/ux-skills-mcp-w8-foundations · Commit Todo 6: 42fc929
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w8
+
+TODO 8 LEÍDO COMPLETO ANTES DE EMPEZAR. Arquitectura del Todo 2 leída
+(docs/ux/01-information-architecture.md: 5 zonas, ocultar/restaurar, persistencia
+por usuario, layout corrupto → defecto con aviso, atajos por zona). Sistema del
+Todo 3 aplicado (design/tokens.css, components.css, README.md, prototypes.html:
+#workbench con .wb-activity/.wb-sidebar/.wb-main/.wb-inspector/.wb-panel,
+.message-timeline, #composer). Contrato C-01 del Todo 5 leído (ver desvío abajo).
+
+PASO PREVIO (antes de editar, todo en verde)
+- `bun run --cwd packages/shared test` → 7 pass / 0 fail
+- `bun test packages/core/test/ui-prefs.test.ts` → 2 pass / 0 fail
+- `bun run --cwd apps/desktop typecheck` → exit 0
+- HALLAZGO (se reporta, no se edita): `bun run test` en raíz no cabe en la
+  ventana de 300 s de esta máquina (i3-2328M; la suite completa tarda ~340 s).
+  Preexistente y ambiental (el Todo 6 reportó lo mismo). Se ejecutó en segundo
+  plano al cierre: 239 pass / 0 fail (ver abajo).
+
+DESVÍO DOCUMENTADO DE C-01 (una sola decisión, razonada)
+- C-01 nombraba el layout dentro de `ui.prefs.v1`, pero el Todo 6 aterrizó prefs
+  como trío estricto (tema, tamaño, densidad) con tests que fijan la forma
+  exacta (`toEqual({theme, fontSize, density})`, `isUiPrefs` sin layout → true).
+  Ampliar ese objeto invalidaría el contrato aterrizado y obligaría migración.
+- Decisión: el layout vive en su propia clave kv `ui.layout.v1` con el MISMO
+  mecanismo y la MISMA semántica (validación estricta en escritura, degradación
+  por campo en lectura, corrupto → defecto). Ningún test del Todo 6 se tocó.
+- Ninguna dependencia pesada nueva (verificado por script: sin playwright,
+  jsdom ni node-pty; linkedom solo en scratch temporal, ya eliminado).
+
+ENTREGABLES (11 archivos, y solo estos)
+- packages/shared/src/layout.ts (NUEVO): WorkbenchLayout {activity, sidebar
+  visible+ancho, inspector visible+ancho, bottom visible+alto+pestaña},
+  UI_LAYOUT_KEY, rangos (sidebar 200-480, inspector 220-480, bottom 120-400),
+  is*/parse*/parseStoredLayout, ops puras (toggle*/set*/resize*By/resetLayout),
+  layoutStyles (ÚNICA traducción layout→DOM, la usan App y el QA).
+- packages/shared/src/index.ts, ipc.ts: export + canales layout.get/layout.set
+  (get responde {layout, repaired}).
+- packages/shared/test/layout.test.ts (NUEVO): 10 tests.
+- packages/core/test/ui-layout.test.ts (NUEVO): 2 tests con PersistenceService
+  real (reinicio simulado + corrupción).
+- apps/desktop/src/main/index.ts: CHANNELS + handlers (get con repaired,
+  set con isWorkbenchLayout estricto, mismo UPSERT kv del Todo 6).
+- apps/desktop/src/renderer/src/store.ts: estado layout+notice, load en
+  initStore (defecto sin romper arranque), 11 acciones persistentes, preview/
+  save para arrastrar sin escribir en cada píxel.
+- apps/desktop/src/renderer/src/App.tsx: ActivityBar (6 actividades con iconos
+  SVG monocromos + 4 botones con id), Sidebar conmutada por actividad,
+  InspectorPanel (datos reales: sesión, pendientes, fallos), BottomPanel
+  (Terminal/Problemas/Salida/Pruebas con datos reales y vacíos honestos),
+  ResizeHandle ×3 (puntero + teclado, role=separator), atajos Ctrl+B / Ctrl+J /
+  Ctrl+Alt+I / Ctrl+0 / Alt+1..6 (ignoran inputs; Enter del composer intacto),
+  aviso #layout-notice, ids #workbench #activity-bar #sidebar #center
+  #inspector #bottom-panel #composer #layout-reset #toggle-*.
+- apps/desktop/src/renderer/src/styles.css: layout workbench solo con
+  var(--oc-*); sin hex; sin px nuevos (solo hairlines 1px y 4 estructurales
+  preexistentes 70/420/640/220, reportados como hallazgo).
+- scripts/verify-task-8-layout.mjs (NUEVO): 66 aserciones ejecutadas con bun
+  (lógica real + PersistenceService real + DOM linkedom + cableado en fuentes).
+- scripts/probe-task-8-surface.cjs + probe-task-8-preload.cjs (NUEVOS): sonda
+  Electron sobre el bundle construido (entrada de verdad: clicks, teclado de
+  confianza, arrastre por pasos), 32 aserciones + 2 PNGs en esta evidencia.
+
+PRUEBAS (comando + resultado)
+- `bun run --cwd packages/shared test` → 17 pass / 0 fail (7 previos intactos).
+- `bun test packages/core/test/ui-layout.test.ts packages/core/test/ui-prefs.test.ts` → 4 pass / 0 fail.
+- `bun run --cwd apps/desktop typecheck` → exit 0 (node + web).
+- `bun run test` en raíz (segundo plano, worktree) → 239 pass / 0 fail, exit 0.
+- `bun scripts/verify-task-8-layout.mjs` → OK (66/66), ejecutado 3 veces.
+- Sonda superficie (bundle out/ reconstruido, Electron real):
+  `./node_modules/.bin/electron.exe ../../scripts/probe-task-8-surface.cjs`
+  → probe-task-8-surface: OK (32/32). PNGs: task-8-surface.png (50 KB),
+  task-8-surface-corrupt.png (4 KB).
+- `bun run --cwd apps/desktop build` → exit 0.
+
+MANUAL-QA DE SUPERFICIE REAL (ejecutado por el agente, sin intervención del usuario)
+- S1 ventana Octus abierta y enfocada en el escritorio (1259×730) con workbench
+  completo: PASS (screenshot de ventana capturado vía computer).
+- S2 #activity-bar con 6 actividades + 4 botones de panel: PASS (sonda A).
+- S3 #sidebar 264px + #inspector 248px + #bottom-panel 180px visibles, texto
+  renderizado (>200 chars, sin pantalla en blanco): PASS (sonda B).
+- S4 click #toggle-sidebar oculta; click [data-activity=plans] reabre: PASS.
+- S5 Ctrl+0 restaura defecto (264px + explorer): PASS.
+- S6 arrastre real del tirador sidebar → 304px (±4): PASS (tras robustecer el
+  arrastre a escuchas en window; ver riesgos).
+- S7 Ctrl+J oculta/restaura panel; Ctrl+Alt+I oculta/restaura inspector: PASS.
+- S8 click [data-bottom-tab=problems] selecciona pestaña: PASS.
+- S9 píxeles no en blanco (8 colores distintos en captura): PASS.
+- S10 layout corrupto → aviso "dañado" + paneles visibles + captura: PASS.
+- F1 failure ejecutado: kv corrupta → defecto + repaired=true + aviso visible,
+  sin pantalla en blanco (script + sonda H): PASS.
+
+CLASES ADVERSARIALES
+- stale_state: todos los scripts releen fuentes y disco en cada pasada; la
+  sonda arranca la app de cero por ejecución; sin cachés.
+- misleading_success_output: se exige exit 0 Y conteos exactos (66/66, 32/32,
+  239/0); el failure se demuestra (repaired=true, aviso visible).
+- dirty_worktree: `git status` solo muestra los 11 archivos del Todo; la
+  evidencia del Todo 7 (task-7*, paralela) intacta; el build accidental en el
+  repo principal (cwd por defecto de tool.bash) solo tocó out/ ignorado.
+- flaky_tests: verify-task-8-layout 3× verde; suite raíz 1× (340 s, no repetible
+  en ventana); sonda 6 ejecuciones (2 fallidas por bugs de la propia sonda,
+  1 por evento sintético, 3 verdes tras cada arreglo; la última 32/32).
+- cancel_resume: reinicio simulado (close+reopen real) en tests core, script y
+  sonda (recarga con ?probe=corrupt); perfiles scratch eliminados.
+- No aplicables con motivo: live_credentials (sin red ni claves; jamás se abrió
+  k.txt), timing_flake (sin sleeps en tests bun; la sonda usa entradas de
+  confianza + waitFor acotados), prompt_injection (entradas solo del árbol),
+  schema_drift (kv sin migraciones; clave nueva), i18n_garble (sin plantillas).
+
+LIMPIEZA (recibo)
+- Procesos: app QA (bash_6) y sondas terminados; wmic confirma 0 electron.exe.
+- Temporales eliminados: 11 perfiles octus-qa-*, 3 debug, trivial, scratch
+  linkedom (C:/Windows/Temp/scratch-layout-qa), drag-debug.cjs×3.
+- En el repo solo quedan los 11 archivos del Todo + 2 PNGs de evidencia.
+- Contenido sensible: cero (grep de secretos no aplica; sin claves en evidencia).
+
+RIESGOS / NOTAS PARA EL PADRE
+- El arrastre dependía de setPointerCapture y la entrada sintética lo rompía
+  (solo aplicaba el primer paso); se pasó a escuchas en window (patrón
+  estándar, mejor con ratón/táctil/pluma). Requiere rebuild antes de la sonda.
+- `bun run test` raíz tarda ~340 s aquí: programar su ventana en consecuencia.
+- tool.bash tiene cwd en el repo principal: anteponer `cd <worktree>` siempre.
+- PNGs de evidencia: 54 KB en total; commitidos junto al .txt como registro visual.
