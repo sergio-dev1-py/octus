@@ -85,6 +85,7 @@ export interface OctusIPC {
   "layout.set": { request: { layout: WorkbenchLayout }; response: { layout: WorkbenchLayout } };
   "app.versions": { request: Record<string, never>; response: { octus: string; electron: string; node: string; bun?: string } };
   "app.pickDirectory": { request: Record<string, never>; response: { path?: string } };
+  "app.validateDirectory": { request: { path: string }; response: { ok: boolean; error?: string; realPath?: string } };
   "projects.list": { request: Record<string, never>; response: { projects: Project[] } };
   "projects.create": { request: { name: string; rootPath: string }; response: { project: Project } };
   "sessions.list": { request: { projectId?: string }; response: { sessions: Session[] } };
@@ -95,6 +96,7 @@ export interface OctusIPC {
   "sessions.setProfile": { request: { sessionId: string; profile: "plan" | "build" }; response: { ok: boolean } };
   "sessions.setModel": { request: { sessionId: string; model: ModelSelection }; response: { ok: boolean; error?: string } };
   "sessions.messages": { request: { sessionId: string; runId?: string }; response: { messages: Message[] } };
+  "sessions.recover": { request: { sessionId: string }; response: { session: Session; messages: Message[]; recovered: boolean; skippedMessages: string[]; skippedEvents: number } };
   "sessions.prompt": { request: PromptRequest; response: { runId: string } };
   "sessions.interrupt": { request: { sessionId: string }; response: { ok: boolean } };
   "runs.get": { request: { runId: string }; response: { run: Run; instances: AgentInstance[]; toolCalls: ToolCallRecord[] } };

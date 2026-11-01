@@ -16,6 +16,7 @@ import {
 import { ActivityBar, Sidebar, ResizeHandle, InspectorPanel, BottomPanel } from "./views/workbench.jsx";
 import { SettingsView } from "./views/settings.jsx";
 import { ChatView, PermissionDialogs, QuestionDialogs } from "./views/chat.jsx";
+import { WelcomeView } from "./views/welcome.jsx";
 
 export default function App() {
   onMount(() => {
@@ -62,6 +63,11 @@ export default function App() {
   const showCatalog = () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("catalog") === "1";
   return (
     <Show when={showCatalog()} fallback={
+    <Show when={state.activeProjectId} fallback={
+      <div class="app" id="welcome-shell">
+        <WelcomeView />
+      </div>
+    }>
     <div class="app" id="workbench">
       <Show when={state.layoutNotice}>
         <div id="layout-notice" role="status">
@@ -88,6 +94,7 @@ export default function App() {
       <PermissionDialogs />
       <QuestionDialogs />
     </div>
+    </Show>
     }>
       <div class="app" id="workbench">
         <CatalogView />
@@ -95,4 +102,3 @@ export default function App() {
     </Show>
   );
 }
-

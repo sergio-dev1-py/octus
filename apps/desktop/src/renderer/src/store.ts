@@ -4,6 +4,7 @@ export * from "./store/state.js";
 export * from "./store/projects.js";
 export * from "./store/plans.js";
 export * from "./store/settings.js";
+export * from "./store/welcome.js";
 export * from "./store/tasks.js";
 export * from "./store/worktrees.js";
 export * from "./store/integrations.js";

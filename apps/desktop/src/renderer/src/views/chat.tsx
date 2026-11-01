@@ -4,6 +4,7 @@ import type { Message, MessagePart } from "@octus/shared";
 import { invoke } from "../api.js";
 import { renderMarkdown } from "../markdown.js";
 import {
+  dismissSessionNotice,
   interrupt,
   sendPrompt,
   setError,
@@ -191,6 +192,12 @@ export function ChatView() {
         <div class="banner err">
           {state.error}
           <button onClick={() => setError(undefined)}>×</button>
+        </div>
+      </Show>
+      <Show when={state.sessionNotice}>
+        <div id="session-notice" class="banner warn" role="status">
+          {state.sessionNotice}
+          <button onClick={() => void dismissSessionNotice()}>×</button>
         </div>
       </Show>
       <header>

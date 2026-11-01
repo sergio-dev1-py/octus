@@ -28,6 +28,9 @@ interface UIState {
   budgetUsage: BudgetUsage[];
   usage: UsageRecord[];
   view: "chat" | "settings";
+  sessionNotice?: string;
+  welcomeError?: string;
+  brokenProjectIds: string[];
   prefs: UiPrefs;
   layout: WorkbenchLayout;
   layoutNotice?: string;
@@ -76,6 +79,8 @@ const [state, setState] = createStore<UIState>({
   budgetUsage: [],
   usage: [],
   view: "chat",
+  sessionNotice: undefined,
+  brokenProjectIds: [],
   prefs: { ...DEFAULT_UI_PREFS },
   layout: { ...DEFAULT_LAYOUT },
   layoutNotice: undefined,

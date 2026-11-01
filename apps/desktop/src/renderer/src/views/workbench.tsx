@@ -4,9 +4,13 @@ import type { ActivityId, BottomTab } from "@octus/shared";
 import { layoutStyles, resizeBottomBy, resizeInspectorBy, resizeSidebarBy } from "@octus/shared";
 import { invoke } from "../api.js";
 import {
+  closeSession,
   createProject,
   createSession,
   previewWorkbenchLayout,
+  reconcileRecovery,
+  recoverActiveSession,
+  renameSession,
   resetWorkbenchLayout,
   resizeBottomPanel,
   resizeInspectorPanel,
@@ -54,18 +58,28 @@ export function ExplorerPanel() {
           </button>
         </div>
       </section>
-      <section>
+      <section id="project-nav">
         <h2>Sessions</h2>
-        <button class="primary" disabled={!state.activeProjectId} onClick={() => void createSession()}>
+        <button id="session-new" class="primary" disabled={!state.activeProjectId} onClick={() => void createSession()}>
           New session
         </button>
-        <For each={state.sessions}>
-          {(session) => (
-            <button class={session.id === state.activeSessionId ? "active" : ""} onClick={() => void selectSession(session.id)}>
-              {session.title} <span class="profile">[{session.profile}]</span>
-            </button>
-          )}
-        </For>
+        <Show when={state.sessions.length === 0}>
+          <p class="muted">Sin sesiones en este proyecto. Crea una para empezar.</p>
+        </Show>
+        <div id="session-list" role="listbox" aria-label="Sesiones del proyecto">
+          <For each={state.sessions}>
+            {(session) => (
+              <div class="row" role="option" aria-selected={session.id === state.activeSessionId} data-session-id={session.id}>
+                <button class={session.id === state.activeSessionId ? "active" : ""} onClick={() => void selectSession(session.id)}>
+                  {session.title} <span class="profile">[{session.profile}]</span>
+                </button>
+                <button type="button" title={`Cerrar sesión ${session.title}`} aria-label={`Cerrar sesión ${session.title}`} data-session-close={session.id} onClick={() => void closeSession(session.id)}>
+                  ×
+                </button>
+              </div>
+            )}
+          </For>
+        </div>
       </section>
     </>
   );
@@ -250,6 +264,7 @@ export function InspectorPanel() {
   const styles = () => layoutStyles(state.layout).inspector;
   const session = () => state.sessions.find((s) => s.id === state.activeSessionId);
   const failedTasks = () => state.tasks.filter((t) => t.status === "failed");
+  let renameInput: HTMLInputElement | undefined;
   return (
     <aside id="inspector" style={{ display: styles().display, width: styles().width }} aria-label="Inspector">
       <div class="side-head">
@@ -266,6 +281,26 @@ export function InspectorPanel() {
             <span class="profile">[{session()!.profile}]</span>
           </div>
           <p class="muted">{state.busy ? "trabajando…" : "inactiva"} · {state.messages.length} mensajes</p>
+          <div class="row">
+            <input ref={renameInput} placeholder="Nuevo título" value={session()!.title} aria-label="Nuevo título de sesión" />
+            <button id="session-rename" type="button" onClick={() => void renameSession(renameInput?.value ?? "")}>
+              Renombrar
+            </button>
+          </div>
+          <div class="row">
+            <button id="session-close" type="button" class="danger" onClick={() => void closeSession()}>
+              Cerrar sesión
+            </button>
+            <button id="session-recover" type="button" onClick={() => void recoverActiveSession()}>
+              Recuperar sesión
+            </button>
+          </div>
+          <p class="muted">
+            Recuperación: {state.recoveryStatus ? `${state.recoveryStatus.pendingOps} ops pendientes` : "desconocida"} ·{" "}
+            <button type="button" onClick={() => void reconcileRecovery()}>
+              Reconciliar ahora
+            </button>
+          </p>
         </section>
         <section>
           <h2>Pendientes de ti</h2>

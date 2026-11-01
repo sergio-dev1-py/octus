@@ -1,0 +1,134 @@
+Todo 11 — Gestión visual de proyectos y sesiones con recuperación · evidencia
+Fecha: 2026-11-01 · Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w9 · Rama: feat/ux-skills-mcp-w9-welcome
+
+TODO 11 LEÍDO COMPLETO ANTES DE EMPEZAR. Referencias leídas: sessions/octus-core.ts
+(proyectos, sesiones, settleInterrupted), persistence-service.ts (worker SQLite único,
+sin segunda base), Todo 5 (.omo/design/octus-ux-skills-mcp/task-5-contracts.md,
+contrato C-02: tablas projects/sessions/runs/messages/events + kv
+welcome.recents.<projectId>), tests de la conducta tocada en verde antes de editar
+(conversation 7/7, persistence 4/4, shared 17/17). Jamás se abrió ni citó k.txt.
+
+DECISIÓN CENTRAL (una sola, razonada)
+- Recuperación = `OctusCore.recoverSession(sessionId)`: lectura defensiva fila a
+  fila sobre las MISMAS tablas (`messages`, `events`); fila corrupta omitida y el
+  incidente registrado con el evento EXISTENTE `error.raised` (agregado `session`,
+  definido pero sin ningún emisor hasta hoy) con {reason:"session-recovery",
+  sessionId, skippedMessages, skippedEvents}. Sesión vacía registrada, nunca
+  pérdida silenciosa; filas corruptas conservadas para forense (no se borran).
+  Sin SessionManager duplicado, sin segunda jerarquía de persistencia, sin
+  cambiar `sessionMessages` (sigue estricta) ni `settleInterrupted` (sigue en
+  Etapa 6). Canal nuevo mínimo `sessions.recover` (productor: core; consumidor:
+  banner de recuperación del renderer; persistencia: mismas tablas) — el único
+  contrato nuevo, documentado aquí.
+- Frontend reutiliza canales existentes (delete/rename/reconcile) + el nuevo
+  recover; guarda de aislamiento en `selectSession` (sessions.get y compara
+  projectId con el activo; rechaza con error, sin cambiar de sesión).
+
+ENTREGABLES
+- packages/core/src/sessions/octus-core.ts (+67): recoverSession.
+- packages/shared/src/ipc.ts (+1): sessions.recover en OctusIPC.
+- apps/desktop/src/main/index.ts: canal + handler con validación (invalid payload).
+- apps/desktop/src/renderer/src/store.ts: sessionNotice + dismiss, guarda de
+  aislamiento en selectSession, renameSession, closeSession (cierra e
+  interrumpido via delete + continúa con la primera restante), recoverActiveSession,
+  refreshMessages degradado a aviso con ruta de recuperación.
+- apps/desktop/src/renderer/src/App.tsx: #project-nav, #session-new, #session-list
+  (role=listbox/option, aria-selected, data-session-id, [data-session-close]),
+  inspector con #session-rename/#session-close/#session-recover + estado de
+  recuperación, banner #session-notice (role=status).
+- packages/core/test/session-management.test.ts (NUEVO, 3 tests).
+- scripts/probe-task-11-core.ts (sonda runtime, 13 aserciones), scripts/qa-task-11-manual.mjs
+  (MANUAL-QA: sonda + artefactos + Chromium CDP, 2 pasadas + screenshot),
+  scripts/task-11-sessions.entry.tsx (App REAL contra backend contract-shaped).
+- .omo/evidence/octus-ux-skills-mcp/task-11-surface.png (28 KB).
+
+NOTA DE CONVIVENCIA CON TODO 10 (misma rama/worktree, ola 9 en paralelo)
+- El commit e6e8089 (Todo 10, welcome) barrió mis cambios de frontend
+  (main/index.ts, store.ts, App.tsx) al hacer `git add -A`; se reconcilió sin
+  conflicto y conservó todo lo mío. Mi commit pendiente: octus-core.ts,
+  ipc.ts (línea sessions.recover), test, scripts y evidencia. Decisión del
+  ejecutor: NO commitear para no enredar el flujo de la ola; el runner decide.
+- El Todo 10 retiró la auto-selección (refreshProjects/refreshSessions): corregí
+  closeSession para continuar explícitamente con la primera restante (antes
+  comentaba auto-selección que ya no existe) y adapté el QA al flujo
+  bienvenida → reciente → abrir sin sesión → gestionar.
+
+PRUEBAS (comando + resultado)
+- `bun test --timeout 30000 test/session-management.test.ts` (cwd packages/core) → 3 pass / 0 fail:
+  ciclo crear/cambiar/cerrar/recuperar con aislamiento por proyecto; cerrar liquida
+  runs e reinicio cancela colgados (continuable por mensaje); failure corrupto →
+  mensajes [] + recovered=true + skipped [msg_corrupto_1]/1 evento + error.raised
+  registrado + filas conservadas + sesión navegable.
+- Regresión: conversation 7/7 + persistence 4/4 + session-management 3/3 = 14/0;
+  shared 17/17; `bun run typecheck` en shared, core y desktop (node+web) → exit 0.
+- `bun ../../scripts/probe-task-11-core.ts` → PROBE-CORE: OK (13/13).
+
+MANUAL-QA DE SUPERFICIE REAL (agente, 2 pasadas idénticas, exit 0)
+`node scripts/qa-task-11-manual.mjs` → QA Todo 11: 40 PASS / 0 FAIL → PASS
+- Núcleo runtime (13): crear/aislar/cambiar/renombrar/recuperar-sana-sin-incidente/
+  cerrar/not-found/failure vacía+conteo+incidente+forense+navegable. PASS ×13.
+- Artefactos construidos (7): main expone sessions.recover; renderer trae
+  #project-nav, #session-list, #session-recover, #session-notice, invocación
+  sessions.recover y cierre por sesión. PASS ×7.
+- Chromium headless sobre bundle vite de la App REAL (20 por pasada):
+  bienvenida sin auto-selección; recientes con fecha (2 proyectos); modo sesiones
+  (3); workbench tras abrir; #project-nav con A1/A2/frágil; B-uno ausente;
+  cambiar a A-dos (selección + cabecera); inspector con 2 ops pendientes;
+  input refleja A-dos; renombrar persiste (A-dos-qa); cerrar elimina y continúa
+  con vecina seleccionada; guarda rechaza sesión foránea (error + activa intacta);
+  corrupta → aviso Recuperar sin pantalla en blanco; recuperar → "1 mensaje(s) y
+  1 evento(s)"; sana → "sin filas corruptas". PASS ×20 en p1 y p2.
+- Screenshot: task-11-surface.png (28 KB, workbench con gestión de sesiones).
+
+HALLAZGO DE FIDELIDAD (documentado, no es bug de producto)
+- El primer QA fallaba solo en "renombrar" (llamada sessions.rename correcta en
+  red, lista sin actualizar): el backend falso devolvía las MISMAS referencias y
+  el store de Solid no notifica ante mutación silenciosa + set con idéntica
+  referencia. El IPC real clona por serialización, así que el falso mentía.
+  Fix: el falso clona respuestas con JSON round-trip (como Electron). Lección
+  para futuros QA: los stubs deben preservar la semántica del transporte.
+
+CLASES ADVERSARIALES
+- stale_state: sonda con dataDir temporal nuevo por corrida; bundle QA
+  reconstruido por corrida; navegación fresca por pasada (módulo re-ejecutado,
+  estado prístino en p2); perfiles Chromium únicos por pid. PASS.
+- misleading_success_output: se exige exit 0 Y conteos exactos (3/0 bun,
+  13/13 sonda, 40/0 QA); el failure se demuestra (recovered=true, conteos
+  exactos, error.raised con sessionId). PASS.
+- dirty_worktree: `git status` final solo muestra 3 M + 5 ?? del Todo (listados
+  abajo); out/ y node_modules ignorados; sin cambios en etapas 1–6. PASS.
+- flaky_tests: QA 2 pasadas idénticas 20/20; bun 1 corrida (determinista: sin
+  sleeps; esperas por evento waitForIdle y polls CDP por estado con tope).
+  El único fallo visto (rename) fue determinista en ambas pasadas y con causa
+  raíz identificada, no flake. PASS.
+- malformed_input (evento corrupto): parts='¡corrupto{' + payload='¡corrupto{'
+  → sesión vacía + incidente registrado + forense conservado (bun + sonda +
+  QA banner). Main rechaza sessionId vacío ("invalid payload"). PASS.
+- cancel_resume: reinicio real (close + OctusCore.create) cancela run colgado y
+  la sesión sigue navegable/recuperable (test 2). PASS.
+- No aplicables con motivo: live_credentials (sin red ni claves; simulados y
+  fakes; jamás k.txt), timing_flake (cero sleeps fijos en tests), prompt_injection
+  (entradas solo del árbol y datos fijos), schema_drift (sin migraciones: mismas
+  tablas), i18n_garble (textos fijos de UI, sin plantillas), dry_run (prohibido:
+  todo ejecutado de verdad).
+
+LIMPIEZA (recibo)
+- Procesos: taskkill chrome.exe (huérfanos de sondas matadas a mitad de
+  depuración) + espera; `wmic` confirma 0 chrome.exe. Perfiles
+  .task11-*-profile-* eliminados (4 EPERM iniciales por locks, reintentados con
+  espera hasta rm ok). Dist .task11-dist/.task11-dbg*/.task11-inspect eliminados.
+- Borrados: dbg-task-11-rename.mjs, inspect-task-11-bundle.mjs, .dbg-log.txt.
+- En el árbol solo quedan: 3 M (octus-core.ts, ipc.ts, store.ts-fix-continue) +
+  5 ?? (session-management.test.ts, probe-task-11-core.ts, qa-task-11-manual.mjs,
+  task-11-sessions.entry.tsx, task-11-surface.png) + este .txt.
+- Contenido sensible: cero (sin claves, sin red, sin datos de usuario).
+
+RIESGOS / NOTAS
+- `bun run test` raíz (~340 s en este i3) no cabe en ventana: se corrió la
+  regresión relacionada (14 core + 17 shared) + 3 typechecks; la suite completa
+  queda para la ola final (F2).
+- No se commitea (decisión del ejecutor): el Todo 10 ya absorbió parte del
+  trabajo en e6e8089; el runner de ola ordena los commits.
+- Ref `ref={var}` en ExplorerPanel (projectName, preexistente Todo 8) comparte
+  el patrón del input de rename: funciona, pero un QA futuro debería cubrir
+  "Add project" igual que aquí se cubrió rename.
