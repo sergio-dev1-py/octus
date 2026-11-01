@@ -1,7 +1,7 @@
 /** Renderer/store — estado raíz, tipos de UI y banderas globales. */
 import { DEFAULT_LAYOUT, DEFAULT_UI_PREFS } from "@octus/shared";
 import { createStore } from "solid-js/store";
-import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, Task, TaskDependency, TaskAttempt, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
+import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, SkillCatalogError, SkillCatalogItem, SkillDetail, Task, TaskDependency, TaskAttempt, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
 import type { ChatAttachment, LiveFrame } from "../timeline.js";
 
 /** Marco de streaming visible (Todo 13, N-C-12a/12b): forma pura en timeline.ts. */
@@ -68,6 +68,17 @@ interface UIState {
   previewLogs: Record<string, string>;
   promotions: Record<string, Promotion[]>;
   memories: MemoryItem[];
+  // Todo 24: Skills — catálogo unido; installed ≠ enabled siempre.
+  skillsCatalog: SkillCatalogItem[];
+  skillsErrors: SkillCatalogError[];
+  skillsFilter: "all" | "installed" | "enabled";
+  skillsSearch: string;
+  skillsSelected?: string;
+  skillsDetail?: SkillDetail;
+  skillsHistoryRun: string;
+  skillsHistory: string[];
+  skillsHistoryBypass: Array<{ skill: string; action: string; at: number }>;
+  skillsNotice?: string;
   recoveryStatus?: { pendingOps: number; startedPromotions: number; livePreviews: number; staleMemories: number; pendingContradictions: number };
 }
 
@@ -122,6 +133,16 @@ const [state, setState] = createStore<UIState>({
   previewLogs: {},
   promotions: {},
   memories: [],
+  skillsCatalog: [],
+  skillsErrors: [],
+  skillsFilter: "all",
+  skillsSearch: "",
+  skillsSelected: undefined,
+  skillsDetail: undefined,
+  skillsHistoryRun: "",
+  skillsHistory: [],
+  skillsHistoryBypass: [],
+  skillsNotice: undefined,
   recoveryStatus: undefined,
 });
 

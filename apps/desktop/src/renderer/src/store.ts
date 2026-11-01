@@ -1,5 +1,6 @@
 /** Renderer — fachada del store: reexporta los módulos por responsabilidad.
  * La ruta "./store.js" y toda la API pública se conservan sin cambios. */
+export * from "./store/skills.js"; // Todo 24 (montaje aditivo): acciones de Skills
 export * from "./store/state.js";
 export * from "./store/projects.js";
 export * from "./store/plans.js";

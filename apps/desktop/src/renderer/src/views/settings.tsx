@@ -7,6 +7,7 @@ import {
   state,
 } from "../store.js";
 import { ProviderSettings, BudgetSettings } from "./sections.jsx";
+import { SkillsManagerView } from "./skills.jsx";
 
 export function AgentSettings() {
   let maxSession: HTMLInputElement | undefined;
@@ -253,6 +254,9 @@ export function SettingsView() {
           <button onClick={() => setError(undefined)}>×</button>
         </div>
       </Show>
+      <section aria-label="Sección de Skills en configuración">
+        <SkillsManagerView />
+      </section>
       <AppearanceSettings />
       <ProviderSettings />
       <BudgetSettings />

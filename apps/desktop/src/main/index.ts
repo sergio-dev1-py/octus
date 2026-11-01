@@ -23,6 +23,7 @@ import {
   type StreamEvent,
 } from "@octus/shared";
 import { ElectronSecretStore } from "./secret-store.js";
+import { MainSkillsService } from "./skills-service.js"; // Todo 24 (montaje aditivo): servicio de Skills en main
 import { checkDirectoryReadable, directoryErrorMessage } from "./validate-directory.js";
 import { resolveDefinitionsDir, resolveWorkerPath } from "./worker-path.js";
 
@@ -136,6 +137,18 @@ const CHANNELS: IpcChannel[] = [
   "memory.resolve",
   "recovery.status",
   "recovery.reconcile",
+  // Todo 24 (montaje aditivo): superficie IPC de Skills (N-SK-01..05 del Todo 5).
+  "skills.catalog",
+  "skills.inspect",
+  "skills.importFolder",
+  "skills.importZip",
+  "skills.installGit",
+  "skills.uninstall",
+  "skills.enable",
+  "skills.disable",
+  "skills.setScope",
+  "skills.history",
+  "skills.resource",
 ];
 
 let mainWindow: BrowserWindow | undefined;
@@ -169,10 +182,22 @@ function onStream(event: StreamEvent): void {
 
 type Handler<C extends IpcChannel> = (payload: IpcRequest<C>) => Promise<IpcResponse<C>>;
 
+let skillsService: MainSkillsService | undefined;
+
 function handlers(): { [C in IpcChannel]: Handler<C> } {
   const need = (): OctusCore => {
     if (!core) throw new Error("core is not ready");
     return core;
+  };
+  // Todo 24 (montaje aditivo): singleton perezoso sobre core.db + dataDir().
+  const skills = (): MainSkillsService => {
+    if (!skillsService) skillsService = new MainSkillsService(need().db, dataDir());
+    return skillsService;
+  };
+  const projectRootOf = async (projectId?: string): Promise<string | undefined> => {
+    if (!projectId) return undefined;
+    const projects = await need().listProjects();
+    return projects.find((p) => p.id === projectId)?.rootPath;
   };
   return {
     "prefs.get": async () => {
@@ -890,6 +915,94 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
         return { ok: true, summary };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    // Todo 24: handlers de Skills sobre MainSkillsService (montaje aditivo).
+    // installed ≠ enabled siempre; habilitar con error de validación se bloquea.
+    "skills.catalog": async (payload) => {
+      const root = await projectRootOf(payload.projectId);
+      return skills().catalog(payload.projectId, root);
+    },
+    "skills.inspect": async (payload) => {
+      if (!isNonEmptyString(payload.name)) throw new Error("invalid payload");
+      const root = await projectRootOf(payload.projectId);
+      return { detail: await skills().inspect(payload.name, payload.projectId, root) };
+    },
+    "skills.importFolder": async (payload) => {
+      if (!isNonEmptyString(payload.path)) throw new Error("invalid payload");
+      try {
+        const skill = await skills().importFolder(payload.path, payload.scope);
+        return { ok: true as const, skill };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "skills.importZip": async (payload) => {
+      if (!isNonEmptyString(payload.path)) throw new Error("invalid payload");
+      try {
+        const skill = await skills().importZip(payload.path, payload.scope);
+        return { ok: true as const, skill };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "skills.installGit": async (payload) => {
+      if (!isNonEmptyString(payload.repoUrl) || !isNonEmptyString(payload.ref)) throw new Error("invalid payload");
+      try {
+        const skill = await skills().installGit(payload.repoUrl, payload.ref, payload.sourceDir, payload.scope);
+        return { ok: true as const, skill };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "skills.uninstall": async (payload) => {
+      if (!isNonEmptyString(payload.name)) throw new Error("invalid payload");
+      try {
+        skills().uninstall(payload.name);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "skills.enable": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || !isNonEmptyString(payload.name)) throw new Error("invalid payload");
+      try {
+        const root = await projectRootOf(payload.projectId);
+        await skills().enable(payload.projectId, payload.name, payload.scope, root);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "skills.disable": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || !isNonEmptyString(payload.name)) throw new Error("invalid payload");
+      try {
+        await skills().disable(payload.projectId, payload.name);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "skills.setScope": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || !isNonEmptyString(payload.name)) throw new Error("invalid payload");
+      try {
+        await skills().setScope(payload.projectId, payload.name, payload.scope);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "skills.history": async (payload) => {
+      if (!isNonEmptyString(payload.runId)) throw new Error("invalid payload");
+      return skills().history(payload.runId);
+    },
+    "skills.resource": async (payload) => {
+      if (!isNonEmptyString(payload.name) || !isNonEmptyString(payload.relativePath)) throw new Error("invalid payload");
+      try {
+        const content = await skills().resource(payload.name, payload.relativePath);
+        return { ok: true as const, content };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
       }
     },
   };

@@ -15,6 +15,7 @@ import { refreshTasks } from "./tasks.js";
 import { refreshWorktrees } from "./worktrees.js";
 import { refreshIntegrations } from "./integrations.js";
 import { refreshMemory } from "./memory.js";
+import { refreshSkillsCatalog } from "./skills.js";
 
 export async function refreshProjects(): Promise<void> {
   const { projects } = await invoke("projects.list", {});
@@ -111,6 +112,7 @@ export async function selectProject(projectId: string): Promise<void> {
   setState("activeProjectId", projectId);
   setState("activeSessionId", undefined);
   await refreshSessions();
+  await refreshSkillsCatalog();
   await refreshProjectSettings();
   await refreshWorktrees();
   await refreshIntegrations();

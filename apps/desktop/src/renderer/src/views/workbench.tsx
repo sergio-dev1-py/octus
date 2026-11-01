@@ -1,6 +1,7 @@
 /** Renderer/views — armazón del workbench: activity bar, sidebar, inspector, panel inferior y redimensión. */
 import { For, Show } from "solid-js";
 import type { ActivityId, BottomTab } from "@octus/shared";
+import { SkillsContextPanel } from "./skills.jsx";
 import { layoutStyles, resizeBottomBy, resizeInspectorBy, resizeSidebarBy } from "@octus/shared";
 import { invoke } from "../api.js";
 import {
@@ -208,12 +209,9 @@ export function AgentsPanel() {
 }
 
 export function SkillsMcpPanel() {
-  return (
-    <section>
-      <h2>Skills y MCP</h2>
-      <p class="muted">El catálogo de Skills llega en la ola 12 y el gestor MCP en la ola 13. Aquí no hay nada que instalar todavía.</p>
-    </section>
-  );
+  // Todo 24 (vista contextual): el mismo catálogo del manager, en compacto.
+  // El gestor MCP llega en la ola 13; esta sección ya no es un placeholder.
+  return <SkillsContextPanel />;
 }
 
 export function SettingsShortcutPanel() {
