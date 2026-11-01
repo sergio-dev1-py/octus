@@ -1,0 +1,66 @@
+Todo 3 — Sistema de diseno y prototipos visuales · evidencia de verificacion
+Fecha: 2026-11-01 · Rama: feat/ux-skills-mcp-w7-design
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w7
+
+ENTREGABLES (solo estos; resto del worktree sucio pertenece a otros todos)
+- apps/desktop/src/renderer/src/design/tokens.css (tokens: 21 color/sup, 5 pasos 12-18px, 7 espacios, 4 radios, 3 temas, 3 densidades, 7 tamanos)
+- apps/desktop/src/renderer/src/design/components.css (16 componentes, solo var(--oc-*))
+- apps/desktop/src/renderer/src/design/prototypes.html (5 pantallas: welcome/workbench+conversation/agents/skills/mcp; #workbench, .message-timeline, #welcome-dropzone, #composer, #agent-dag)
+- apps/desktop/src/renderer/src/design/pty-weight-note.md (PTY-directo CONFIRMADO con cifras)
+- apps/desktop/src/renderer/src/design/README.md (guia de uso para olas 8+)
+- scripts/probe-task-3.mjs (sonda Node sin dependencias)
+
+COMANDOS EJECUTADOS (todos reales, con exit code)
+1) node scripts/probe-task-3.mjs
+   - 1a ejecucion post-fix: SONDA OK, 91 PASS / 0 FAIL, exit 0
+   - pasada 1 (anti-stale): 91 PASS / 0 FAIL, exit 0
+   - pasada 2 (anti-stale): 91 PASS / 0 FAIL, exit 0
+   (una ejecucion previa fallo con 8 FAIL por bug del parser de la sonda con el
+   comentario inicial; se corrigio la sonda —strip de comentarios + seen por
+   propiedad— y se re-ejecuto: verde. Los CSS entregados no cambiaron por esto.)
+2) Escenario failure (literal fuera de tokens se rechaza):
+   - componentes.css + linea ".bad{color:#3b82f6;font-size:17px}" en archivo temporal
+   - node _tmp_neg.cjs -> "NEG hex-detectado:true / NEG px-detectado:true", exit 0
+     (= detector confirma el literal; en la sonda real ese caso es FAIL/rojo)
+   - temporales eliminados (verificado: tmp limpio: true)
+3) git grep -l -i "k.txt" sobre design + sonda -> LIMPIO (cero citas)
+4) git status --porcelain -> solo entregables propios + ficheros de otros todos
+   (Todo 1: QUARANTINE.md, TREE_AUTHORITY.md, task-1.txt, check-doc-refs.ts;
+   Todo 4: task-4.txt; .harness/design, .omo/design de terceros). No se tocan.
+
+AFIRMACIONES DE LA SONDA (resumen de las 91)
+- 44 tokens exigidos presentes en tokens.css
+- tamanos base 12..18px (7/7), tema claro :root, oscuro [data-theme=dark],
+  sistema con @media prefers-color-scheme, color-scheme declarado
+- densidades compact/normal/comfortable redefinen --oc-pad
+- cascada simulada (fondo/fuente/pad) en 4 combos:
+  light/normal/14 (#f6f5f2,14px,12px) · dark/compact/12 (#1b1a17,12px,8px) ·
+  system+dark/comfortable/18 (#1b1a17,18px,16px) · system+light/normal/14 (#f6f5f2,14px,12px)
+- #workbench usa background:var(--oc-bg); .message-timeline usa gap/padding de densidad
+- pantallas: screen-welcome/workbench/agents/skills/mcp + toolbar de conmutacion
+- cero hex/rgb/font-size-px fuera de tokens; cero emojis; cero "vs code"
+- nota PTY con cifras (64 363 742 bytes, v1.1.0) y decision PTY-directo CONFIRMADO
+
+CHECKLIST QA DEL PLAN
+- happy (sonda verde, exit 0): SI — 3 pasadas, 91/91
+- failure (literal duplicado se detecta y rechaza): SI — NEG confirma deteccion
+- PTY-directo confirmada o refutada por escrito con cifras: SI — CONFIRMADO
+- sin copiar identidad VS Code / sin emojis / sin multicolor: SI — sonda + revision
+- sin dependencias pesadas nuevas: SI — sonda es Node puro, cero installs
+- sin citar k.txt: SI — grep LIMPIO
+
+CLASES ADVERSARIALES
+- stale_state: sonda re-ejecutada 2x tras la ultima edicion (91/91 ambas)
+- misleading_success_output: todo con exit code real via exec; un rojo previo se
+  reporto y corrigio, no se oculto
+- dirty_worktree: commit solo con rutas propias (ver recibo abajo)
+- flaky_tests (Playwright): N/A — no se uso Playwright; sonda determinista Node+parsing
+  repetida 3x con resultado identico; motivo: el plan permite "Node + parsing"
+- resto: N/A (tarea de diseno, sin servicios ni red salvo metadatos npm para la nota PTY)
+
+MANUAL QA (ruta para humano/agente posterior)
+- Abrir apps/desktop/src/renderer/src/design/prototypes.html en navegador,
+  conmutar tema claro/oscuro/sistema + densidad + tamano en la barra superior y
+  recorrer las 5 pantallas. Sin pantallas en blanco ni desbordes.
+
+RECIBO DE COMMIT (pendiente al cierre del turno)

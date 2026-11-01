@@ -1,0 +1,187 @@
+/* Octus design tokens — Todo 3 (ola 7, diseno). Unica fuente de valores de diseno.
+   Todo color, tamano de fuente, espaciado y radio vive aqui.
+   components.css y los prototipos solo usan var(--oc-*). Prohibido el literal fuera. */
+
+:root {
+  color-scheme: light;
+
+  /* --- superficies y texto (tema claro, neutros calidos) --- */
+  --oc-bg: #f6f5f2;
+  --oc-bg-raised: #efede8;
+  --oc-panel: #ffffff;
+  --oc-panel-sunken: #f1efeb;
+  --oc-border: #e0ddd5;
+  --oc-border-strong: #c9c4b6;
+  --oc-text: #201d17;
+  --oc-text-muted: #6e675b;
+  --oc-text-faint: #9a937f;
+
+  /* --- acento discreto (tinta azul petroleo, un solo acento) --- */
+  --oc-accent: #1f5fa8;
+  --oc-accent-ink: #ffffff;
+  --oc-accent-wash: #e3edf7;
+  --oc-accent-border: #b9cfe8;
+
+  /* --- semanticos reservados (solo estados, nunca decoracion) --- */
+  --oc-success: #2e7d43;
+  --oc-success-wash: #e2f1e5;
+  --oc-warning: #9a6b0f;
+  --oc-warning-wash: #faf0d3;
+  --oc-danger: #b3261e;
+  --oc-danger-wash: #fbe7e4;
+  --oc-info: #1f5fa8;
+  --oc-info-wash: #e3edf7;
+
+  /* --- rampa neutral (luces; el tema oscuro la redefine) --- */
+  --oc-neutral-0: #ffffff;
+  --oc-neutral-50: #f6f5f2;
+  --oc-neutral-100: #efede8;
+  --oc-neutral-200: #e0ddd5;
+  --oc-neutral-300: #c9c4b6;
+  --oc-neutral-400: #9a937f;
+  --oc-neutral-500: #6e675b;
+  --oc-neutral-600: #4c473d;
+  --oc-neutral-700: #35322a;
+  --oc-neutral-800: #25231d;
+  --oc-neutral-900: #201d17;
+
+  /* --- tipografia: escala 12-18px, sin valores fuera de aqui --- */
+  --oc-text-xs: 12px;
+  --oc-text-sm: 13px;
+  --oc-text-base: 14px;
+  --oc-text-lg: 16px;
+  --oc-text-xl: 18px;
+  --oc-font-base: var(--oc-text-base);
+  --oc-line-tight: 1.25;
+  --oc-line-base: 1.5;
+  --oc-line-loose: 1.7;
+  --oc-font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --oc-font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* --- espaciado (rejilla 4px) --- */
+  --oc-space-1: 2px;
+  --oc-space-2: 4px;
+  --oc-space-3: 8px;
+  --oc-space-4: 12px;
+  --oc-space-5: 16px;
+  --oc-space-6: 24px;
+  --oc-space-7: 32px;
+
+  /* --- radios y sombras --- */
+  --oc-radius-sm: 4px;
+  --oc-radius-md: 6px;
+  --oc-radius-lg: 10px;
+  --oc-radius-pill: 999px;
+  --oc-shadow-raised: 0 1px 2px rgb(32 29 23 / 8%);
+  --oc-shadow-dialog: 0 8px 28px rgb(32 29 23 / 18%);
+
+  /* --- densidad normal (defecto; las variantes la redefinen) --- */
+  --oc-pad: var(--oc-space-4);
+  --oc-gap: var(--oc-space-3);
+  --oc-row-h: var(--oc-space-6);
+  --oc-message-pad: var(--oc-space-4);
+}
+
+/* --- tema oscuro: redefine superficies, texto, lavados y rampa --- */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --oc-bg: #1b1a17;
+  --oc-bg-raised: #23221e;
+  --oc-panel: #262520;
+  --oc-panel-sunken: #1e1d19;
+  --oc-border: #3a382f;
+  --oc-border-strong: #55524a;
+  --oc-text: #ece8dd;
+  --oc-text-muted: #b3ac9c;
+  --oc-text-faint: #857e6e;
+  --oc-accent: #7fb0e6;
+  --oc-accent-ink: #14202e;
+  --oc-accent-wash: #26394f;
+  --oc-accent-border: #3d5a7d;
+  --oc-success: #7cc78f;
+  --oc-success-wash: #23402c;
+  --oc-warning: #d9a93f;
+  --oc-warning-wash: #44360f;
+  --oc-danger: #e88a80;
+  --oc-danger-wash: #4a211c;
+  --oc-info: #7fb0e6;
+  --oc-info-wash: #26394f;
+  --oc-neutral-0: #201d17;
+  --oc-neutral-50: #25231d;
+  --oc-neutral-100: #35322a;
+  --oc-neutral-200: #4c473d;
+  --oc-neutral-300: #6e675b;
+  --oc-neutral-400: #9a937f;
+  --oc-neutral-500: #c9c4b6;
+  --oc-neutral-600: #e0ddd5;
+  --oc-neutral-700: #efede8;
+  --oc-neutral-800: #f6f5f2;
+  --oc-neutral-900: #ffffff;
+  --oc-shadow-raised: 0 1px 2px rgb(0 0 0 / 40%);
+  --oc-shadow-dialog: 0 8px 28px rgb(0 0 0 / 55%);
+}
+
+/* --- tema sistema: hereda claro y aplica oscuro segun el SO --- */
+[data-theme="system"] {
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="system"] {
+    color-scheme: dark;
+    --oc-bg: #1b1a17;
+    --oc-bg-raised: #23221e;
+    --oc-panel: #262520;
+    --oc-panel-sunken: #1e1d19;
+    --oc-border: #3a382f;
+    --oc-border-strong: #55524a;
+    --oc-text: #ece8dd;
+    --oc-text-muted: #b3ac9c;
+    --oc-text-faint: #857e6e;
+    --oc-accent: #7fb0e6;
+    --oc-accent-ink: #14202e;
+    --oc-accent-wash: #26394f;
+    --oc-accent-border: #3d5a7d;
+    --oc-success: #7cc78f;
+    --oc-success-wash: #23402c;
+    --oc-warning: #d9a93f;
+    --oc-warning-wash: #44360f;
+    --oc-danger: #e88a80;
+    --oc-danger-wash: #4a211c;
+    --oc-info: #7fb0e6;
+    --oc-info-wash: #26394f;
+    --oc-shadow-raised: 0 1px 2px rgb(0 0 0 / 40%);
+    --oc-shadow-dialog: 0 8px 28px rgb(0 0 0 / 55%);
+  }
+}
+
+/* --- densidades: compacta, normal (defecto), comoda --- */
+[data-density="compact"] {
+  --oc-pad: var(--oc-space-3);
+  --oc-gap: var(--oc-space-2);
+  --oc-row-h: var(--oc-space-5);
+  --oc-message-pad: var(--oc-space-3);
+}
+
+[data-density="normal"] {
+  --oc-pad: var(--oc-space-4);
+  --oc-gap: var(--oc-space-3);
+  --oc-row-h: var(--oc-space-6);
+  --oc-message-pad: var(--oc-space-4);
+}
+
+[data-density="comfortable"] {
+  --oc-pad: var(--oc-space-5);
+  --oc-gap: var(--oc-space-4);
+  --oc-row-h: var(--oc-space-7);
+  --oc-message-pad: var(--oc-space-5);
+}
+
+/* --- tamano base 12-18px elegido por el usuario --- */
+[data-font-size="12"] { --oc-font-base: 12px; }
+[data-font-size="13"] { --oc-font-base: 13px; }
+[data-font-size="14"] { --oc-font-base: 14px; }
+[data-font-size="15"] { --oc-font-base: 15px; }
+[data-font-size="16"] { --oc-font-base: 16px; }
+[data-font-size="17"] { --oc-font-base: 17px; }
+[data-font-size="18"] { --oc-font-base: 18px; }
