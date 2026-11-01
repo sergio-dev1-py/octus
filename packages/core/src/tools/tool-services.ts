@@ -23,6 +23,12 @@ export interface SpawnRequest {
   resolutionWorkspaceId?: string;
   /** Worktree de integración para revisión (Etapa 5). Gana sobre directoryId. */
   integrationId?: string;
+  /**
+   * Todo 23: skills que el hijo puede consultar. Cada una debe estar
+   * habilitada en el proyecto (puerta `SkillSpawnGate`); si no, `spawn`
+   * se niega con `scope_violation`. Vacío o ausente = sin skills.
+   */
+  skillNames?: string[];
 }
 
 export interface SpawnResult {

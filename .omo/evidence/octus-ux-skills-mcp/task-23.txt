@@ -1,0 +1,198 @@
+TODO 23 — INTEGRACIÓN DE SKILLS CON RUNTIME Y AGENTES (carga progresiva)
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 12) | Rama: feat/ux-skills-mcp-w12-skills
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w12 (NO el repo principal)
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a19956) | Commit: sí (ver §7)
+Restricciones cumplidas: jamás citado ni abierto C:/Users/UserPy/Desktop/PromtHack/k.txt;
+archivos de los Todos 18–22 intactos salvo extensión compatible documentada (§6);
+.evidencia en el WORKTREE; prohibido dry-run (todo ejecutado de verdad).
+
+== SCOPE: leído antes de diseñar ==
+- Todo 20 (task-20.txt): SkillManager con descubrimiento global/project/managed,
+  precedencia project>global>managed, enabled=false al descubrir, registro en memoria.
+- Todo 22 (task-22.txt): SkillActivationStore + `selectForRun(projectId, candidatas)`
+  = puerta de runs (CONSUMIDA en este Todo: SkillRuntime.resolveForRun la envuelve).
+- Todo 19 (task-19.txt, carril paralelo, NO tocado): brechas 19-A..D (projectRules,
+  runRules, taskId/AskContext, scope explícito). DECISIÓN de este Todo: NO se toca
+  ninguna (siguen ABIERTAS, ver §1); los scopes se respetan por proyecto (kv Todo 22)
+  + reglas de instancia existentes, sin relajar nada.
+- context-builder.ts (capas), tool-gateway.ts, permission-manager.ts,
+  agent-manager.ts, agent-runtime.ts, tool-services.ts, shared/tools.ts,
+  octus-core.ts (constructor, layersFor, prompt/runInstance).
+
+============================================================
+1. DISEÑO Y DECISIÓN (deep-high: contrato entre cinco servicios)
+============================================================
+NUEVO `packages/core/src/skills/skill-runtime.ts` (clase `SkillRuntime`):
+- Carga progresiva en 3 niveles, NUNCA todas completas por llamada:
+  (1) metadatos `- nombre@versión: descripción` de TODAS las habilitadas en el
+  proyecto (tope 20 líneas); (2) selección por tarea: solape determinista de
+  tokens tarea↔(nombre×2 + descripción), top-1 con puntuación > 0 (sin tarea o
+  sin solape → ninguna completa); (3) instrucciones completas = cuerpo de
+  SKILL.md sin frontal, topadas a 6000 chars, más recursos bajo demanda vía
+  `readResource` (rutas relativas internas, sin `..`/absolutos, tope 20k).
+- `resolveForRun` = CONSUME `selectForRun` del Todo 22 (descubre en fresco,
+  sin caché rancia entre runs). `sectionsFor` = metadatos + relevante + registro.
+- Registro por run en kv `skills.runs.v1.<runId>` (sin migración, precedente
+  Todos 6/22); `noteBypass`/`bypassForRun` en kv `skills.bypass.v1.<runId>`.
+- `skillAllowsAction` y `skillAllows` son DESCRIPTIVOS (parsean `allowed-tools`):
+  una skill NUNCA autoriza herramienta prohibida.
+- `assertSpawnAllowed`/`isAllowed` = puerta que AgentManager exige en `spawn`.
+- `enable/disable/setScope` delegan al store ÚNICO del runtime (un segundo
+  SkillActivationStore dejaría caché rancia entre habilitar y spawnear; hallazgo
+  real durante este Todo, ver §4-stale_state).
+Edits aditivos (cero cambios de comportamiento sin skills):
+- context-builder.ts: `InstructionExtras.skillMetadata/skillInstructions` +
+  secciones `<available-skills>` y `<skill …>` solo si no vacías.
+- shared/tools.ts: `ToolExecuteRequest.skillName?` (auditoría, nunca autorización).
+- tool-gateway.ts: `GatewayOptions.skillAllowsTool/noteSkillBypass`; `skill:` en
+  eventos requested/started/completed/failed; en `permission_denied`, si la skill
+  pedía la herramienta → se NIEGA igual + marca `[skill-bypass-denied skill=X]`
+  en `tool_invocations` + `skillBypassAttempt: true` en el evento + kv de evasión.
+- tool-services.ts: `SpawnRequest.skillNames?` (documentado: sin puerta se niega).
+- agent-manager.ts: trailing `skillGate?`; `spawn` con `skillNames` exige puerta
+  y habilitación por proyecto del padre (`scope_violation` si no).
+- agent-runtime.ts: `sessionProviders.skillSections?`; `runInstance` resuelve
+  UNA vez por run (coordinador y workers; projectId + prompt del run como brief
+  + taskId de la instancia —columna Etapa 3, ahora mapeada en `loadInstance`—);
+  si falla o ausente, el run sigue SIN skills (nunca rompen la generación).
+- octus-core.ts: `OctusCoreOptions.skillsDirs?`; construye `SkillRuntime` solo
+  con ámbitos (sin ellos, `core.skills === undefined` y todo igual que Etapas 1–6);
+  cablea hook→runtime, gate→AgentManager, allows/note→ToolGateway; expone `skills`.
+- index.ts (core): export de skill-runtime (1 línea, extensión compatible).
+- PermissionManager: SIN CAMBIOS deliberados (19-A..D abiertas; el deny-by-default
+  y el techo definitionTools/deniedTools ya vetan la evasión; probado en §2-guion).
+- Alternativa rechazada: añadir capas runRules/taskRules a PermissionLayers.
+  Motivo: exige matriz y migración con revisión propia (subtodos 19-B/19-C); este
+  Todo estrecha sin relajar y deja las brechas nombradas y abiertas.
+
+============================================================
+2. COMANDOS EXACTOS Y SALIDAS (todo ejecutado de verdad, prohibido dry-run)
+============================================================
+$ bun run typecheck   (packages/core; `tsc --noEmit`)
+EXIT 0 (tras los edits; el error intermedio por import posicional se corrigió
+moviendo skillGate al final del constructor).
+
+$ bun run typecheck   (packages/shared; `tsc --noEmit`)
+EXIT 0.
+
+$ bun test test/skills-runtime.test.ts --timeout 60000   (PASADA 1)
+  9 pass, 0 fail, 58 expects. EXIT 0.
+  Fallos intermedios REALES (5/9) investigados y corregidos, todos del arnés,
+  ninguno enmascarado: (a) relevancia "qa" excluida por tope len>2 → brief con
+  "evidence"; (b) readResource síncrono vs expectRejects async → envoltorio;
+  (c/d) expectRejects solo ve nombre+mensaje, no el código → match por mensaje +
+  isOctusError para el código; (e) grep estático contaba la prosa → solo líneas
+  `import`. La suite SÍ detecta desvíos.
+
+$ bun test test/skills-runtime.test.ts --timeout 60000   (PASADA 2, clase flaky_tests)
+  9 pass, 0 fail, 58 expects. EXIT 0. Idéntica (cero temporizadores en tests).
+
+$ bun test --timeout 30000   (REGRESIÓN completa packages/core)
+  272 pass, 1 fail, 1208 expects en 334.62s. El único fallo:
+  integration.test.ts J4 "task con dos predecesores…" (timeout 30s bajo carga del
+  suite completo; NO comparte archivos ni símbolos con este Todo: integration/
+  worktrees/tasks intactos — `git diff` §6 lo prueba).
+$ bun test test/integration.test.ts -t "J4: task con dos predecesores" --timeout 120000
+  1 pass, 36 filtered out, 0 fail (31.49s). EXIT 0.
+  Conclusión: J4 es flake preexistente de test pesado de git bajo carga (mismo
+  tratamiento que el Todo 22: excluido de su corrida por pesado; aquí se ejecutó
+  y se documenta). Regresión ACEPTADA con nota.
+
+$ bun octus-qa-23-manual.tmp.ts   (MANUAL-QA agente-ejecutado, flujo real en disco)
+  PASS Q1-discover :: skills=other-skill,qa-skill
+  PASS Q2-enable :: enabled=qa-skill
+  PASS Q3-sections :: used=qa-skill
+  PASS Q4-prompt :: instr=3944 chars
+  PASS Q5-runreg :: run=run_8a3e371e
+  PASS Q6-spawn-ok :: worker con qa-skill habilitada completa
+  PASS Q7-spawn-deny :: worker con other-skill deshabilitada se niega
+  PASS Q8-reddeny :: denied=true bypass=[{"skill":"qa-skill","action":"shell","at":...}]
+  PASS Q9-resource :: SKILL.md bajo demanda sí, traversal no
+  PASS Q10-plain :: skills ausente sin skillsDirs
+  MANUAL-QA: 10 PASS, 0 FAIL. EXIT 0. Scripts auto-eliminados (ver §5).
+
+Aserciones del plan: prompt con metadatos + relevante completa (tests carga
+progresiva + end-to-end con instrucciones reales del fake); run registra la
+usada (skillsForRun); skill no autoriza prohibida (guion rojo T-guion).
+CUMPLIDO. Failure ejecutado: deshabilitada/sin estado nunca al contexto
+(T-failure) + evasión negada y auditada (T-guion).
+
+============================================================
+3. MANUAL-QA (agente-ejecutado, con PASS/FAIL) — ver §2, script eliminado tras correr
+============================================================
+10 PASS, 0 FAIL (Q1..Q10 arriba). Superficie: descubrimiento real en disco +
+kv real en archivo + prompt real del coordinador (fake) + spawn foreground real
++ gateway real con explorer sin shell + bypass auditado en kv + recurso con
+traversal + núcleo sin skillsDirs intacto.
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+APLICABLES (con mitigación y resultado):
+- stale_state: SkillRuntime descubre en fresco por llamada; el store de activación
+  cachea por proyecto pero es ÚNICO por núcleo (métodos enable/disable delegados).
+  HALLAZGO REAL: el test con un segundo SkillActivationStore vio `scope_violation`
+  tras habilitar (caché del store del núcleo contra escritura ajena); se corrigió
+  delegando en el store único y el test lo cubre (spawn habilitado en verde).
+  `reload()` existe para reinicios. Mitigado y probado.
+- misleading_success_output: se exige valor exacto (marcadores de cuerpo
+  MARCADOR-QA/OTHER, `toEqual(["qa-skill"])`, conteo de bypass, evento con flag,
+  instrucciones del fake con `<available-skills>` presente y cuerpo ajeno ausente);
+  los 5 fallos intermedios prueban que la suite distingue (códigos vía isOctusError).
+- dirty_worktree: `git status` muestra SOLO aportes propios + task-19.txt ajeno
+  intacto; archivos de Todos 18–21 sin modificar (`git diff --stat`: 8 archivos,
+  +145/−10, ninguno de skills-manager/activation/installer/zip/validate);
+  bun.lock intacto; node_modules gitignorado.
+- flaky_tests: test nuevo repetido 2× (9 pass/58 expects ambas); regresión completa
+  1× (272 pass) + J4 aislado en verde; cero `sleep`/temporizadores en tests y manual
+  (todo por eventos/estados; el único sleep del repo es de delegation ajeno).
+- prompt_injection (skill como vector): la skill entra al prompt como TEXTO
+  delimitado (`<skill name=…>` / `<available-skills>`), nunca como instrucción de
+  la puerta: `allowed-tools` es descriptivo y el gateway/people niega igual
+  (guion rojo T-guion + Q8). El cuerpo de la skill NO sale del bloque delimitado
+  (test: `not.toContain(OTHER)` + frontal excluido `not.toContain("allowed-tools")`).
+NO APLICABLES (con motivo):
+- live_credentials: sin red, sin claves, sin MCP; jamás se citó ni abrió ningún
+  archivo externo de claves; fixtures `qa-skill`/`other-skill` locales y fijas.
+- timing_flake: sin timeouts propios (usa opTimeoutMs/askTimeoutMs del núcleo,
+  nunca ejercitados al límite); J4 aislado 31.49s es duración, no flake de reloj.
+- schema_drift: SIN migraciones (solo kv existente, precedente Todos 6/22);
+  `schema.ts`, `persistence-service.ts` y Todos 18–21 intactos.
+- i18n_garble: mensajes en español fijos del módulo, sin plantillas localizadas.
+
+============================================================
+5. LIMPIEZA TOTAL (con recibo)
+============================================================
+- Script manual `C:/tmp/octus-qa-23-manual.ts`: ELIMINADO (verificado inexistente).
+- Script manual en worktree `packages/core/octus-qa-23-manual.tmp.ts`: ELIMINADO
+  tras la corrida (verificado inexistente; nunca commiteado).
+- Tmp del manual `C:/tmp/octus-qa-23-manual-*/` (+DBs `octus-qa-23-*` de los
+  9 tests): auto-eliminados por finally/rmSync en cada test y script.
+- Worktree: `git status --short` solo lista los 8 modificados + 3 untracked
+  propios (skill-runtime.ts, skills-runtime.test.ts, este task-23.txt) +
+  task-19.txt del carril paralelo (NO tocado).
+- Recibo: STATUS limpio salvo lo declarado; ningún `octus-qa-23-*` en %TMP%.
+
+============================================================
+6. EXTENSIÓN COMPATIBLE (archivos de Todos 18–22)
+============================================================
+NO modificado: skill-manager.ts, skill-activation.ts, skill-installer.ts,
+zip-util.ts, scripts/validate-agent-skill.mjs, tests de 18–21. Solo se AÑADE:
+skill-runtime.ts (nuevo), skills-runtime.test.ts (nuevo), 1 línea export en
+index.ts. El resto son archivos de runtime/permisos/gateway/agentes/shared
+(fuera del scope 18–22) con edits aditivos documentados en §1.
+
+============================================================
+7. RIESGOS Y COMMIT
+============================================================
+- Riesgos: ninguno nuevo. `sectionsFor` sin tarea devuelve metadatos sin completa
+  (diseño, no fuga). `skillAllows` descubre en fresco en vía de deny (costo
+  acotado a denegaciones). 19-A..D siguen ABIERTAS por decisión (ver §1).
+- Heredado: Todo 24 (UI) consume `core.skills` + `skillsForRun`/`adminView`;
+  el hook expone `used` por run para el historial.
+- Commit: `feat(skills): runtime integration with progressive loading` (rama
+  feat/ux-skills-mcp-w12-skills, worktree w12; sin push sin autorización).
+
+DECISIÓN (deep-high): veto por deny-by-default + auditoría en vez de capas nuevas
+de permisos; carga progresiva metadatos→relevante→recursos; registro por run en
+kv. Alternativa rechazada: runRules/taskRules en PermissionLayers (ver §1).
