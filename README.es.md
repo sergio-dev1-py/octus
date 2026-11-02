@@ -18,7 +18,9 @@
 
 Octus es un harness de escritorio para delegar trabajo real de programación a subagentes de IA especializados bajo un único coordinador — con aprobaciones exclusivamente humanas, registro de uso por llamada y orquestación determinista. Ejecuta proveedores en vivo (API Responses de Meta, protocolos nativos por modelo de OpenCode Go) y ofrece un camino gobernado de **plan → revisión aprobada → DAG de tareas → workers en paralelo → revisión → rama integrada → preview validado → aprobación fijada a SHA → promoción segura**.
 
-Aún sin imágenes — la UI existe y arranca en verde; las capturas llegarán cuando la interfaz se estabilice.
+Sobre el harness, Octus incluye un workbench de escritorio profesional — bienvenida, conversación virtualizada, Agent Manager, un sistema real de Skills, un cliente MCP con puertas de confianza y una terminal PTY persistente.
+
+El workbench funciona de punta a punta (bienvenida, chat, agentes, managers de Skills/MCP, terminal); las capturas llegan con las notas del release.
 
 ## Por qué Octus
 
@@ -27,6 +29,9 @@ Aún sin imágenes — la UI existe y arranca en verde; las capturas llegarán c
 - **Aprobaciones solo humanas.** Los planes solo avanzan con aprobación explícita del usuario fijada a `(plan_id, revision_id)` exactos. Los modelos pueden pedir aprobación; jamás concederla.
 - **Cada llamada al proveedor queda registrada.** Filas de `usage_records` por llamada (tokens, razonamiento, caché, coste) más presupuestos por run/sesión con puertas de aviso/bloqueo. Las llamadas de pago sin configurar se rechazan antes de salir del router.
 - **Scheduler determinista.** DAG de tareas con detección de ciclos, puertas de dependencias (`needsReview`), límites de concurrencia por rol/sesión/proyecto con cursor de equidad persistido, reservas atómicas de ámbitos, reintentos con backoff y reconciliación tras caídas. Los escritores trabajan en worktrees gestionados por el harness; los dependientes multi-escritor parten de work bases integradas.
+- **Workbench profesional.** Disposición estilo VS Code (barra de actividad, sidebar, conversación central, inspector, panel de terminal) con temas, tamaños y densidades persistentes.
+- **Skills reales.** Descubrimiento, validación, instalación, activación por proyecto y carga progresiva en el runtime con registro de uso por run.
+- **Cliente MCP real.** Cliente STDIO + HTTP Streamable con confianza (sin SSE legado), herramientas aisladas por servidor, recursos/prompts con aprobación y secretos solo en el almacén del SO.
 
 ## Estado del proyecto
 
@@ -41,6 +46,15 @@ Se avanza por etapas con puerta (ADR-016): una etapa solo empieza cuando la ante
 | 4 — Git worktrees | Worktree aislado por tarea escritora, trazabilidad base→commit producido, ramas gestionadas | ✅ **Hecha 2026-10-31** — live matriz A 35/35 PASS (worktree auto-aprovisionado, reviewer en el worktree del target, `produced_commit` registrado); `worktrees.test.ts` 21/21; suite 162 core + 1 shared en verde |
 | 5 — Integración, validación, preview, aprobación | Integración secuencial, resolución asistida de conflictos, gates de validación por SHA, previews desechables, aprobación fijada a SHA, promoción CAS/fast-forward, sin push | ✅ **Hecha 2026-10-31** — 9/9 ramas subidas en verde (`feat/stage5-0-contracts-migration` … `feat/stage5-8-acceptance-docs`); suite 197 core + 1 shared en verde (`integration.test.ts` 37/37); **live matriz A 45/45 PASS** (auto-build→review→preview reachable→aprobación fijada→promoción FF, run done, sin remoto) |
 | 6 — Memoria, recuperación (+IPC/UI) | Memoria por proyecto/sesión/run/task/instancia con promoción gobernada por el usuario, selección contextual, recuperación coordinada | ✅ **Hecha 2026-10-31** — 7/7 ramas subidas en verde (`feat/stage6-0-migracion-contratos` … `feat/stage6-6-live-docs`); suite 235 core + 1 shared en verde (`memory.test.ts` 30, `memory-e2e.test.ts` 7); **live A 54/54 PASS** (Meta) y **live B 56/56 PASS** (Go/GLM-5.3-flash high + sonda controlada `max`: DAG válido de 3 tareas, razonamiento trazado) |
+| 7 — Diseño UX/UI | Arquitectura de información, navegación, inventario de pantallas, flujos, sistema de diseño, temas, contratos, presupuestos | ✅ **Hecha 2026-11-02** — documentos de diseño aprobados + contratos, verificados por lectura y scripts |
+| 8 — Fundamentos frontend | Tokens CSS, temas claro/oscuro/sistema, tamaños 12–18px, densidades, componentes compartidos, workbench redimensionable, modularización App/store | ✅ **Hecha 2026-11-02** — preferencias persistidas, QA de layout con Playwright, typecheck + suite en verde |
+| 9 — Bienvenida, proyectos y sesiones | Bienvenida con drag-and-drop, selector nativo, recientes, recuperación visual de sesiones | ✅ **Hecha 2026-11-02** — verificada sobre IPC real con fixtures fijos |
+| 10 — Conversación | Línea de tiempo virtualizada, streaming, cancelación, tool calls, aprobaciones, preguntas, actividad de agentes | ✅ **Hecha 2026-11-02** — Playwright 41/41 sobre el bundle construido |
+| 11 — Agent Manager | Vistas de agentes/tareas/DAG, diffs de worktrees (nuevo canal `worktrees.diff`), previews, conflictos, historial | ✅ **Hecha 2026-11-02** — verificación de agentes 31/31 + task-graph 5/5 |
+| 12 — Sistema real de Skills | Descubrimiento/validación/instalación/alcances de Agent Skills, carga progresiva en el runtime, Skills Manager UI | ✅ **Hecha 2026-11-02** — 21/21 suites de skills + verificación UI 72/72 |
+| 13 — Cliente MCP real | Conformidad SDK MCP 1.32.2, client manager con confianza, herramientas aisladas, recursos/prompts, endurecimiento de servidores, MCP Manager UI | ✅ **Hecha 2026-11-02** — 46/46 suites MCP + conformidad 15/15 |
+| 14 — Terminal, archivos y resultados | Terminal PTY persistente en main, explorador, diffs, resultados de pruebas, diagnósticos | ✅ **Hecha 2026-11-02** — QA de PTY + verificación de explorador 16/16 |
+| 15 — Rendimiento, seguridad y distribución | Puertas de presupuesto 49/49, auditoría Electron 68/68, escaneo de secretos, empaquetado Windows | ✅ **Hecha 2026-11-02** — build + smoke en verde, verificación final F1–F4 APROBADA |
 
 Detalles: [`IMPLEMENTATION_ROADMAP.md`](./.harness/implementation/IMPLEMENTATION_ROADMAP.md) · [`STAGE4_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE4_ACCEPTANCE_REPORT.md) · [`STAGE5_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE5_ACCEPTANCE_REPORT.md) (lo añade el corredor live) · [`STAGE6_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE6_ACCEPTANCE_REPORT.md) (lo añade el corredor live) · [`DECISIONS.md`](./.harness/implementation/DECISIONS.md) (ADRs 001–069 + hallazgos, incl. bugs reales encontrados por tests/live y corregidos).
 
@@ -71,6 +85,9 @@ bun run typecheck
 
 # Tests unitarios + integración (proveedores falsos por defecto — sin claves)
 bun run test
+# En máquinas lentas la suite completa de core necesita un timeout mayor
+# (los 5 s por defecto fallan en un i3): desde packages/core como
+# bun test --timeout 60000
 
 # Compilar la app de escritorio
 bun run build
@@ -109,6 +126,9 @@ bunx electron ./apps/desktop/out/main/index.js \
 - Las claves API viven en el **almacén seguro del SO** (`safeStorage`) o en variables de entorno en ejecución. El repo contiene **cero secretos** — verificado antes de cada push.
 - Las herramientas corren tras `PermissionManager` (denegación por defecto en escrituras/shell) con directorios aislados por proyecto, contención de rutas (`realpath` + rechazo UNC) y allowlist de comandos de test ejecutados en copias desechables.
 - Puertas humanas: aprobaciones de planes y (desde la etapa 5) promoción de integración fijada a SHA. El harness solo auto-aprueba dentro de rutas de código marcadas como **tests/usuario simulado**.
+- Skills con mínimo privilegio: el contenido de skills no es confiable, solo los alcances autorizados llegan a un run, y habilitar una skill jamás otorga permisos de herramientas.
+- MCP como cliente con confianza: los servidores desconocidos nunca se ejecutan, la confianza por workspace es explícita, las herramientas se aíslan por servidor, los recursos/prompts sensibles requieren aprobación y los secretos viven solo en el almacén del SO con redacción en logs.
+- La terminal PTY integrada reutiliza la política de shell (preguntar por vez, guardas, timeouts, kill del árbol); los agentes no tienen camino hacia ella.
 
 ## Contribuir
 

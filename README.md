@@ -18,7 +18,9 @@
 
 Octus is a desktop harness for delegating real coding work to specialized AI subagents under a single coordinator — with human-only approvals, per-call usage ledger, and deterministic orchestration. It runs providers live (Meta Responses API, OpenCode Go per-model native protocols) and ships a governed path from **plan → approved revision → task DAG → parallel workers → review → integrated branch → validated preview → SHA-pinned approval → safe promotion**.
 
-No images yet — the UI exists and boots green; screenshots land once the interface stabilizes.
+On top of the harness, Octus ships a professional desktop workbench — welcome flow, virtualized conversation, Agent Manager, a real Skills system, a trust-gated MCP client, and a persistent PTY terminal.
+
+The workbench is functional end to end (welcome, chat, agents, Skills/MCP managers, terminal); screenshots land with the release notes.
 
 ## Why Octus
 
@@ -27,6 +29,9 @@ No images yet — the UI exists and boots green; screenshots land once the inter
 - **Approvals are human-only.** Plans advance only on explicit user approval pinned to exact `(plan_id, revision_id)`. Models can request approval; they can never grant it.
 - **Every provider call is billed on the ledger.** `usage_records` rows per call (tokens, reasoning, cache, cost) plus run/session budgets with warn/block gates. Unconfigured paid calls are refused before leaving the router.
 - **Deterministic scheduler.** Task DAG with cycle detection, dependency ready-gates (`needsReview`), role/session/project concurrency limits with persisted fairness cursor, atomic scope reservations, retries with backoff, and crash reconciliation. Writers work in harness-managed Git worktrees; multi-writer dependents build on integrated work bases.
+- **Professional workbench.** VS Code-inspired layout (activity bar, sidebar, central conversation, inspector, terminal panel) with persistent themes, sizes, and densities.
+- **Real Skills.** Agent Skills discovery, validation, install, per-project activation, and progressive runtime loading with per-run usage records.
+- **Real MCP client.** Trust-gated STDIO + Streamable HTTP client (no legacy SSE) with per-server namespaced tools, approved resources/prompts, and OS-store secrets.
 
 ## Project status
 
@@ -41,6 +46,15 @@ Work proceeds in gated stages (ADR-016): a stage only starts after the previous 
 | 4 — Git worktrees | Isolated worktree per writer task, base→produced commit traceability, harness-managed branches | ✅ **Done 2026-10-31** — live matrix A 35/35 PASS (worktree auto-provisioned, reviewer in target worktree, `produced_commit` recorded); `worktrees.test.ts` 21/21; suite 162 core + 1 shared green |
 | 5 — Integration, validation, preview, approval | Sequential integration, assisted conflict resolution, per-SHA validation gates, detached previews, SHA-pinned approval, CAS/fast-forward promotion, no push | ✅ **Done 2026-10-31** — 9/9 feature branches pushed green-gated (`feat/stage5-0-contracts-migration` … `feat/stage5-8-acceptance-docs`); suite 197 core + 1 shared green (`integration.test.ts` 37/37); **live matrix A 45/45 PASS** (auto-build→review→preview reachable→pinned approval→FF promote, run done, no remote) |
 | 6 — Memory, recovery (+IPC/UI) | Project/session/run/task/instance memory with user-governed promotion, contextual selection, coordinated recovery | ✅ **Done 2026-10-31** — 7/7 feature branches pushed green-gated (`feat/stage6-0-migracion-contratos` … `feat/stage6-6-live-docs`); suite 235 core + 1 shared green (`memory.test.ts` 30, `memory-e2e.test.ts` 7); **live A 54/54 PASS** (Meta) and **live B 56/56 PASS** (Go/GLM-5.3-flash high + controlled `max` probe: valid 3-task DAG, reasoning traced) |
+| 7 — UX/UI design | Information architecture, navigation, screen inventory, flows, design system, themes, contracts, performance budgets | ✅ **Done 2026-11-02** — approved design docs + contracts, verified by read-checks and ref scripts |
+| 8 — Frontend foundations | CSS design tokens, light/dark/system themes, sizes 12–18px, densities, shared components, resizable workbench, App/store modularization | ✅ **Done 2026-11-02** — persisted prefs, Playwright layout QA, typecheck + suite green |
+| 9 — Welcome, projects, sessions | Drag-and-drop welcome, native picker, recents, visual session recovery | ✅ **Done 2026-11-02** — verified over real IPC with fixed fixtures |
+| 10 — Conversation | Virtualized chat timeline, streaming, cancel, tool calls, approvals, questions, agent activity | ✅ **Done 2026-11-02** — Playwright 41/41 over the built bundle |
+| 11 — Agent Manager | Agents/tasks/DAG views, worktree diffs (new `worktrees.diff` channel), previews, conflicts, history | ✅ **Done 2026-11-02** — 31/31 agents verify + 5/5 task-graph |
+| 12 — Real Skills system | Agent Skills discovery/validation/install/scopes, progressive loading into the runtime, Skills Manager UI | ✅ **Done 2026-11-02** — 21/21 skills suites + 72/72 UI verify |
+| 13 — Real MCP client | MCP SDK 1.32.2 conformance, trust-gated client manager, namespaced tools, resources/prompts, server hardening, MCP Manager UI | ✅ **Done 2026-11-02** — 46/46 MCP suites + 15/15 conformance |
+| 14 — Terminal, files, results | Persistent PTY terminal in main, explorer, diffs, test results, diagnostics | ✅ **Done 2026-11-02** — PTY QA + 16/16 explorer verify |
+| 15 — Performance, security, distribution | Budget gates 49/49, Electron security audit 68/68, secret scan, Windows packaging | ✅ **Done 2026-11-02** — build + smoke green, final verification F1–F4 APPROVED |
 
 Details: [`IMPLEMENTATION_ROADMAP.md`](./.harness/implementation/IMPLEMENTATION_ROADMAP.md) · [`STAGE4_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE4_ACCEPTANCE_REPORT.md) · [`STAGE5_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE5_ACCEPTANCE_REPORT.md) (appended by the live runner) · [`STAGE6_ACCEPTANCE_REPORT.md`](./.harness/implementation/STAGE6_ACCEPTANCE_REPORT.md) (appended by the live runner) · [`DECISIONS.md`](./.harness/implementation/DECISIONS.md) (ADRs 001–069 + implementation findings, incl. real bugs found by tests/live and fixed).
 
@@ -71,6 +85,9 @@ bun run typecheck
 
 # Unit + integration tests (fake providers by default — no keys needed)
 bun run test
+# On slow machines the full core suite needs a raised timeout
+# (default 5 s timeouts flake on an i3): run from packages/core as
+# bun test --timeout 60000
 
 # Build the desktop app
 bun run build
@@ -109,6 +126,9 @@ bunx electron ./apps/desktop/out/main/index.js \
 - API keys live in the **OS secure store** (`safeStorage`) or env vars at runtime. The repo contains **zero secrets** — verified before every push.
 - Tools run behind `PermissionManager` (default-deny for writes/shell) with per-project isolated directories, path-scope containment (`realpath` + UNC rejection), and a test-command allowlist executed in disposable copies.
 - Human-only gates: plan approvals, and (from stage 5) SHA-pinned integration promotion. The harness auto-approves only inside clearly-marked **test/simulated-user** code paths.
+- Skills run least-privilege: skill content is untrusted, only authorized scopes reach a run, and enabling a skill never grants tool permissions.
+- MCP is a trust-gated client: unknown servers never execute, workspace trust is explicit, tool names are namespaced per server, sensitive resources/prompts need approval, and secrets live only in the OS store with redaction in logs.
+- The integrated PTY terminal reuses the shell policy (ask-per-turn, guardrails, timeouts, whole-tree kill); agents have no path to it.
 
 ## Contributing
 
