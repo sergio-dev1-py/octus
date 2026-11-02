@@ -15,4 +15,5 @@ export * from "./store/prefsLayout.js";
 export * from "./store/events.js";
 export * from "./store/bootstrap.js";
 export * from "./store/mcp.js";
+export * from "./store/schedules.js"; // Todo 8 (ventana de programadas): CRUD + validación de cron
 export * from "./store/files.js"; // Todo 33: explorador, diff, pruebas y diagnósticos

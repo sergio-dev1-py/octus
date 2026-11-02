@@ -11,14 +11,19 @@ import { createStore } from "solid-js/store";
 import type { QuestionRequest, ToolCallPart, ToolCallRecord, ToolResultPart } from "@octus/shared";
 import {
   approvalGateForRevision,
+  buildSubagentTree,
   collectModifiedFiles,
   collectRunErrors,
   formatTimeoutRemainingMs,
   formatToolDurationMs,
   indexToolResults,
   questionTimeoutRemainingMs,
+  subagentLineage,
+  subagentRollup,
   toolStatusMeta,
+  type PairedToolCall,
   type RuntimeErrorItem,
+  type SubagentNode,
 } from "@octus/shared";
 import { invoke, onEvent } from "./api.js";
 import { retryTask, setError, state } from "./store.js";
@@ -184,6 +189,56 @@ export function ToolCallCard(props: { call: ToolCallPart; result?: ToolResultPar
   );
 }
 
+// ------------------------------------------- grupo colapsable por subagente
+/** Tool calls de un mensaje agrupados bajo su subagente (todo workbench-chat-terminal/3).
+ *  Colapsado por defecto (también `depth>=1` anidado); la pill resume el
+ *  grupo (failed > active > done). El cuerpo reutiliza ToolCallCard. */
+export function SubagentToolGroup(props: { instanceId: string; runId: string; calls: PairedToolCall[] }) {
+  const node = (): SubagentNode | undefined => {
+    const stack = [...buildSubagentTree(state.agentInstances)];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (current.instance.id === props.instanceId) return current;
+      stack.push(...current.children);
+    }
+    return undefined;
+  };
+  const lineage = () => subagentLineage(state.agentInstances, props.instanceId);
+  const depth = () => node()?.depth ?? 0;
+  const nested = () => node()?.children.length ?? 0;
+  const label = () => {
+    const chain = lineage();
+    if (chain.length === 0) return props.instanceId.slice(0, 12);
+    return chain.map((entry) => entry.definitionId).join(" › ");
+  };
+  const callStatus = (item: PairedToolCall) =>
+    toolRecordFor(props.runId, item.call.toolCallId)?.status ?? (item.result ? (item.result.ok ? "completed" : "failed") : "pending");
+  const rollup = () => {
+    const statuses: string[] = props.calls.map(callStatus);
+    const chain = lineage();
+    const leaf = chain[chain.length - 1];
+    if (leaf) statuses.push(leaf.status);
+    return subagentRollup(statuses);
+  };
+  return (
+    <details class="subagent-group" data-subagent-group={props.instanceId} data-subagent-depth={depth()} data-subagent-status={rollup().status}>
+      <summary>
+        <span class="toolname">subagent {label()}</span>
+        <span class={`pill ${toneClass(rollup().tone)}`} data-subagent-rollup={rollup().status}>
+          {rollup().status}
+        </span>
+        <span class="muted">
+          {props.calls.length} tool call(s)
+          <Show when={nested() > 0}> · {nested()} nested</Show>
+        </span>
+      </summary>
+      <div class="subagent-body">
+        <For each={props.calls}>{(item) => <ToolCallCard call={item.call} result={item.result} runId={props.runId} />}</For>
+      </div>
+    </details>
+  );
+}
+
 // ------------------------------------------------------------- banda de errores
 export function RunErrorsSection() {
   watchConversationWidgets();
@@ -193,7 +248,7 @@ export function RunErrorsSection() {
 
   return (
     <Show when={items().length > 0}>
-      <details class="stage2" id="run-errors" open>
+      <details class="stage2" id="run-errors">
         <summary>
           Errores ({items().length})
         </summary>

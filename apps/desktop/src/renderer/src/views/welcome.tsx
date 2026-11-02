@@ -13,26 +13,24 @@ import {
   state,
   validateDirectory,
 } from "../store.js";
+import { OcIcon } from "../components/oc.jsx";
+import { pathsFromDrop } from "../drop-paths.js";
 import { SettingsView } from "./settings.jsx";
 
 // ---------------------------------------------------------------- bienvenida (Todo 10, F-1/W-01).
 // Pantalla inicial sin auto-selección: arrastrar carpeta (rutas propuestas por
-// el renderer, validadas en main), selector nativo, recientes con fecha, crear
-// y abrir proyectos, continuar sesión y acceso a configuración. No ejecuta
-// código del proyecto abierto: solo crea registros y selecciona.
-function pathsFromDrop(event: DragEvent): string[] {
-  const files = Array.from(event.dataTransfer?.files ?? []);
-  const paths: string[] = [];
-  for (const file of files) {
-    const candidate = (file as unknown as { path?: unknown }).path;
-    if (typeof candidate === "string" && candidate.length > 0) paths.push(candidate);
-  }
-  return paths;
-}
+// el renderer vía drop-paths, validadas en main), selector nativo, recientes
+// con fecha, crear y abrir proyectos, continuar sesión y acceso a
+// configuración. No ejecuta código del proyecto abierto: solo crea registros
+// y selecciona.
 
 function formatRecentDate(updatedAt: number): string {
   return new Date(updatedAt).toLocaleString();
 }
+
+// Bienvenida objetivo (plan octus-welcome-settings-theme, todo 1): la lista de
+// workspaces muestra los 3 primeros y "Ver más" despliega el resto.
+const WELCOME_VISIBLE_COUNT = 3;
 
 export function WelcomeView() {
   const [mode, setMode] = createSignal<"choose" | "sessions" | "settings">("choose");
@@ -40,6 +38,9 @@ export function WelcomeView() {
   const [busy, setBusy] = createSignal(false);
   const [pending, setPending] = createSignal<{ id?: string; name: string; rootPath: string } | undefined>(undefined);
   const [pendingSessions, setPendingSessions] = createSignal<Session[]>([]);
+  const [showAll, setShowAll] = createSignal(false);
+  const visibleProjects = () =>
+    showAll() ? state.projects : state.projects.slice(0, WELCOME_VISIBLE_COUNT);
   let nameInput: HTMLInputElement | undefined;
 
   async function enterSessions(proj: { id?: string; name: string; rootPath: string }): Promise<void> {
@@ -180,12 +181,32 @@ export function WelcomeView() {
   }
 
   return (
-    <main id="welcome" aria-label="Bienvenida">
-      <div class="welcome-card">
-        <div class="welcome-head">
-          <h1>Octus</h1>
-          <p class="muted">Elige una carpeta para empezar. Nada se selecciona solo.</p>
-        </div>
+    <main id="welcome" class="welcome-root" aria-label="Bienvenida">
+      <div class="welcome-brand">
+        <svg
+          class="welcome-logo"
+          viewBox="0 0 120 120"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M42 60 C42 40 50 26 60 26 C70 26 78 40 78 60" />
+          <circle cx="53" cy="48" r="3.5" fill="currentColor" stroke="none" />
+          <circle cx="67" cy="48" r="3.5" fill="currentColor" stroke="none" />
+          <path d="M42 52 C34 53 28 57 27 64 C26 70 32 72 35 67" />
+          <path d="M78 52 C86 53 92 57 93 64 C94 70 88 72 85 67" />
+          <path d="M44 60 C38 68 30 70 26 76 C22 82 28 87 32 82" />
+          <path d="M51 61 C48 70 42 74 40 82 C38 88 44 91 47 86" />
+          <path d="M57 61 C56 69 54 77 54 84 C54 90 60 90 60 85" />
+          <path d="M63 61 C64 69 66 77 66 84 C66 90 72 89 71 84" />
+          <path d="M69 61 C72 70 78 74 80 82 C82 88 76 91 73 86" />
+          <path d="M76 60 C82 68 90 70 94 76 C98 82 92 87 88 82" />
+        </svg>
+        <h1>Octus</h1>
+      </div>
         <Show when={state.welcomeError}>
           <div id="welcome-error" role="alert">
             {state.welcomeError}
@@ -199,6 +220,27 @@ export function WelcomeView() {
               when={mode() === "sessions" && pending()}
               fallback={
                 <>
+                  <div class="welcome-actions-col">
+                    <button id="welcome-pick" type="button" class="oc-btn oc-btn--primary" disabled={busy()} onClick={() => void pickNative()}>
+                      <OcIcon name="folder" /> Abrir Carpeta
+                    </button>
+                    <button id="welcome-settings" type="button" class="oc-btn oc-btn--secondary" onClick={() => setMode("settings")}>
+                      <svg
+                        class="oc-icon"
+                        viewBox="0 0 16 16"
+                        stroke="currentColor"
+                        fill="none"
+                        stroke-width="1.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                      >
+                        <circle cx="8" cy="8" r="2.5" />
+                        <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" />
+                      </svg>
+                      Ajustes
+                    </button>
+                  </div>
                   <div
                     id="welcome-dropzone"
                     classList={{ dragging: dragging() }}
@@ -218,15 +260,7 @@ export function WelcomeView() {
                       void handlePath(paths[0]!);
                     }}
                   >
-                    Arrastra una carpeta de Windows aquí
-                  </div>
-                  <div class="row welcome-actions">
-                    <button id="welcome-pick" type="button" disabled={busy()} onClick={() => void pickNative()}>
-                      Abrir por explorador…
-                    </button>
-                    <button id="welcome-settings" type="button" onClick={() => setMode("settings")}>
-                      Configuración
-                    </button>
+                    Arrastra una carpeta aquí para abrirla como workspace
                   </div>
                   <Show when={pending() && !pending()!.id}>
                     <div class="welcome-create">
@@ -239,13 +273,13 @@ export function WelcomeView() {
                       </div>
                     </div>
                   </Show>
-                  <section aria-label="Recientes">
-                    <h2>Recientes</h2>
+                  <section class="welcome-recents" aria-label="Workspaces">
+                    <h2>Workspaces</h2>
                     <Show when={state.projects.length === 0} fallback={<></>}>
                       <p class="muted">Aún no hay proyectos.</p>
                     </Show>
                     <ul id="welcome-recents">
-                      <For each={state.projects}>
+                      <For each={visibleProjects()}>
                         {(project) => (
                           <li>
                             <button
@@ -267,6 +301,11 @@ export function WelcomeView() {
                         )}
                       </For>
                     </ul>
+                    <Show when={state.projects.length > WELCOME_VISIBLE_COUNT}>
+                      <button type="button" id="welcome-more" class="welcome-more" onClick={() => setShowAll((v) => !v)}>
+                        {showAll() ? "Ver menos" : "Ver más workspaces…"}
+                      </button>
+                    </Show>
                   </section>
                 </>
               }
@@ -306,14 +345,8 @@ export function WelcomeView() {
             </Show>
           }
         >
-          <div class="row welcome-actions">
-            <button id="welcome-back" type="button" onClick={backToChoose}>
-              Volver a bienvenida
-            </button>
-          </div>
-          <SettingsView />
+          <SettingsView onClose={backToChoose} />
         </Show>
-      </div>
     </main>
   );
 }

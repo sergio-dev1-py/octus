@@ -1,15 +1,18 @@
 /** Renderer/views — armazón del workbench: activity bar, sidebar, inspector, panel inferior y redimensión. */
-import { For, Show } from "solid-js";
+import { For, Show, createEffect, createSignal, untrack } from "solid-js";
 import type { ActivityId, BottomTab } from "@octus/shared";
 import { SkillsContextPanel } from "./skills.jsx";
 import { layoutStyles, resizeBottomBy, resizeInspectorBy, resizeSidebarBy } from "@octus/shared";
 import { invoke } from "../api.js";
 import { FilesExplorerPanel, ProblemsListPanel, TestResultsPanel } from "./files.jsx";
 import { TerminalPanel } from "./terminal-panel.jsx";
+import { mcpRefresh, mcpState } from "../store/mcp.js";
+import { SchedulesSection } from "./schedules.jsx";
 import {
   closeSession,
   createProject,
   createSession,
+  refreshProjectSessions,
   previewWorkbenchLayout,
   reconcileRecovery,
   recoverActiveSession,
@@ -32,16 +35,86 @@ import {
 
 export function ExplorerPanel() {
   let projectName: HTMLInputElement | undefined;
+  // Frescura del dot MCP (read-only sobre store/mcp): relectura por proyecto
+  // activo para que el verde refleje el estado real de conexión.
+  createEffect(() => {
+    const pid = state.activeProjectId;
+    if (pid) void mcpRefresh(pid);
+  });
+  // Grupos colapsables por proyecto (fix verificador): expandido local;
+  // el activo arranca expandido. Conteos del caché sessionsByProject.
+  const [expanded, setExpanded] = createSignal<Record<string, boolean>>({});
+  const [groupError, setGroupError] = createSignal<Record<string, boolean>>({});
+  const isExpanded = (pid: string): boolean => expanded()[pid] ?? pid === state.activeProjectId;
+  const toggleProject = (pid: string) => {
+    const next = !isExpanded(pid);
+    setExpanded({ ...expanded(), [pid]: next });
+    if (next) {
+      void refreshProjectSessions(pid, { withWorking: true }).then((ok) => {
+        if (!ok) setGroupError({ ...groupError(), [pid]: true });
+        else setGroupError({ ...groupError(), [pid]: false });
+      });
+    }
+  };
+  // Conteos de TODOS los proyectos (sessions.list por proyecto, sin working).
+  createEffect(() => {
+    for (const p of state.projects) {
+      if (!(p.id in state.sessionsByProject)) void refreshProjectSessions(p.id);
+    }
+  });
+  // Activo siempre expandido y con working fresco (untrack: sin tormentas IPC).
+  createEffect(() => {
+    const pid = state.activeProjectId;
+    if (!pid) return;
+    untrack(() => {
+      if (!isExpanded(pid)) setExpanded({ ...expanded(), [pid]: true });
+    });
+    void refreshProjectSessions(pid, { withWorking: true });
+  });
+  // Verde en CUALQUIER sesión con agente trabajando (fix verificador): vive
+  // en state.agentInstances (reactivo, sesión activa) o en el caché working
+  // (resto de sesiones, refrescado al expandir). Solo-activa lleva verde fijo.
+  const sessionDot = (sessionId: string): "working" | "active" | "idle" => {
+    const live = state.agentInstances.some((i) => i.sessionId === sessionId && ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
+    if (live || state.workingBySession[sessionId]) return "working";
+    return sessionId === state.activeSessionId ? "active" : "idle";
+  };
+  const openSession = (pid: string, sid: string) =>
+    void (async () => {
+      if (pid !== state.activeProjectId) await selectProject(pid);
+      await selectSession(sid);
+    })();
+  const mcpActive = () => mcpState.servers.some((s) => s.enabled && s.connection === "connected");
+  // Solo tokens var(--oc-*): sin literales ni clases CSS nuevas.
+  const dot = (on: boolean): string =>
+    on
+      ? "display:inline-block;flex-shrink:0;width:var(--oc-space-3);height:var(--oc-space-3);border-radius:var(--oc-radius-pill);background:var(--oc-success);"
+      : "display:inline-block;flex-shrink:0;width:var(--oc-space-3);height:var(--oc-space-3);border-radius:var(--oc-radius-pill);background:transparent;border:1px solid var(--oc-border-strong);";
+  const newSessionIn = (projectId: string) =>
+    void (async () => {
+      if (projectId !== state.activeProjectId) await selectProject(projectId);
+      await createSession();
+    })();
   return (
     <>
       <div class="side-title">Octus</div>
-      <section>
+      <section aria-label="Proyectos">
         <h2>Projects</h2>
         <For each={state.projects}>
           {(project) => (
-            <button class={project.id === state.activeProjectId ? "active" : ""} onClick={() => void selectProject(project.id)}>
-              {project.name}
-            </button>
+            <div class="row" data-project-section={project.id}>
+              <button
+                class={project.id === state.activeProjectId ? "active" : ""}
+                aria-current={project.id === state.activeProjectId ? "true" : undefined}
+                title={project.name}
+                onClick={() => void selectProject(project.id)}
+              >
+                {project.name}
+              </button>
+              <button type="button" title={`Nueva sesión en ${project.name}`} aria-label={`Nueva sesión en ${project.name}`} onClick={() => newSessionIn(project.id)}>
+                +
+              </button>
+            </div>
           )}
         </For>
         <div class="row">
@@ -66,23 +139,66 @@ export function ExplorerPanel() {
         <button id="session-new" class="primary" disabled={!state.activeProjectId} onClick={() => void createSession()}>
           New session
         </button>
-        <Show when={state.sessions.length === 0}>
-          <p class="muted">Sin sesiones en este proyecto. Crea una para empezar.</p>
+        <Show when={!state.activeProjectId}>
+          <p class="muted">Selecciona un proyecto para ver sus sesiones.</p>
         </Show>
-        <div id="session-list" role="listbox" aria-label="Sesiones del proyecto">
-          <For each={state.sessions}>
-            {(session) => (
-              <div class="row" role="option" aria-selected={session.id === state.activeSessionId} data-session-id={session.id}>
-                <button class={session.id === state.activeSessionId ? "active" : ""} onClick={() => void selectSession(session.id)}>
-                  {session.title} <span class="profile">[{session.profile}]</span>
-                </button>
-                <button type="button" title={`Cerrar sesión ${session.title}`} aria-label={`Cerrar sesión ${session.title}`} data-session-close={session.id} onClick={() => void closeSession(session.id)}>
-                  ×
-                </button>
+        <For each={state.projects}>
+          {(project) => {
+            const count = () => state.sessionsByProject[project.id]?.length;
+            const list = () => state.sessionsByProject[project.id] ?? (project.id === state.activeProjectId ? state.sessions : []);
+            return (
+              <div data-project-section={project.id}>
+                <div class="row">
+                  <button
+                    type="button"
+                    data-project-toggle={project.id}
+                    aria-expanded={isExpanded(project.id)}
+                    aria-label={`${isExpanded(project.id) ? "Contraer" : "Expandir"} sesiones de ${project.name}`}
+                    title={`${project.name} (${count() ?? "…"} sesiones)`}
+                    onClick={() => toggleProject(project.id)}
+                  >
+                    {isExpanded(project.id) ? "▾" : "▸"} {project.name} <span class="muted">({count() ?? "…"})</span>
+                  </button>
+                  <button type="button" title={`Nueva sesión en ${project.name}`} aria-label={`Nueva sesión en ${project.name}`} onClick={() => newSessionIn(project.id)}>
+                    +
+                  </button>
+                </div>
+                <Show when={isExpanded(project.id)}>
+                  <Show when={!groupError()[project.id]} fallback={<p class="muted">No se pudieron cargar las sesiones.</p>}>
+                    <Show when={list().length > 0} fallback={<p class="muted">Sin sesiones en este proyecto. Crea una para empezar.</p>}>
+                      <div data-session-list={project.id} id={project.id === state.activeProjectId ? "session-list" : undefined} role="listbox" aria-label={`Sesiones de ${project.name}`}>
+                        <For each={list()}>
+                          {(session) => {
+                            const kind = () => sessionDot(session.id);
+                            return (
+                              <div class="row" role="option" aria-selected={session.id === state.activeSessionId} data-session-id={session.id} data-session-dot={kind()}>
+                                <span aria-hidden="true" title={kind() === "idle" ? "inactiva" : kind() === "working" ? "trabajando" : "activa"} style={dot(kind() !== "idle")} />
+                                <button class={session.id === state.activeSessionId ? "active" : ""} onClick={() => openSession(project.id, session.id)}>
+                                  {session.title} <span class="profile">[{session.profile}]</span>
+                                </button>
+                                <button type="button" title={`Cerrar sesión ${session.title}`} aria-label={`Cerrar sesión ${session.title}`} data-session-close={session.id} onClick={() => void closeSession(session.id)}>
+                                  ×
+                                </button>
+                              </div>
+                            );
+                          }}
+                        </For>
+                      </div>
+                    </Show>
+                  </Show>
+                </Show>
               </div>
-            )}
-          </For>
-        </div>
+            );
+          }}
+        </For>
+      </section>
+      <SchedulesSection />
+      <section aria-label="MCP">
+        <h2>MCP</h2>
+        <button type="button" id="sidebar-mcp" data-mcp-dot={mcpActive() ? "active" : "idle"} title="Abrir Conectores MCP" onClick={() => void setLayoutActivity("skills-mcp")}>
+          <span aria-hidden="true" style={dot(mcpActive())} /> Conectores MCP
+          <span class="muted">{mcpActive() ? " · activo" : " · sin conexión"}</span>
+        </button>
       </section>
     </>
   );
@@ -139,13 +255,13 @@ export function ActivityBar() {
         )}
       </For>
       <div class="ab-spacer" />
-      <button type="button" id="toggle-sidebar" title="Mostrar u ocultar sidebar (Ctrl+B)" aria-label="Mostrar u ocultar sidebar (Ctrl+B)" aria-pressed={state.layout.sidebarVisible} onClick={() => void toggleSidebarPanel()}>
+      <button type="button" id="toggle-sidebar" title="Mostrar u ocultar sidebar (Ctrl+B)" aria-label="Mostrar u ocultar sidebar (Ctrl+B)" aria-pressed={state.layout.sidebarVisible} disabled={!state.activeProjectId} aria-disabled={!state.activeProjectId} onClick={() => void toggleSidebarPanel()}>
         <svg class="ab-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h12v12H2z M6 2v12" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>
       </button>
-      <button type="button" id="toggle-inspector" title="Mostrar u ocultar inspector (Ctrl+Alt+I)" aria-label="Mostrar u ocultar inspector (Ctrl+Alt+I)" aria-pressed={state.layout.inspectorVisible} onClick={() => void toggleInspectorPanel()}>
+      <button type="button" id="toggle-inspector" title="Mostrar u ocultar inspector (Ctrl+Alt+I)" aria-label="Mostrar u ocultar inspector (Ctrl+Alt+I)" aria-pressed={state.layout.inspectorVisible} disabled={!state.activeProjectId} aria-disabled={!state.activeProjectId} onClick={() => void toggleInspectorPanel()}>
         <svg class="ab-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h12v12H2z M10 2v12" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>
       </button>
-      <button type="button" id="toggle-bottom" title="Mostrar u ocultar panel inferior (Ctrl+J)" aria-label="Mostrar u ocultar panel inferior (Ctrl+J)" aria-pressed={state.layout.bottomVisible} onClick={() => void toggleBottomPanel()}>
+      <button type="button" id="toggle-bottom" title="Mostrar u ocultar panel inferior (Ctrl+J)" aria-label="Mostrar u ocultar panel inferior (Ctrl+J)" aria-pressed={state.layout.bottomVisible} disabled={!state.activeProjectId} aria-disabled={!state.activeProjectId} onClick={() => void toggleBottomPanel()}>
         <svg class="ab-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h12v12H2z M2 10h12" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>
       </button>
       <button type="button" id="layout-reset" title="Restablecer layout (Ctrl+0)" aria-label="Restablecer layout (Ctrl+0)" onClick={() => void resetWorkbenchLayout()}>
@@ -331,7 +447,6 @@ export function BottomPanel() {
   const projectRoot = () => state.projects.find((p) => p.id === state.activeProjectId)?.rootPath ?? "—";
   const problems = () => {
     const items: string[] = [];
-    if (!state.budgetsConfigured) items.push("Presupuestos sin configurar: las llamadas de pago están bloqueadas.");
     for (const task of state.tasks) if (task.status === "failed") items.push(`Tarea fallida ${task.title}: ${task.error ?? "sin detalle"}`);
     for (const integration of state.integrations) if (integration.status === "failed") items.push(`Integración fallida ${integration.integrationBranch}: ${integration.error ?? "sin detalle"}`);
     return items;
@@ -347,6 +462,8 @@ export function BottomPanel() {
               data-bottom-tab={tab.id}
               aria-selected={state.layout.bottomTab === tab.id}
               class={state.layout.bottomTab === tab.id ? "active" : ""}
+              disabled={!state.activeProjectId}
+              aria-disabled={!state.activeProjectId}
               onClick={() => void setLayoutBottomTab(tab.id)}
             >
               {tab.label}

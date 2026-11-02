@@ -28,17 +28,21 @@ export default function App() {
       const target = event.target as HTMLElement | null;
       if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
       const mod = event.ctrlKey || event.metaKey;
+      const hasProject = Boolean(state.activeProjectId);
       if (mod && !event.altKey && event.code === "KeyB") {
+        if (!hasProject) return;
         event.preventDefault();
         void toggleSidebarPanel();
         return;
       }
       if (mod && !event.altKey && event.code === "KeyJ") {
+        if (!hasProject) return;
         event.preventDefault();
         void toggleBottomPanel();
         return;
       }
       if (mod && event.altKey && event.code === "KeyI") {
+        if (!hasProject) return;
         event.preventDefault();
         void toggleInspectorPanel();
         return;

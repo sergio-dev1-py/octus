@@ -4,7 +4,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  buildSubagentTree,
   indexToolResults,
+  isSessionEmpty,
   messageRenderItems,
   approvalGateForRevision,
   collectModifiedFiles,
@@ -15,6 +17,8 @@ import {
   orderPendingQuestions,
   pairToolParts,
   questionTimeoutRemainingMs,
+  subagentLineage,
+  subagentRollup,
   summarizeAgentActivity,
   toolStatusMeta,
   type ModifiedFile,
@@ -183,5 +187,59 @@ describe("widgets de conversación (Todo 14)", () => {
       { id: "que_a", sessionId: "s", runId: "r", instanceId: "i", toolCallId: "t", questions: [], createdAt: 10 },
     ]);
     expect(ordered.map((q) => q.id)).toEqual(["que_a", "que_b"]);
+  });
+});
+
+describe("chat limpio + subagentes (workbench-chat-terminal/3)", () => {
+  test("sesion vacia solo sin mensajes ni runs", () => {
+    expect(isSessionEmpty([], [])).toBe(true);
+    expect(isSessionEmpty([{ id: "m1" }], [])).toBe(false);
+    expect(isSessionEmpty([], [{ id: "r1" }])).toBe(false);
+    expect(isSessionEmpty([{ id: "m1" }], [{ id: "r1" }])).toBe(false);
+  });
+
+  const inst = (id: string, parentInstanceId?: string, status: "running" | "completed" | "failed" = "completed") =>
+    ({
+      id,
+      sessionId: "s",
+      runId: "r",
+      definitionId: `def-${id}`,
+      parentInstanceId,
+      status,
+      createdAt: Number(id.slice(-1)) || 0,
+    }) as never;
+
+  test("arbol sobre parentInstanceId con profundidad y huerfano como raiz", () => {
+    const roots = buildSubagentTree([inst("i1"), inst("i2", "i1"), inst("i3", "i2"), inst("i9", "ausente")]);
+    expect(roots.map((n) => n.instance.id).sort()).toEqual(["i1", "i9"]);
+    const i1 = roots.find((n) => n.instance.id === "i1")!;
+    expect(i1.depth).toBe(0);
+    expect(i1.children.map((n) => n.instance.id)).toEqual(["i2"]);
+    expect(i1.children[0]!.depth).toBe(1);
+    expect(i1.children[0]!.children[0]!.depth).toBe(2);
+  });
+
+  test("ciclo puro no cuelga: degrada a raiz", () => {
+    const roots = buildSubagentTree([inst("a", "b"), inst("b", "a")]);
+    expect(roots.length).toBeGreaterThan(0);
+    expect(roots.every((n) => n.depth === 0)).toBe(true);
+  });
+
+  test("linaje raiz->hoja para el breadcrumb; desconocido vacio", () => {
+    const all = [inst("i1"), inst("i2", "i1"), inst("i3", "i2")];
+    expect(subagentLineage(all, "i3").map((i) => (i as { id: string }).id)).toEqual(["i1", "i2", "i3"]);
+    expect(subagentLineage(all, "i1").map((i) => (i as { id: string }).id)).toEqual(["i1"]);
+    expect(subagentLineage(all, "nope")).toEqual([]);
+  });
+
+  test("rollup: failed domina, luego active, luego done; vacio idle", () => {
+    expect(subagentRollup(["completed", "running"]).status).toBe("active");
+    expect(subagentRollup(["completed", "running"]).tone).toBe("warn");
+    expect(subagentRollup(["completed", "failed"]).status).toBe("failed");
+    expect(subagentRollup(["denied"]).tone).toBe("err");
+    expect(subagentRollup(["completed"]).status).toBe("done");
+    expect(subagentRollup([]).status).toBe("idle");
+    const r = subagentRollup(["failed", "running", "completed"]);
+    expect([r.failed, r.active, r.total]).toEqual([1, 1, 3]);
   });
 });

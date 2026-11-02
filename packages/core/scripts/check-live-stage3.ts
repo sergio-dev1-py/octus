@@ -362,11 +362,6 @@ const dir = mkdtempSync(path.join(tmpdir(), "octus-live-stage3-"));
 let keepDir = false;
 const core = await OctusCore.create({ dataDir: path.join(dir, "data"), primarySecrets: new MemorySecretStore() });
 try {
-  await core.configureBudgets([
-    { scope: { kind: "global", ref: "" }, limitMicroUsd: 10_000_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-    { scope: { kind: "run", ref: "" }, limitTokens: 500_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-  ]);
-
   // Matriz A — Meta.
   if (MODEL_KEY) {
     await core.setProviderKey("meta", MODEL_KEY);

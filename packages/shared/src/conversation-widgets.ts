@@ -268,3 +268,95 @@ export function messageRenderItems(parts: MessagePart[]): MessageRenderItem[] {
 export function orderPendingQuestions(requests: QuestionRequest[]): QuestionRequest[] {
   return [...requests].sort((a, b) => a.createdAt - b.createdAt);
 }
+
+/** Sesión vacía (plan workbench-chat-terminal, todo 3): sin mensajes ni runs.
+ *  Con sesión vacía el chat no pinta ni siquiera los `details` de actividad. */
+export function isSessionEmpty(messages: readonly unknown[], runs: readonly unknown[]): boolean {
+  return messages.length === 0 && runs.length === 0;
+}
+
+/** Nodo del árbol de subagentes: instancia + hijas + profundidad desde la raíz. */
+export interface SubagentNode {
+  instance: AgentInstance;
+  children: SubagentNode[];
+  depth: number;
+}
+
+/** Árbol de subagentes sobre `parentInstanceId` (plan workbench-chat-terminal, todo 3).
+ *  Sin padre (o con padre ausente) = raíz. Orden estable por creación; los
+ *  ciclos se degradan a raíces para no colgar el render. */
+export function buildSubagentTree(instances: AgentInstance[]): SubagentNode[] {
+  const ordered = [...instances].sort((a, b) => a.createdAt - b.createdAt);
+  const byId = new Map<string, SubagentNode>();
+  for (const instance of ordered) byId.set(instance.id, { instance, children: [], depth: 0 });
+  const roots: SubagentNode[] = [];
+  for (const node of byId.values()) {
+    const parentId = node.instance.parentInstanceId;
+    const parent = parentId ? byId.get(parentId) : undefined;
+    if (parent && parent !== node) parent.children.push(node);
+    else roots.push(node);
+  }
+  const visited = new Set<string>();
+  const assign = (node: SubagentNode, depth: number): void => {
+    if (visited.has(node.instance.id)) return;
+    visited.add(node.instance.id);
+    node.depth = depth;
+    for (const child of node.children) assign(child, depth + 1);
+  };
+  for (const root of roots) assign(root, 0);
+  // Nodos en ciclo puro (inalcanzables desde raíces): raíces de profundidad 0.
+  for (const node of byId.values()) {
+    if (!visited.has(node.instance.id)) {
+      node.depth = 0;
+      roots.push(node);
+      assign(node, 0);
+    }
+  }
+  return roots;
+}
+
+/** Cadena raíz→instancia para el breadcrumb del grupo (vacía si es desconocida).
+ *  Con ciclos se corta por visitado; nunca cuelga el render. */
+export function subagentLineage(instances: AgentInstance[], instanceId: string): AgentInstance[] {
+  const byId = new Map(instances.map((instance) => [instance.id, instance] as const));
+  if (!byId.has(instanceId)) return [];
+  const chain: AgentInstance[] = [];
+  const seen = new Set<string>();
+  let current: AgentInstance | undefined = byId.get(instanceId);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    chain.unshift(current);
+    current = current.parentInstanceId ? byId.get(current.parentInstanceId) : undefined;
+  }
+  return chain;
+}
+
+/** Estado agregado de un grupo de subagente para su pill (plan workbench-chat-terminal, todo 3). */
+export type SubagentRollupStatus = "failed" | "active" | "done" | "idle";
+
+export interface SubagentRollup {
+  status: SubagentRollupStatus;
+  tone: ToolTone;
+  active: number;
+  failed: number;
+  total: number;
+}
+
+const SUBAGENT_FAILED = new Set<string>(["failed", "denied"]);
+const SUBAGENT_ACTIVE = new Set<string>(["created", "running", "waiting_permission", "waiting_input", "pending"]);
+
+/** Rollup sobre estados de ToolCallRecord y/o AgentInstance: failed domina,
+ *  luego active; sin actividad terminal = done, vacío = idle. */
+export function subagentRollup(statuses: readonly string[]): SubagentRollup {
+  let active = 0;
+  let failed = 0;
+  for (const status of statuses) {
+    if (SUBAGENT_FAILED.has(status)) failed += 1;
+    else if (SUBAGENT_ACTIVE.has(status)) active += 1;
+  }
+  const total = statuses.length;
+  if (failed > 0) return { status: "failed", tone: "err", active, failed, total };
+  if (active > 0) return { status: "active", tone: "warn", active, failed, total };
+  if (total > 0) return { status: "done", tone: "ok", active, failed, total };
+  return { status: "idle", tone: "muted", active, failed, total };
+}

@@ -1,7 +1,7 @@
 /** Renderer/store — estado raíz, tipos de UI y banderas globales. */
 import { DEFAULT_LAYOUT, DEFAULT_UI_PREFS } from "@octus/shared";
 import { createStore } from "solid-js/store";
-import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, DiagnosticProblem, ExplorerFile, ExplorerPage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, SkillCatalogError, SkillCatalogItem, SkillDetail, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
+import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, DiagnosticProblem, ExplorerFile, ExplorerPage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, SkillCatalogError, SkillCatalogItem, SkillDetail, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
 import type { ChatAttachment, LiveFrame } from "../timeline.js";
 
 /** Marco de streaming visible (Todo 13, N-C-12a/12b): forma pura en timeline.ts. */
@@ -12,6 +12,10 @@ export type { ChatAttachment };
 interface UIState {
   projects: Project[];
   sessions: Session[];
+  /** Todo 2 (fix): caché de sesiones por proyecto para los grupos colapsables. */
+  sessionsByProject: Record<string, Session[]>;
+  /** Todo 2 (fix): working (instancia created/running/waiting) por sesión, en CUALQUIER proyecto. */
+  workingBySession: Record<string, boolean>;
   activeProjectId?: string;
   activeSessionId?: string;
   messages: Message[];
@@ -24,9 +28,6 @@ interface UIState {
   permissions: PermissionRequest[];
   questions: QuestionRequest[];
   providers: ProviderDescriptor[];
-  budgetsConfigured: boolean;
-  budgets: Budget[];
-  budgetUsage: BudgetUsage[];
   usage: UsageRecord[];
   /** Todo 16 — run seleccionado en la vista de agentes y su ficha (runs.get). */
   selectedRunId?: string;
@@ -102,6 +103,8 @@ interface UIState {
 const [state, setState] = createStore<UIState>({
   projects: [],
   sessions: [],
+  sessionsByProject: {},
+  workingBySession: {},
   messages: [],
   runs: [],
   busy: false,
@@ -111,9 +114,6 @@ const [state, setState] = createStore<UIState>({
   permissions: [],
   questions: [],
   providers: [],
-  budgetsConfigured: false,
-  budgets: [],
-  budgetUsage: [],
   usage: [],
   selectedRunId: undefined,
   runDetail: undefined,

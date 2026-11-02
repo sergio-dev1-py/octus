@@ -52,6 +52,11 @@
 
 .oc-textarea { min-height: var(--oc-space-7); }
 
+.oc-check {
+  width: auto;
+  accent-color: var(--oc-accent);
+}
+
 .oc-card {
   background: var(--oc-panel);
   border: 1px solid var(--oc-border);

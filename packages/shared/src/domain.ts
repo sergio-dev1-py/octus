@@ -756,3 +756,51 @@ export interface MemoryItem {
   createdAt: Milliseconds;
   updatedAt: Milliseconds;
 }
+
+// ---------------------------------------------------------------------------
+// Tareas programadas (Todo workbench-chat-terminal/7; concepto aparte del DAG).
+// ---------------------------------------------------------------------------
+
+/** Perfil del coordinador con el que corre la sesión disparada. */
+export type ScheduleProfile = CoordinatorProfile;
+
+/** Estado de un disparo registrado en scheduled_runs. */
+export type ScheduleRunStatus = "fired" | "skipped_overlap" | "failed";
+
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  prompt: string;
+  profile: ScheduleProfile;
+  /** Cron de 5 campos (min hora dom mes dow). */
+  cron: string;
+  /** Zona IANA o 'local'. */
+  timezone: string;
+  enabled: boolean;
+  consecutiveFailures: number;
+  nextRunAt: Milliseconds;
+  lastRunAt?: Milliseconds;
+  lastStatus?: ScheduleRunStatus;
+  createdAt: Milliseconds;
+  updatedAt: Milliseconds;
+}
+
+export interface ScheduledRun {
+  id: string;
+  taskId: string;
+  sessionId?: string;
+  runId?: string;
+  status: ScheduleRunStatus;
+  scheduledAt: Milliseconds;
+  firedAt: Milliseconds;
+  error?: string;
+  createdAt: Milliseconds;
+}
+
+export interface CreateScheduleInput {
+  name: string;
+  prompt: string;
+  profile?: ScheduleProfile;
+  cron: string;
+  timezone?: string;
+}

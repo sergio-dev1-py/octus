@@ -179,20 +179,6 @@ CREATE INDEX idx_usage_session ON usage_records(session_id, created_at);
 CREATE INDEX idx_usage_run ON usage_records(run_id);
 CREATE INDEX idx_usage_scope ON usage_records(provider_id, model_id, agent_definition_id, created_at);
 
-CREATE TABLE budgets (
-  id TEXT PRIMARY KEY,
-  scope_kind TEXT NOT NULL,
-  scope_ref TEXT NOT NULL DEFAULT '',
-  limit_micro_usd INTEGER,
-  limit_tokens INTEGER,
-  warn_ratio REAL NOT NULL DEFAULT 0.8,
-  action TEXT NOT NULL DEFAULT 'warn',
-  window TEXT NOT NULL DEFAULT 'span',
-  enabled INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-
 CREATE TABLE kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -838,6 +824,47 @@ CREATE TABLE mcp_audit (
 CREATE INDEX idx_mcp_audit_server ON mcp_audit(server_id, occurred_at);
 `;
 
+const MIGRATION_0009 = `
+-- Todo workbench-chat-terminal/4: message_id aditivo en uso (NULL = legacy sin footer).
+ALTER TABLE usage_records ADD COLUMN message_id TEXT;
+CREATE INDEX idx_usage_message ON usage_records(message_id);
+`;
+
+const MIGRATION_0010 = `
+-- Todo workbench-chat-terminal/7: tareas programadas (concepto aparte del DAG interno).
+-- next_run_at es solo-escritura del ScheduledTasksManager; el resto solo lee.
+CREATE TABLE scheduled_tasks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  profile TEXT NOT NULL DEFAULT 'build',
+  cron TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'local',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  next_run_at INTEGER NOT NULL,
+  last_run_at INTEGER,
+  last_status TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);
+CREATE TABLE scheduled_runs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+  -- Sin FK a sessions/runs: el historial de disparos sobrevive al borrado
+  -- de la sesión (auditoría); el vínculo es solo informativo.
+  session_id TEXT,
+  run_id TEXT,
+  status TEXT NOT NULL,
+  scheduled_at INTEGER NOT NULL,
+  fired_at INTEGER NOT NULL,
+  error TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_scheduled_runs_task ON scheduled_runs(task_id, created_at);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "core-etapa1", sql: MIGRATION_0001 },
   { version: 2, name: "agents-plans-etapa2", sql: MIGRATION_0002 },
@@ -847,4 +874,6 @@ export const MIGRATIONS: Migration[] = [
   { version: 6, name: "conflict-resolution-etapa5", sql: MIGRATION_0006 },
   { version: 7, name: "memory-etapa6", sql: MIGRATION_0007 },
   { version: 8, name: "mcp-servers-trust-ux13", sql: MIGRATION_0008 },
+  { version: 9, name: "usage-message-id-wbct4", sql: MIGRATION_0009 },
+  { version: 10, name: "scheduled-tasks-wbct7", sql: MIGRATION_0010 },
 ];

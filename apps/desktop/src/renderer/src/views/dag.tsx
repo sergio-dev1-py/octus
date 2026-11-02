@@ -30,7 +30,7 @@ export function DagSection() {
   const width = () => Math.max(...layout().nodes.map((n) => n.x), 88) + 112;
   const height = () => Math.max(...layout().nodes.map((n) => n.y), 32) + 48;
   return (
-    <details class="stage2" id="integration-dag" open>
+    <details class="stage2" id="integration-dag">
       <summary>
         Dependency graph ({layout().nodes.length} tasks, {layout().edges.length} dependencies)
       </summary>
@@ -122,7 +122,7 @@ export function WorktreeDiffSection() {
   };
   const current = () => (selected() ? diffs()[selected()!] : undefined);
   return (
-    <details class="stage2" id="worktree-diff" open>
+    <details class="stage2" id="worktree-diff">
       <summary>Worktree diff ({state.worktrees.length} worktrees)</summary>
       <Show when={state.worktrees.length > 0} fallback={<p class="muted">No worktrees yet. Implementer tasks provision one automatically.</p>}>
         <div class="row">
@@ -159,7 +159,7 @@ export function IntegrationHistorySection() {
   const opsOf = (integrationId: string): IntegrationOperation[] =>
     [...(state.integrationOps[integrationId] ?? [])].sort((a, b) => a.createdAt - b.createdAt);
   return (
-    <details class="stage2" id="integration-history" open>
+    <details class="stage2" id="integration-history">
       <summary>Execution history ({state.integrations.length} integrations)</summary>
       <Show when={state.integrations.length > 0} fallback={<p class="muted">No integrations yet. Reviewed writer tasks auto-integrate into an intermediate branch.</p>}>
         <For each={state.integrations}>

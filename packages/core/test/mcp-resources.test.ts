@@ -396,9 +396,9 @@ describe("mcp resources and prompts (Todo 28)", () => {
     const prompts = await listMcpPrompts(stdioBinding);
     expect(prompts.map((p) => p.name).sort()).toEqual(["qa_review", "qa_vault_secret"]);
 
-    const prompt = await getMcpPrompt(stdioBinding, "qa_review", { topic: "budgets" });
+    const prompt = await getMcpPrompt(stdioBinding, "qa_review", { topic: "reviews" });
     expect(prompt.messages).toHaveLength(1);
-    expect(prompt.messages[0]!.text).toBe("review topic: budgets");
+    expect(prompt.messages[0]!.text).toBe("review topic: reviews");
 
     await expectRejects(getMcpPrompt(stdioBinding, "qa_vault_secret"), /approval/);
     const secret = await getMcpPrompt(stdioBinding, "qa_vault_secret", undefined, { approve: async () => true });
@@ -407,7 +407,7 @@ describe("mcp resources and prompts (Todo 28)", () => {
     const block = formatMcpPromptForContext(stdioBinding.serverId, "qa_review", prompt);
     expect(block).toContain("[untrusted MCP content");
     expect(block).toContain('untrusted="true"');
-    expect(block).toContain("review topic: budgets");
+    expect(block).toContain("review topic: reviews");
   });
 
   test("binary blobs are omitted from context, never inlined", async () => {

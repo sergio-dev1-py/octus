@@ -347,10 +347,6 @@ export async function runAcceptance(): Promise<number> {
         const defs = await core.registry.list();
         const pinned = defs.filter((d) => d.defaultModel.providerId === "meta" && d.defaultModel.modelId === META_MODEL && d.defaultModel.effort === META_EFFORT).length;
         push("A-pin", "all 6 definitions pinned to meta contributor/xhigh (temp DB)", pinned === 6 ? "PASS" : "FAIL", `${pinned}/6 pinned`);
-        await core.configureBudgets([
-          { scope: { kind: "global", ref: "" }, limitMicroUsd: 4_000_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-          { scope: { kind: "run", ref: "" }, limitTokens: 100_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-        ]);
         const project = await core.createProject("accept-meta", fixture.root);
         const session = await core.createSession({ projectId: project.id, title: "accept-meta" });
         await core.setSessionModel(session.id, { providerId: "meta", modelId: META_MODEL, effort: META_EFFORT });
@@ -580,10 +576,6 @@ export async function runAcceptance(): Promise<number> {
           push("B-model", "GLM max unavailable — no silent reduction", "BLOCKED", "refusing to substitute another model/effort");
         } else {
           await pinTempModels(core, "opencode-go", GO_MODEL, GO_EFFORT);
-          await core.configureBudgets([
-            { scope: { kind: "global", ref: "" }, limitMicroUsd: 4_000_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-            { scope: { kind: "run", ref: "" }, limitTokens: 100_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-          ]);
           const project = await core.createProject("accept-go", fixture.root);
           const session = await core.createSession({ projectId: project.id, title: "accept-go" });
           await core.setSessionModel(session.id, { providerId: "opencode-go", modelId: GO_MODEL, effort: GO_EFFORT });
@@ -787,10 +779,6 @@ export async function runAcceptancePhase2(): Promise<number> {
         }
       }
       await pinTempModels(core, provider, modelId, effort);
-      await core.configureBudgets([
-        { scope: { kind: "global", ref: "" }, limitMicroUsd: 4_000_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-        { scope: { kind: "run", ref: "" }, limitTokens: 100_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-      ]);
       const project = await core.createProject(`accept2-${tag}`, fixture.root);
       const session = await core.createSession({ projectId: project.id, title: `accept2-${tag}` });
       await core.setSessionModel(session.id, { providerId: provider, modelId, effort });
@@ -1182,12 +1170,6 @@ RESPONSE FORMAT (mandatory, no exceptions): output EXACTLY {"tasks": [...] } and
           return;
         }
       }
-      // Presupuestos fase 3: el razonamiento xhigh/max consume muchos tokens;
-      // acotado pero con margen (el run de 100k bloqueaba al implementer).
-      await core.configureBudgets([
-        { scope: { kind: "global", ref: "" }, limitMicroUsd: 10_000_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-        { scope: { kind: "run", ref: "" }, limitTokens: 500_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-      ]);
       const project = await core.createProject(`accept3-${tag}`, root);
       const session = await core.createSession({ projectId: project.id, directory: root, title: `accept3-${tag}` });
       await core.setSessionModel(session.id, { providerId: provider, modelId, effort });

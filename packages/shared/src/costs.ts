@@ -1,5 +1,6 @@
 /**
- * @octus/shared — costes: registro de uso y presupuestos (ADR-019).
+ * @octus/shared — costes: registro de uso (ADR-019).
+ * Sin presupuestos (plan todo 7): las llamadas de pago ya no se bloquean.
  */
 import type { Milliseconds } from "./domain.js";
 
@@ -11,6 +12,8 @@ export interface UsageRecord {
   agentInstanceId: string;
   runId: string;
   sessionId: string;
+  /** Mensaje asistente al que pertenece el intento. NULL = fila legacy sin footer. */
+  messageId?: string | null;
   inputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
@@ -29,34 +32,57 @@ export interface UsageRecord {
   createdAt: Milliseconds;
 }
 
-export type BudgetScopeKind = "global" | "provider" | "model" | "agent" | "session" | "run";
-
-export interface BudgetScope {
-  kind: BudgetScopeKind;
-  /** providerId, providerId/modelId, definitionId, sessionId o runId según kind. Vacío en global. */
-  ref: string;
+/** Totales por mensaje para el footer bajo cada respuesta del asistente.
+ *  JAMAS suma todo el run: solo las filas con messageId exacto. */
+export interface MessageUsageFooter {
+  messageId: string;
+  /** Intentos registrados para este mensaje (reintentos incluidos). */
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cachedTokens: number;
+  durationMs: Milliseconds;
+  /** Peor estado: failed > cancelled > completed. */
+  status: "completed" | "failed" | "cancelled";
+  /** Suma de costes conocidos; NULL si ninguna fila tenia precio. */
+  costMicroUsd: number | null;
+  /** true si alguna fila no tenia tarifa (el footer muestra 'unpriced'). */
+  pricingMissing: boolean;
 }
 
-export interface Budget {
-  id: string;
-  scope: BudgetScope;
-  limitMicroUsd?: number;
-  limitTokens?: number;
-  warnRatio: number;
-  action: "warn" | "block";
-  /** month (mes natural UTC) o span (vida del ámbito). */
-  window: "month" | "span";
-  enabled: boolean;
-  createdAt: Milliseconds;
-  updatedAt: Milliseconds;
+/** Footer puro por mensaje: filas con messageId exacto; legacy NULL = sin footer. */
+export function footerForMessage(messageId: string, records: UsageRecord[]): MessageUsageFooter | undefined {
+  const rows = records.filter((r) => r.messageId === messageId);
+  if (rows.length === 0) return undefined;
+  let status: MessageUsageFooter["status"] = "completed";
+  if (rows.some((r) => r.status === "failed")) status = "failed";
+  else if (rows.some((r) => r.status === "cancelled")) status = "cancelled";
+  let cost: number | null = null;
+  for (const r of rows) {
+    if (r.costMicroUsd !== null) cost = (cost ?? 0) + r.costMicroUsd;
+  }
+  return {
+    messageId,
+    calls: rows.length,
+    inputTokens: rows.reduce((a, r) => a + r.inputTokens, 0),
+    outputTokens: rows.reduce((a, r) => a + r.outputTokens, 0),
+    reasoningTokens: rows.reduce((a, r) => a + r.reasoningTokens, 0),
+    cachedTokens: rows.reduce((a, r) => a + r.cachedTokens, 0),
+    durationMs: rows.reduce((a, r) => a + r.durationMs, 0),
+    status,
+    costMicroUsd: cost,
+    pricingMissing: rows.some((r) => r.pricingMissing || r.costMicroUsd === null),
+  };
 }
 
-export interface BudgetUsage {
-  budgetId: string;
-  spentMicroUsd: number | null;
-  spentTokens: number;
-  warned: boolean;
-  exceeded: boolean;
-  /** true si alguna fila del ámbito carece de tarifa (el gasto es una cota inferior). */
-  costIncomplete: boolean;
+/** Linea del footer estilo screenshot: "7.3s 224.2k tok · $0.0123" o "unpriced". */
+export function formatMessageFooter(footer: MessageUsageFooter): string {
+  const seconds = (footer.durationMs / 1000).toFixed(1);
+  const total = footer.inputTokens + footer.outputTokens;
+  const tokens = total >= 1000 ? `${(total / 1000).toFixed(1)}k tok` : `${total} tok`;
+  const cost = footer.costMicroUsd === null ? "unpriced" : `$${(footer.costMicroUsd / 1_000_000).toFixed(4)}`;
+  return `${seconds}s ${tokens} · ${cost}`;
 }
+
+

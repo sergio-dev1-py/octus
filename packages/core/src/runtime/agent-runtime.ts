@@ -269,6 +269,7 @@ export class AgentRuntime {
           providerId: resolution.provider.id,
           modelId: resolution.model.modelId,
           correlationId: opts.correlationId,
+          messageId,
         },
         controller.signal,
       );
@@ -309,10 +310,6 @@ export class AgentRuntime {
       emit({ kind: "part.done", sessionId: session.id, runId: instance.runId, instanceId: instance.id, messageId, part: "text" });
       return acc;
     } catch (error) {
-      if (isOctusError(error) && (error.code === "budget_exceeded" || error.code === "budgets_not_configured")) {
-        acc.error = { code: error.code, message: error.message, retryable: false };
-        return acc;
-      }
       if (isOctusError(error, "aborted") || opts.signal.aborted) {
         acc.error = { code: "aborted", message: "Run cancelled", retryable: false };
         return acc;
@@ -489,6 +486,7 @@ export class AgentRuntime {
           providerId: resolution.provider.id,
           modelId: resolution.model.modelId,
           correlationId: opts.correlationId,
+          messageId,
         },
         opts.signal,
       );

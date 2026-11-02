@@ -1,7 +1,7 @@
 /** Renderer/store — arranque del store y recargas compuestas. */
 import { onEvent } from "../api.js";
 import { applyUiPrefs, loadUiPrefs } from "../prefs.js";
-import { refreshProjects, refreshSessions, refreshProviders, refreshBudgets, refreshPending } from "./projects.js";
+import { refreshProjects, refreshSessions, refreshProviders, refreshPending } from "./projects.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
 import { refreshDefinitions, refreshLimits, refreshProjectSettings } from "./settings.js";
 import { refreshSkillsCatalog } from "./skills.js";
@@ -25,7 +25,6 @@ export async function initStore(): Promise<void> {
   await Promise.all([
     refreshProjects().then(() => refreshSessions()),
     refreshProviders(),
-    refreshBudgets(),
     refreshPending(),
   ]);
   await reloadStage2();
