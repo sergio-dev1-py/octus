@@ -33,6 +33,8 @@ export interface ToolRunContext {
 export interface ToolDefinition {
   manifest: ToolManifest;
   schema: z.ZodType<unknown>;
+  /** Detalle opcional para la solicitud de aprobación (origen, alcance). */
+  permissionDetail?: (args: unknown) => string | undefined;
   run: (args: any, ctx: ToolRunContext) => Promise<{ text: string; fullText?: string; detail?: string }>;
 }
 

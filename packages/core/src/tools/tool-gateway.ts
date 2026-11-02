@@ -48,6 +48,33 @@ export class ToolGateway {
     return [...this.definitions.values()].map((d) => d.manifest);
   }
 
+  /** Registro dinámico (p. ej. herramientas MCP aisladas por servidor, Todo 27).
+   *  El nombre ya registrado se rechaza como conflicto: jamás se sobrescribe
+   *  en silencio una herramienta en uso. */
+  registerDefinition(definition: ToolDefinition): void {
+    if (this.definitions.has(definition.manifest.name)) {
+      throw new OctusError("already_exists", `Tool already registered: '${definition.manifest.name}'`);
+    }
+    this.definitions.set(definition.manifest.name, definition);
+  }
+
+  /** Retira una herramienta dinámica por nombre. Devuelve si existía. */
+  unregisterTool(name: string): boolean {
+    return this.definitions.delete(name);
+  }
+
+  /** Retira todas las herramientas dinámicas que cumplan el predicado. Devuelve las retiradas. */
+  unregisterWhere(predicate: (name: string) => boolean): string[] {
+    const removed: string[] = [];
+    for (const name of [...this.definitions.keys()]) {
+      if (predicate(name)) {
+        this.definitions.delete(name);
+        removed.push(name);
+      }
+    }
+    return removed;
+  }
+
   async execute(request: ToolExecuteRequest): Promise<ToolExecuteResult> {
     const started = now();
     const definition = this.definitions.get(request.name);
@@ -98,7 +125,7 @@ export class ToolGateway {
           correlationId,
           signal: request.signal,
         },
-        permissionDetail(request.name, parsed.data),
+        permissionDetail(request.name, parsed.data) ?? definition.permissionDetail?.(parsed.data),
       );
       await this.db.exec("UPDATE tool_invocations SET status = 'running', permission = ? WHERE id = ?", [
         JSON.stringify({ decision: "allow", rule: verdict.via }),
@@ -179,7 +206,7 @@ export class ToolGateway {
         await this.publishToolEvent("tool_call.failed", request, correlationId, { error: code });
         throw error instanceof OctusError ? error : new OctusError("aborted", message);
       }
-      if (code === "scope_violation") {
+      if (code === "scope_violation" || code === "tool_denied") {
         await this.db.exec("UPDATE tool_invocations SET status = 'denied', error = ?, completed_at = ? WHERE id = ?", [
           message,
           now(),
