@@ -23,6 +23,9 @@ import type {
   Promotion,
   RepositorySummary,
   Run,
+  ScheduleProfile,
+  ScheduledRun,
+  ScheduledTask,
   Session,
   Task,
   TaskAttempt,
@@ -44,7 +47,7 @@ import type {
   QuestionRequest,
   SavedPermissionRule,
 } from "./permissions.js";
-import type { Budget, BudgetUsage, UsageRecord } from "./costs.js";
+import type { UsageRecord } from "./costs.js";
 import type { UiPrefs } from "./prefs.js";
 import type { WorkbenchLayout } from "./layout.js";
 
@@ -71,10 +74,6 @@ export interface ProviderTestResult {
   ok: boolean;
   error?: string;
   models?: number;
-}
-
-export interface ConfigureBudgetsRequest {
-  budgets: Array<Omit<Budget, "id" | "createdAt" | "updatedAt">>;
 }
 
 /** Canal → { request, response }. */
@@ -109,8 +108,6 @@ export interface OctusIPC {
   "providers.setKey": { request: SetKeyRequest; response: { ok: boolean; error?: string } };
   "providers.removeKey": { request: { providerId: string }; response: { ok: boolean } };
   "providers.test": { request: { providerId: string }; response: ProviderTestResult };
-  "budgets.status": { request: Record<string, never>; response: { configured: boolean; budgets: Budget[]; usage: BudgetUsage[] } };
-  "budgets.configure": { request: ConfigureBudgetsRequest; response: { ok: boolean } };
   "permissions.pending": { request: { sessionId?: string }; response: { requests: PermissionRequest[] } };
   "permissions.reply": { request: PermissionReply; response: { ok: boolean } };
   "permissions.saved": { request: { projectId: string }; response: { rules: SavedPermissionRule[] } };
@@ -144,7 +141,13 @@ export interface OctusIPC {
   "tasks.cancel": { request: { taskId: string }; response: { ok: boolean; cancelled: string[]; error?: string } };
   "tasks.retry": { request: { taskId: string }; response: { ok: boolean; attempt?: number; instanceId?: string; error?: string } };
   "tasks.review": { request: { reviewerTaskId: string; targetTaskId: string; verdict: "accept" | "request-changes"; detail?: Record<string, unknown> }; response: { ok: boolean; error?: string } };
-  "tasks.scheduler": { request: { sessionId: string }; response: { lastRunId?: string; active: { tasks: number; reservations: number } } };
+  "tasks.scheduler": { request: { sessionId: string }; response: { lastRunId?: string; active: { tasks: number; reservations: number }; scheduled?: { due: number; enabled: number } } };
+  /* Todo workbench-chat-terminal/7 — tareas programadas (core nuevo; sin DAG). */
+  "schedules.list": { request: Record<string, never>; response: { schedules: ScheduledTask[] } };
+  "schedules.create": { request: { name: string; prompt: string; profile?: ScheduleProfile; cron: string; timezone?: string }; response: { ok: boolean; schedule?: ScheduledTask; error?: string } };
+  "schedules.setEnabled": { request: { id: string; enabled: boolean }; response: { ok: boolean; error?: string } };
+  "schedules.remove": { request: { id: string }; response: { ok: boolean; error?: string } };
+  "schedules.runs": { request: { taskId: string; limit?: number }; response: { runs: ScheduledRun[] } };
   "integrations.create": { request: { projectId: string; runId: string; targetBranch?: string }; response: { integration: Integration; error?: string } };
   "integrations.get": { request: { integrationId: string }; response: { integration: Integration; commits: IntegrationCommit[]; operations: IntegrationOperation[]; error?: string } };
   "integrations.list": { request: { runId: string }; response: { integrations: Integration[] } };
@@ -216,6 +219,27 @@ export interface OctusIPC {
   "terminal.kill": { request: { id: string; sinceSeq?: number }; response: { ok: boolean; restarted?: boolean; chunks?: TerminalChunk[]; nextSeq?: number; error?: string } };
   "terminal.close": { request: { id: string }; response: { ok: boolean; error?: string } };
   "terminal.select": { request: { id: string }; response: { ok: boolean; error?: string } };
+  /* Todo 10 (workbench-chat-terminal) — superficie MCP (mcp.*). El renderer
+     invoca estos canales por el puente dinámico `window.octus.invoke`
+     (store/mcp.ts, sin casts al contrato tipado); el preload los reenvía
+     como `octus:<canal>`. Formas de respuesta compatibles con ese cliente:
+     list/audit devuelven arreglos directos; el resto, objetos. Sin secretos
+     en ninguna respuesta (solo `hasSecret`). */
+  "mcp.list": { request: { projectId: string }; response: McpServerSummary[] };
+  "mcp.add": { request: McpAddRequest; response: { id: string } };
+  "mcp.import": { request: { jsonText: string }; response: { added: string[]; errors: Array<{ index: number; error: string }> } };
+  "mcp.update": { request: { id: string; name?: string; command?: string; argsText?: string; url?: string; enabled?: boolean }; response: { ok: boolean; error?: string } };
+  "mcp.remove": { request: { id: string }; response: { ok: boolean; error?: string } };
+  "mcp.verify": { request: { id: string; projectId: string }; response: { ok: boolean; error?: string } };
+  "mcp.connect": { request: { id: string; projectId: string }; response: { ok: boolean; error?: string } };
+  "mcp.disconnect": { request: { id: string; projectId: string }; response: { ok: boolean; error?: string } };
+  "mcp.retry": { request: { id: string; projectId: string }; response: { ok: boolean; error?: string } };
+  "mcp.setTrust": { request: { id: string; scope: "global" | "workspace"; trusted: boolean; projectId: string }; response: { ok: boolean; error?: string } };
+  "mcp.setSecret": { request: { id: string; token: string }; response: { ok: boolean; error?: string } };
+  "mcp.tools": { request: { id: string; projectId: string }; response: { authorized: boolean; items: McpToolItem[] } };
+  "mcp.resources": { request: { id: string }; response: { supported: boolean; items: McpResourceItem[] } };
+  "mcp.prompts": { request: { id: string }; response: { supported: boolean; items: McpPromptItem[] } };
+  "mcp.audit": { request: { id?: string }; response: McpAuditItem[] };
 }
 
 /** Todo 24 — tipos de Skills para el IPC (planos y serializables; `installed` y `enabled` siempre distintos). */
@@ -254,6 +278,75 @@ export interface SkillDetail extends SkillCatalogItem {
   body: string;
   /** Archivos relativos dentro de la skill (recursos). */
   files: string[];
+}
+
+/* Todo 10 (workbench-chat-terminal) — tipos MCP para el IPC (planos y
+   serializables; espejo estructural del store del renderer; configurado ≠
+   conectado ≠ autorizado siempre distintos; jamás el valor del secreto). */
+
+export type McpTransportName = "stdio" | "http";
+export type McpConnStatusName = "disconnected" | "connecting" | "connected" | "reconnecting" | "failed";
+
+export interface McpServerSummary {
+  id: string;
+  name: string;
+  transport: McpTransportName;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  enabled: boolean;
+  configured: boolean;
+  connection: McpConnStatusName;
+  lastError?: string;
+  attempts: number;
+  serverName?: string;
+  serverVersion?: string;
+  capabilities: string[];
+  tools: string[];
+  hasResources: boolean;
+  hasPrompts: boolean;
+  trustedGlobal: boolean;
+  trustedWorkspace: boolean;
+  /** Solo indicador: el secreto vive en el almacén del SO, jamás en el renderer. */
+  hasSecret: boolean;
+}
+
+export interface McpAddRequest {
+  name: string;
+  transport: McpTransportName;
+  command?: string;
+  argsText?: string;
+  cwd?: string;
+  url?: string;
+  token?: string;
+  connectTimeoutMs?: number;
+}
+
+export interface McpToolItem {
+  name: string;
+  isolated: string;
+  description?: string;
+}
+
+export interface McpResourceItem {
+  uri: string;
+  name?: string;
+  sensitive: boolean;
+}
+
+export interface McpPromptItem {
+  name: string;
+  description?: string;
+  args: string[];
+}
+
+export interface McpAuditItem {
+  id: string;
+  serverId: string;
+  projectId: string | null;
+  action: string;
+  reason: string | null;
+  occurredAt: number;
 }
 
 /* Todo 33 — explorador, diffs, pruebas y diagnósticos (sufijos -explorer/-diff/-modified/-run/-diagnostics: sin colisión con terminal.* del Todo 32). */

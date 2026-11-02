@@ -1,7 +1,7 @@
 /** Renderer/views — conversación: mensajes, composer, diálogos y vista de chat. */
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import type { Message, MessagePart } from "@octus/shared";
-import { messageRenderItems } from "@octus/shared";
+import type { Message, MessagePart, PairedToolCall } from "@octus/shared";
+import { footerForMessage, formatMessageFooter, isSessionEmpty, messageRenderItems } from "@octus/shared";
 import { invoke } from "../api.js";
 import { renderMarkdown } from "../markdown.js";
 import { CHAT_DOM_WINDOW } from "../perf.js";
@@ -9,7 +9,7 @@ import { windowMessages } from "../timeline.js";
 import {
   ModifiedFilesSection,
   RunErrorsSection,
-  ToolCallCard,
+  SubagentToolGroup,
   questionTimeoutLabel,
   replyToQuestion,
 } from "../toolcall-widgets.jsx";
@@ -59,24 +59,45 @@ export function PartView(props: { part: MessagePart }) {
 
 export function MessageView(props: { message: Message }) {
   const message = () => props.message;
+  // Todo workbench-chat-terminal/3: textos directos; los tool calls se agrupan
+  // por subagente en un details colapsable (aparecen SOLO mientras hay trabajo).
+  const textParts = (): MessagePart[] => {
+    const out: MessagePart[] = [];
+    for (const part of message().parts) {
+      if (part.type !== "tool_call" && part.type !== "tool_result") out.push(part);
+    }
+    return out;
+  };
+  const toolItems = (): PairedToolCall[] => {
+    const out: PairedToolCall[] = [];
+    for (const item of messageRenderItems(message().parts)) {
+      if (item.kind === "tool") out.push(item);
+    }
+    return out;
+  };
+  // Todo workbench-chat-terminal/4: footer fuera de la burbuja, solo con
+  // filas del mensaje exacto (runs.usage ya cargado); legacy NULL = sin footer.
+  const footer = () => (message().role === "assistant" ? footerForMessage(message().id, state.usage) : undefined);
   return (
-    <div class={`message ${message().role}`} data-message-id={message().id}>
-      <div class="role">
-        {message().role}
-        <Show when={message().mode}>
-          <span class={`pill mode ${message().mode}`}>[{message().mode}]</span>
+    <>
+      <div class={`message ${message().role}`} data-message-id={message().id}>
+        <div class="role">
+          {message().role}
+          <Show when={message().mode}>
+            <span class={`pill mode ${message().mode}`}>[{message().mode}]</span>
+          </Show>
+        </div>
+        <For each={textParts()}>{(part) => <PartView part={part} />}</For>
+        <Show when={toolItems().length > 0}>
+          <SubagentToolGroup instanceId={message().instanceId} runId={message().runId} calls={toolItems()} />
         </Show>
       </div>
-      <For each={messageRenderItems(message().parts)}>
-        {(item) =>
-          item.kind === "tool" ? (
-            <ToolCallCard call={item.call} result={item.result} runId={message().runId} />
-          ) : (
-            <PartView part={item.part} />
-          )
-        }
-      </For>
-    </div>
+      <Show when={footer()}>
+        <div class="message-footer" data-message-footer={message().id} data-footer-status={footer()!.status} title={`${footer()!.calls} llamada(s) · in ${footer()!.inputTokens.toLocaleString()} / out ${footer()!.outputTokens.toLocaleString()}`}>
+          {formatMessageFooter(footer()!)}
+        </div>
+      </Show>
+    </>
   );
 }
 
@@ -122,13 +143,105 @@ export function FrameStatus(props: { status: "streaming" | "done" }) {
   );
 }
 
+export function ModelPicker() {
+  const session = () => state.sessions.find((s) => s.id === state.activeSessionId);
+  const providerId = () => session()?.model?.providerId ?? state.providers[0]?.id ?? "";
+  // Todo workbench-chat-terminal/5: ante caché ausente (modelos frescos del
+  // proveedor activo) se recarga una vez; loadModels no refetchea si ya hay caché.
+  createEffect(() => {
+    const pid = providerId();
+    if (pid && !state.modelsByProvider[pid]) void loadModels(pid);
+  });
+  const providerModels = () =>
+    state.modelsByProvider[providerId()] ?? state.providers.find((p) => p.id === providerId())?.models ?? [];
+  const currentModel = () => providerModels().find((m) => m.modelId === session()?.model?.modelId);
+  const efforts = () => currentModel()?.capabilities?.reasoningEfforts ?? [];
+  const profile = () => session()?.profile ?? "plan";
+  const disabled = () => !state.activeSessionId || state.busy;
+  const chooseModel = (modelId: string) => {
+    if (!modelId) return;
+    const supported = providerModels().find((m) => m.modelId === modelId)?.capabilities?.reasoningEfforts ?? [];
+    const prev = session()?.model?.effort;
+    // El esfuerzo solo sobrevive si el modelo nuevo lo publica; si no, se limpia.
+    const effort = prev && (supported as string[]).includes(prev) ? prev : undefined;
+    void setSessionModel({ providerId: providerId(), modelId, effort });
+  };
+  const chooseEffort = (effort: string) => {
+    const modelId = session()?.model?.modelId;
+    if (!modelId) return;
+    void setSessionModel({ providerId: providerId(), modelId, effort: effort || undefined });
+  };
+  return (
+    <div class="row model-picker" id="model-picker" aria-label="Modelo y esfuerzo">
+      <div class="chips" role="group" aria-label="Perfil">
+        <button
+          type="button"
+          class="chip"
+          data-profile="plan"
+          data-active={profile() === "plan"}
+          aria-pressed={profile() === "plan"}
+          disabled={disabled()}
+          onClick={() => void setProfile("plan")}
+        >
+          plan
+        </button>
+        <button
+          type="button"
+          class="chip"
+          data-profile="build"
+          data-active={profile() === "build"}
+          aria-pressed={profile() === "build"}
+          disabled={disabled()}
+          onClick={() => void setProfile("build")}
+        >
+          build
+        </button>
+      </div>
+      <select
+        id="composer-provider"
+        aria-label="Proveedor"
+        value={providerId()}
+        disabled={disabled() || state.providers.length === 0}
+        onChange={(event) => {
+          const next = event.currentTarget.value;
+          void loadModels(next);
+        }}
+      >
+        <For each={state.providers}>{(provider) => <option value={provider.id}>{provider.displayName}</option>}</For>
+      </select>
+      <select
+        id="composer-model"
+        aria-label="Modelo"
+        value={session()?.model?.modelId ?? ""}
+        disabled={disabled() || providerModels().length === 0}
+        onChange={(event) => chooseModel(event.currentTarget.value)}
+      >
+        <Show when={!session()?.model?.modelId}>
+          <option value="">Elegir modelo…</option>
+        </Show>
+        <For each={providerModels()}>{(model) => <option value={model.modelId}>{model.displayName}</option>}</For>
+      </select>
+      <Show when={efforts().length > 0}>
+        <select
+          id="composer-effort"
+          aria-label="Esfuerzo"
+          value={session()?.model?.effort ?? ""}
+          disabled={disabled()}
+          onChange={(event) => chooseEffort(event.currentTarget.value)}
+        >
+          <Show when={!session()?.model?.effort}>
+            <option value="">Esfuerzo…</option>
+          </Show>
+          <For each={efforts()}>{(effort) => <option value={effort}>{effort}</option>}</For>
+        </select>
+      </Show>
+    </div>
+  );
+}
+
 export function Composer() {
   let input: HTMLTextAreaElement | undefined;
   let fileInput: HTMLInputElement | undefined;
-  const session = () => state.sessions.find((s) => s.id === state.activeSessionId);
-  const providerId = () => session()?.model?.providerId ?? state.providers[0]?.id ?? "";
-  const providerModels = () =>
-    state.modelsByProvider[providerId()] ?? state.providers.find((p) => p.id === providerId())?.models ?? [];
   const send = () => {
     if (input && input.value.trim()) {
       void sendPrompt(input.value);
@@ -177,33 +290,6 @@ export function Composer() {
         <button id="composer-attach" type="button" disabled={!state.activeSessionId || state.busy} onClick={() => fileInput?.click()}>
           Adjuntar
         </button>
-        <select
-          id="composer-provider"
-          aria-label="Proveedor"
-          value={providerId()}
-          disabled={!state.activeSessionId || state.busy || state.providers.length === 0}
-          onChange={(event) => {
-            const next = event.currentTarget.value;
-            void loadModels(next);
-          }}
-        >
-          <For each={state.providers}>{(provider) => <option value={provider.id}>{provider.displayName}</option>}</For>
-        </select>
-        <select
-          id="composer-model"
-          aria-label="Modelo"
-          value={session()?.model?.modelId ?? ""}
-          disabled={!state.activeSessionId || state.busy || providerModels().length === 0}
-          onChange={(event) => {
-            const modelId = event.currentTarget.value;
-            if (modelId) void setSessionModel({ providerId: providerId(), modelId });
-          }}
-        >
-          <Show when={!session()?.model?.modelId}>
-            <option value="">Elegir modelo…</option>
-          </Show>
-          <For each={providerModels()}>{(model) => <option value={model.modelId}>{model.displayName}</option>}</For>
-        </select>
         <button class="primary" disabled={!state.activeSessionId || state.busy} onClick={send}>
           Send
         </button>
@@ -213,6 +299,7 @@ export function Composer() {
           </button>
         </Show>
       </div>
+      <ModelPicker />
     </div>
   );
 }
@@ -316,6 +403,9 @@ export function QuestionDialogs() {
 
 export function ChatView() {
   const session = () => state.sessions.find((s) => s.id === state.activeSessionId);
+  // Todo workbench-chat-terminal/3: sesión vacía (cero mensajes y cero runs)
+  // = cero cuadros: ni siquiera los details. Aparecen SOLO mientras hay trabajo.
+  const hasActivity = () => !isSessionEmpty(state.messages, state.runs);
   // Todo 34 (§7: scroll de 5.000 mensajes a 60 fps): el historial pagina en el
   // servidor de 100 en 100 y el DOM pinta como máximo CHAT_DOM_WINDOW nodos.
   // Sin esta ventana, paginar hacia atrás haría crecer el DOM con la conversación.
@@ -365,9 +455,6 @@ export function ChatView() {
   });
   return (
     <main class="chat">
-      <Show when={!state.budgetsConfigured}>
-        <div class="banner warn">Budgets are not configured: paid calls are blocked until you save limits in Settings → Budgets.</div>
-      </Show>
       <Show when={state.error}>
         <div class="banner err">
           {state.error}
@@ -424,19 +511,22 @@ export function ChatView() {
         <For each={Object.values(state.live)}>{(live) => <LiveView live={live} />}</For>
         <div id="timeline-bottom" ref={bottomAnchor} />
       </div>
-      <PlansSection />
-      <RunErrorsSection />
-      <ModifiedFilesSection />
-      <TasksSection />
-      <WorktreesSection />
-      <IntegrationsSection />
-      <DagSection />
-      <WorktreeDiffSection />
-      <IntegrationHistorySection />
-      <MemorySection />
-      <AgentsSection />
+      <Show when={hasActivity()}>
+        <PlansSection />
+        <RunErrorsSection />
+        <ModifiedFilesSection />
+        <TasksSection />
+        <WorktreesSection />
+        <IntegrationsSection />
+        <DagSection />
+        <WorktreeDiffSection />
+        <IntegrationHistorySection />
+        <MemorySection />
+        <AgentsSection />
+      </Show>
       <Composer />
-      <details>
+      <Show when={hasActivity()}>
+      <details data-usage-details>
         <summary>Usage of the last run ({state.usage.length} calls)</summary>
         <ul>
           <For each={state.usage}>
@@ -453,6 +543,7 @@ export function ChatView() {
           </For>
         </ul>
       </details>
+      </Show>
     </main>
   );
 }

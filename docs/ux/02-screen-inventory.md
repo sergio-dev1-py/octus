@@ -18,12 +18,12 @@ Leyenda de estados: usa los ocho estados de `01-information-architecture.md` (va
 | D-02 | Diálogo de pregunta (opciones, múltiple o única, respuesta propia) | Modal | F-5 build | Usuario | Pregunta respondida o run detenido | Esperando decisión |
 | P-01 | Panel inferior (Terminal, Problemas, Salida, Pruebas) | Panel inferior | F-5 build | Usuario y agente | Salida consultada, terminal reutilizable | Listo, ocupado, error localizado |
 | P-02 | Explorador de archivos y diffs | Sidebar Explorer / Inspector | F-5 build | Usuario | Archivo visto, diff revisado | Cargando, listo, error localizado |
-| S-01 | Configuración (proveedores, presupuestos, agentes, proyecto) | Sidebar / Central | F-7 recuperación, F-0 navegación | Usuario | Límite o clave guardada, o defecto restaurado | Listo, error localizado, degradado |
+| S-01 | Configuración (proveedores, agentes, proyecto) | Sidebar / Central | F-7 recuperación, F-0 navegación | Usuario | Clave guardada, o defecto restaurado | Listo, error localizado, degradado |
 | S-02 | Agentes, tareas, runs y worktrees (estado real, reintentar, cancelar, limpiar) | Central (vista) | F-5 build | Usuario | Tarea reintentada, cancelada o detenida en estado final real | Ocupado, listo, error localizado, vacío |
 | S-03 | Recuperación al arranque (pendientes, conciliar ahora, refrescar) | Central (vista) | F-7 recuperación | Usuario | Nada pendiente o degradado marcado | Degradado, listo, vacío |
 
 Notas de trazabilidad:
 
-- Hoy `App.tsx` ya contiene el germen de C-01, C-02, C-03, D-01, D-02, S-01 y S-02 como secciones apiladas (`PlansSection`, `TasksSection`, `WorktreesSection`, `IntegrationsSection`, `MemorySection`, `AgentsSection`, `ProviderSettings`, `BudgetSettings`). El inventario no las duplica: las reparte entre zonas.
+- Hoy `App.tsx` ya contiene el germen de C-01, C-02, C-03, D-01, D-02, S-01 y S-02 como secciones apiladas (`PlansSection`, `TasksSection`, `WorktreesSection`, `IntegrationsSection`, `MemorySection`, `AgentsSection`, `ProviderSettings`). El inventario no las duplica: las reparte entre zonas.
 - W-01, SB-01, I-01, I-02 y P-01 no existen hoy y son diseño nuevo. No se codifican en este todo.
 - Skills y MCP no tienen pantalla propia en este inventario: sus vistas las especifica el Todo 4 y este inventario solo les reserva el destino en SB-01. Así se evita prometer pantallas que otro todo debe diseñar.

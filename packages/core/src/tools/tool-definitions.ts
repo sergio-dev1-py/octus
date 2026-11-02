@@ -110,8 +110,8 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${out}$`);
 }
 
-function walkFiles(dir: string, collected: string[], budget: { files: number }, scopeRoot?: string): void {
-  if (budget.files <= 0) return;
+function walkFiles(dir: string, collected: string[], cap: { files: number }, scopeRoot?: string): void {
+  if (cap.files <= 0) return;
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -119,7 +119,7 @@ function walkFiles(dir: string, collected: string[], budget: { files: number }, 
     return;
   }
   for (const entry of entries) {
-    if (budget.files <= 0) return;
+    if (cap.files <= 0) return;
     if (entry === "node_modules" || entry === ".git" || entry === ".hg") continue;
     const full = path.join(dir, entry);
     let stat;
@@ -131,10 +131,10 @@ function walkFiles(dir: string, collected: string[], budget: { files: number }, 
     // Los enlaces que salen del ámbito no se recorren ni se listan.
     if (scopeRoot && isOutsideScope(scopeRoot, full)) continue;
     if (stat.isDirectory()) {
-      walkFiles(full, collected, budget, scopeRoot);
+      walkFiles(full, collected, cap, scopeRoot);
     } else if (stat.isFile()) {
       collected.push(full);
-      budget.files--;
+      cap.files--;
     }
   }
 }

@@ -1,5 +1,6 @@
 /**
- * @octus/core — ModelRouter: resolución, puerta de presupuestos y un intento con registro.
+ * @octus/core — ModelRouter: resolución y un intento con registro (sin puerta
+ * de presupuestos: las llamadas de pago ya no se bloquean — plan todo 7).
  * El reintento vive en el runtime (paso idempotente); aquí cada intento registra su uso.
  */
 import type {
@@ -13,9 +14,9 @@ import type {
 } from "@octus/shared";
 import { OctusError } from "../errors.js";
 import { now } from "../util.js";
+import { costMicroUsd, tariffFor } from "./pricing.js";
 import type { EventBus, EventStore } from "../events/event-store.js";
 import type { PersistenceService } from "../persistence/persistence-service.js";
-import { budgetsConfigured, claimWarning, evaluateBudgets } from "../costs/budgets.js";
 import { recordUsage, type UsageContext } from "../costs/usage.js";
 
 export interface ResolutionInput {
@@ -27,6 +28,42 @@ export interface ResolutionInput {
 
 export interface RouterGenerateContext extends UsageContext {
   correlationId: string;
+}
+
+/** Uso representativo para comparar tarifas (10K entrada / 2K salida / 1K caché). */
+const COMPARISON_USAGE: TokenUsage = { inputTokens: 10_000, outputTokens: 2_000, reasoningTokens: 0, cachedTokens: 1_000 };
+
+export interface CheapestCandidate {
+  providerId: string;
+  modelId: string;
+  capabilities: { toolCall: boolean; priceInputPerM?: number; priceOutputPerM?: number; priceCacheReadPerM?: number };
+  /** Modelos que entrenan con el contenido: solo opt-in explícito (ADR-005). */
+  restricted?: string;
+}
+
+function candidateCostMicroUsd(c: CheapestCandidate, at: Date): number {
+  const tariff = tariffFor(c.providerId, c.modelId);
+  if (tariff) return costMicroUsd(tariff, COMPARISON_USAGE, at);
+  const { priceInputPerM, priceOutputPerM, priceCacheReadPerM } = c.capabilities;
+  if (priceInputPerM === undefined || priceOutputPerM === undefined || priceCacheReadPerM === undefined) return Number.POSITIVE_INFINITY;
+  const fresh = COMPARISON_USAGE.inputTokens - COMPARISON_USAGE.cachedTokens;
+  return Math.round(fresh * priceInputPerM + COMPARISON_USAGE.cachedTokens * priceCacheReadPerM + COMPARISON_USAGE.outputTokens * priceOutputPerM);
+}
+
+/**
+ * El modelo toolCall más barato según pricing.ts (tarifa verificada; si no hay
+ * tarifa, precios del descriptor; sin precios queda al final). Solo modelos
+ * registrados: el llamador valida con `resolve`. Empate → orden alfabético.
+ * Sin candidato toolCall devuelve `undefined` (la UI informa, sin default).
+ */
+export function selectCheapestToolCallModel(candidates: CheapestCandidate[], at: Date = new Date()): ModelSelection | undefined {
+  const eligible = candidates.filter((c) => c.capabilities.toolCall && !c.restricted);
+  if (eligible.length === 0) return undefined;
+  const ranked = eligible
+    .map((c) => ({ c, cost: candidateCostMicroUsd(c, at) }))
+    .sort((a, b) => a.cost - b.cost || (a.c.providerId < b.c.providerId ? -1 : a.c.providerId > b.c.providerId ? 1 : 0) || (a.c.modelId < b.c.modelId ? -1 : a.c.modelId > b.c.modelId ? 1 : 0));
+  const winner = ranked[0]!.c;
+  return { providerId: winner.providerId, modelId: winner.modelId };
 }
 
 export class ModelRouter {
@@ -77,7 +114,7 @@ export class ModelRouter {
   }
 
   /**
-   * Un intento de generación: puerta de presupuestos → stream → registro de uso.
+   * Un intento de generación: stream → registro de uso (sin puerta de pago).
    * Los errores retryable se propagan como evento `error`; el runtime decide el reintento.
    */
   async *generateStream(
@@ -87,9 +124,6 @@ export class ModelRouter {
     signal: AbortSignal,
   ): AsyncIterable<ProviderStreamEvent> {
     const started = now();
-    if (resolution.provider.billable) {
-      await this.enforceBudgets(resolution, ctx);
-    }
     let usage: TokenUsage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cachedTokens: 0 };
     let status: "completed" | "failed" | "cancelled" = "failed";
     let recorded = false;
@@ -101,7 +135,7 @@ export class ModelRouter {
         type: "provider.usage_recorded",
         aggregate: { kind: "provider", id: resolution.provider.id },
         correlationId: ctx.correlationId,
-        payload: { usageRecordId: row.id, modelId: ctx.modelId, status, costMicroUsd: row.costMicroUsd },
+        payload: { usageRecordId: row.id, modelId: ctx.modelId, status, costMicroUsd: row.costMicroUsd, messageId: ctx.messageId ?? null },
       });
       this.bus.publish(event);
     };
@@ -127,45 +161,6 @@ export class ModelRouter {
       throw error;
     }
   }
-
-  private async enforceBudgets(resolution: ModelResolution, ctx: RouterGenerateContext): Promise<void> {
-    if (!(await budgetsConfigured(this.db))) {
-      throw new OctusError(
-        "budgets_not_configured",
-        "Consumption limits are not configured. Open Settings → Budgets and save limits before enabling paid calls.",
-      );
-    }
-    const evaluations = await evaluateBudgets(this.db, {
-      providerId: resolution.provider.id,
-      modelId: resolution.model.modelId,
-      agentDefinitionId: ctx.agentDefinitionId,
-      sessionId: ctx.sessionId,
-      runId: ctx.runId,
-    });
-    for (const evaluation of evaluations) {
-      if (evaluation.exceeded && evaluation.budget.action === "block") {
-        const event = await this.events.append({
-          type: "budget.exceeded",
-          aggregate: { kind: "budget", id: evaluation.budget.id },
-          correlationId: ctx.correlationId,
-          payload: { scope: evaluation.budget.scope, spend: evaluation.spend },
-        });
-        this.bus.publish(event);
-        throw new OctusError("budget_exceeded", `Budget exceeded (${evaluation.budget.scope.kind}). Generation blocked.`, {
-          details: { budgetId: evaluation.budget.id },
-        });
-      }
-    }
-    for (const evaluation of evaluations) {
-      if (evaluation.warned && (await claimWarning(this.db, evaluation.budget.id, evaluation.windowKey))) {
-        const event = await this.events.append({
-          type: "budget.warning",
-          aggregate: { kind: "budget", id: evaluation.budget.id },
-          correlationId: ctx.correlationId,
-          payload: { scope: evaluation.budget.scope, spend: evaluation.spend },
-        });
-        this.bus.publish(event);
-      }
-    }
-  }
 }
+
+

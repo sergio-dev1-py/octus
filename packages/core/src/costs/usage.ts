@@ -14,6 +14,8 @@ export interface UsageContext {
   agentInstanceId: string;
   runId: string;
   sessionId: string;
+  /** Mensaje asistente dueño del intento. Ausente = fila legacy sin footer. */
+  messageId?: string;
 }
 
 export async function recordUsage(
@@ -28,6 +30,7 @@ export async function recordUsage(
   const record: UsageRecord = {
     id: createId("use"),
     ...ctx,
+    messageId: ctx.messageId ?? null,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     reasoningTokens: usage.reasoningTokens,
@@ -44,11 +47,11 @@ export async function recordUsage(
     createdAt: now(),
   };
   await db.exec(
-    `INSERT INTO usage_records (id, provider_id, model_id, agent_definition_id, agent_instance_id, run_id, session_id,
+    `INSERT INTO usage_records (id, provider_id, model_id, agent_definition_id, agent_instance_id, run_id, session_id, message_id,
       input_tokens, output_tokens, reasoning_tokens, cached_tokens, duration_ms, status,
       price_input_per_m, price_output_per_m, price_cache_read_per_m, pricing_source, pricing_date,
       cost_micro_usd, pricing_missing, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       record.id,
       record.providerId,
@@ -57,6 +60,7 @@ export async function recordUsage(
       record.agentInstanceId,
       record.runId,
       record.sessionId,
+      record.messageId ?? null,
       record.inputTokens,
       record.outputTokens,
       record.reasoningTokens,
@@ -84,6 +88,14 @@ export async function usageForRun(db: PersistenceService, runId: string): Promis
   return rows.map(deserialize);
 }
 
+export async function usageForMessage(db: PersistenceService, messageId: string): Promise<UsageRecord[]> {
+  const rows = await db.query<Record<string, string | number | null>>(
+    "SELECT * FROM usage_records WHERE message_id = ? ORDER BY created_at ASC",
+    [messageId],
+  );
+  return rows.map(deserialize);
+}
+
 export async function usageForSession(db: PersistenceService, sessionId: string): Promise<UsageRecord[]> {
   const rows = await db.query<Record<string, string | number | null>>(
     "SELECT * FROM usage_records WHERE session_id = ? ORDER BY created_at ASC",
@@ -101,6 +113,7 @@ function deserialize(row: Record<string, string | number | null>): UsageRecord {
     agentInstanceId: String(row.agent_instance_id),
     runId: String(row.run_id),
     sessionId: String(row.session_id),
+    messageId: row.message_id === null || row.message_id === undefined ? null : String(row.message_id),
     inputTokens: Number(row.input_tokens),
     outputTokens: Number(row.output_tokens),
     reasoningTokens: Number(row.reasoning_tokens),

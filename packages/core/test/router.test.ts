@@ -37,100 +37,73 @@ describe("model router", () => {
     }
   });
 
-  test("paid calls are blocked until budgets are configured", async () => {
+  test("billable calls proceed with no spending-limit configuration (todo 7: paid calls ungated)", async () => {
     const t = await makeTestCore({ billableFakes: true });
     try {
       const resolution = t.core.router.resolve({ globalDefault: { providerId: "fake-meta", modelId: "muse-wonder-1.0" } });
-      const controller = new AbortController();
-      const error = await expectRejects(
-        (async () => {
-          for await (const _ of t.core.router.generateStream(
-            resolution,
-            { providerId: "fake-meta", modelId: "muse-wonder-1.0", messages: [{ role: "user", blocks: [{ type: "text", text: "hi" }] }] },
-            CTX(),
-            controller.signal,
-          )) {
-            // consume
-          }
-        })(),
-        /not configured/,
-      );
-      expect(isOctusError(error, "budgets_not_configured")).toBe(true);
-      expect(t.fakeMeta.seen).toHaveLength(0);
-    } finally {
-      await t.cleanup();
-    }
-  });
-
-  test("block budget stops generation; every attempt records usage", async () => {
-    const t = await makeTestCore({ billableFakes: true });
-    try {
-      await t.core.configureBudgets([
-        { scope: { kind: "run", ref: "" }, limitTokens: 10_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-      ]);
-      const resolution = t.core.router.resolve({ globalDefault: { providerId: "fake-meta", modelId: "muse-wonder-1.0" } });
-      const controller = new AbortController();
       const seen: string[] = [];
       for await (const event of t.core.router.generateStream(
         resolution,
         { providerId: "fake-meta", modelId: "muse-wonder-1.0", messages: [{ role: "user", blocks: [{ type: "text", text: "hi" }] }] },
         CTX(),
-        controller.signal,
+        new AbortController().signal,
       )) {
         seen.push(event.type);
       }
       expect(seen).toContain("completed");
+      expect(t.fakeMeta.seen).toHaveLength(1);
       const rows = await t.core.db.query("SELECT * FROM usage_records WHERE run_id = 'run_r'");
       expect(rows).toHaveLength(1);
-      // Ahora un presupuesto agotado bloquea antes de llamar
-      await t.core.configureBudgets([
-        { scope: { kind: "run", ref: "" }, limitTokens: 1, warnRatio: 0.5, action: "block", window: "span", enabled: true },
-      ]);
-      const callsBefore = t.fakeMeta.seen.length;
-      await expectRejects(
-        (async () => {
-          for await (const _ of t.core.router.generateStream(
-            resolution,
-            { providerId: "fake-meta", modelId: "muse-wonder-1.0", messages: [{ role: "user", blocks: [{ type: "text", text: "hi" }] }] },
-            CTX(),
-            controller.signal,
-          )) {
-            // consume
-          }
-        })(),
-        /Budget exceeded/,
-      );
-      expect(t.fakeMeta.seen.length).toBe(callsBefore);
     } finally {
       await t.cleanup();
     }
   });
 
-  test("warnings fire once per budget and window", async () => {
+  test("every billable attempt records usage (sin puerta de pago)", async () => {
     const t = await makeTestCore({ billableFakes: true });
     try {
-      await t.core.configureBudgets([
-        { scope: { kind: "global", ref: "" }, limitTokens: 200, warnRatio: 0.5, action: "warn", window: "span", enabled: true },
-      ]);
-      const warnings: unknown[] = [];
-      const stop = t.core.bus.subscribe((e) => {
-        if (e.type === "budget.warning") warnings.push(e);
-      });
       const resolution = t.core.router.resolve({ globalDefault: { providerId: "fake-meta", modelId: "muse-wonder-1.0" } });
       const run = async () => {
-        for await (const _ of t.core.router.generateStream(
+        const seen: string[] = [];
+        for await (const event of t.core.router.generateStream(
           resolution,
           { providerId: "fake-meta", modelId: "muse-wonder-1.0", messages: [{ role: "user", blocks: [{ type: "text", text: "hi" }] }] },
           CTX(),
           new AbortController().signal,
         )) {
-          // consume
+          seen.push(event.type);
         }
+        expect(seen).toContain("completed");
       };
-      await run(); // 150 tokens: supera el 50% de 200 → avisa
-      await run(); // ya avisado: no repite
+      await run();
+      await run();
+      expect(t.fakeMeta.seen).toHaveLength(2);
+      const rows = await t.core.db.query("SELECT * FROM usage_records WHERE run_id = 'run_r'");
+      expect(rows).toHaveLength(2);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("no spending-gate events fire during billable generation (todo 7)", async () => {
+    const t = await makeTestCore({ billableFakes: true });
+    try {
+      const seen: Array<{ type: string }> = [];
+      const stop = t.core.bus.subscribe((e) => {
+        seen.push(e as { type: string });
+      });
+      const resolution = t.core.router.resolve({ globalDefault: { providerId: "fake-meta", modelId: "muse-wonder-1.0" } });
+      for await (const _ of t.core.router.generateStream(
+        resolution,
+        { providerId: "fake-meta", modelId: "muse-wonder-1.0", messages: [{ role: "user", blocks: [{ type: "text", text: "hi" }] }] },
+        CTX(),
+        new AbortController().signal,
+      )) {
+        // consume
+      }
       stop();
-      expect(warnings).toHaveLength(1);
+      expect(seen.filter((e) => e.type.includes("budget"))).toHaveLength(0);
+      expect(seen.filter((e) => e.type === "provider.usage_recorded")).toHaveLength(1);
     } finally {
       await t.cleanup();
     }

@@ -1,4 +1,4 @@
-/** Renderer/views — secciones de datos del workbench: proveedores, presupuestos, planes, tareas, worktrees, integraciones, memoria y agentes. */
+/** Renderer/views — secciones de datos del workbench: proveedores, planes, tareas, worktrees, integraciones, memoria y agentes. */
 import { For, Show, createSignal } from "solid-js";
 import { invoke } from "../api.js";
 import { renderMarkdown } from "../markdown.js";
@@ -31,7 +31,6 @@ import {
   rebuildIntegration,
   rejectIntegration,
   rejectRevision,
-  reloadBudgets,
   reloadIntegrations,
   reloadProviders,
   reloadWorktrees,
@@ -52,17 +51,21 @@ import {
 } from "../store.js";
 
 export function ProviderSettings() {
+  // Seccion Proveedores (plan octus-welcome-settings-theme, todo 5): titulo
+  // en espanol sin parentesis, fila compacta de botones en una sola fila,
+  // details Models(n). Al guardar, reloadProviders es el punto de enganche
+  // donde el todo 9 recalculara el default barato (aqui solo recarga).
   const keys: Record<string, HTMLInputElement | undefined> = {};
   return (
     <section>
-      <h2>Providers</h2>
+      <h2>Proveedores</h2>
       <For each={state.providers}>
         {(provider) => (
           <div class="card">
             <h3>
               {provider.displayName} {provider.configured ? <span class="pill ok">key saved</span> : <span class="pill warn">no key</span>}
             </h3>
-            <div class="row">
+            <div class="row oc-provider-actions">
               <input ref={(el) => (keys[provider.id] = el)} type="password" placeholder="Paste API key" autocomplete="off" />
               <button
                 class="primary"
@@ -74,6 +77,8 @@ export function ProviderSettings() {
                     if (!result.ok) setError(result.error ?? "Could not save key");
                     if (keys[provider.id]) keys[provider.id]!.value = "";
                     await reloadProviders();
+                    // Hook point (todo 9): el recalculo del default barato corre
+                    // tras este reloadProviders; aqui no se implementa logica.
                   })();
                 }}
               >
@@ -117,90 +122,6 @@ export function ProviderSettings() {
           </div>
         )}
       </For>
-    </section>
-  );
-}
-
-export function BudgetSettings() {
-  let kind: HTMLSelectElement | undefined;
-  let ref: HTMLInputElement | undefined;
-  let limitUsd: HTMLInputElement | undefined;
-  let limitTokens: HTMLInputElement | undefined;
-  let action: HTMLSelectElement | undefined;
-  return (
-    <section>
-      <h2>Budgets {state.budgetsConfigured ? <span class="pill ok">configured</span> : <span class="pill warn">not configured — paid calls are blocked</span>}</h2>
-      <p class="muted">Octus never runs paid calls without limits you saved here. Warnings fire once per budget and window.</p>
-      <ul>
-        <For each={state.budgets}>
-          {(budget) => (
-            <li>
-              <code>{budget.scope.kind}:{budget.scope.ref || "*"}</code> —{" "}
-              {budget.limitMicroUsd !== undefined ? `$${(budget.limitMicroUsd / 1_000_000).toFixed(2)}` : "no money cap"},{" "}
-              {budget.limitTokens !== undefined ? `${budget.limitTokens.toLocaleString()} tokens` : "no token cap"} — {budget.action} — {budget.window}
-            </li>
-          )}
-        </For>
-      </ul>
-      <div class="card">
-        <h3>Replace all budgets</h3>
-        <div class="row">
-          <select ref={kind}>
-            <option value="global">global</option>
-            <option value="provider">provider</option>
-            <option value="model">model</option>
-            <option value="agent">agent</option>
-            <option value="session">session</option>
-            <option value="run">run</option>
-          </select>
-          <input ref={ref} placeholder="ref (provider id, provider/model, …; empty for global)" />
-          <input ref={limitUsd} type="number" min="0" step="0.5" placeholder="USD limit" />
-          <input ref={limitTokens} type="number" min="0" step="1000" placeholder="token limit" />
-          <select ref={action}>
-            <option value="block">block</option>
-            <option value="warn">warn</option>
-          </select>
-          <button
-            class="primary"
-            onClick={() => {
-              void (async () => {
-                const usd = Number.parseFloat(limitUsd?.value ?? "");
-                const tokens = Number.parseInt(limitTokens?.value ?? "", 10);
-                await invoke("budgets.configure", {
-                  budgets: [
-                    {
-                      scope: { kind: (kind?.value ?? "global") as never, ref: ref?.value.trim() ?? "" },
-                      limitMicroUsd: Number.isFinite(usd) && usd > 0 ? Math.round(usd * 1_000_000) : undefined,
-                      limitTokens: Number.isFinite(tokens) && tokens > 0 ? tokens : undefined,
-                      warnRatio: 0.8,
-                      action: (action?.value ?? "block") as never,
-                      window: "span",
-                      enabled: true,
-                    },
-                  ],
-                });
-                setError(undefined);
-                await reloadBudgets();
-              })();
-            }}
-          >
-            Save budgets
-          </button>
-        </div>
-      </div>
-      <h3>Spend by budget</h3>
-      <ul>
-        <For each={state.budgetUsage}>
-          {(usage) => (
-            <li>
-              <code>{usage.budgetId}</code> —{" "}
-              {usage.spentMicroUsd === null ? "cost unknown" : `$${(usage.spentMicroUsd / 1_000_000).toFixed(4)}`}
-              {usage.costIncomplete ? " (partial: some calls lack pricing)" : ""} — {usage.spentTokens.toLocaleString()} tokens{" "}
-              {usage.exceeded ? <span class="pill warn">exceeded</span> : usage.warned ? <span class="pill warn">warning</span> : null}
-            </li>
-          )}
-        </For>
-      </ul>
     </section>
   );
 }

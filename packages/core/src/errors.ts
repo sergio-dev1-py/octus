@@ -1,8 +1,6 @@
 /** @octus/core — errores tipados del dominio. */
 
 export type OctusErrorCode =
-  | "budgets_not_configured"
-  | "budget_exceeded"
   | "permission_denied"
   | "permission_declined"
   | "provider_not_configured"
@@ -25,6 +23,8 @@ export type OctusErrorCode =
   | "delegation_denied"
   | "scope_conflict"
   | "plan_conflict"
+  | "invalid_cron"
+  | "invalid_schedule"
   | "internal";
 
 export class OctusError extends Error {

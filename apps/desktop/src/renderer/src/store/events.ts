@@ -9,13 +9,14 @@ import {
   cancelReasonOf,
   purgeRunFrames,
 } from "../timeline.js";
-import { refreshSessions, refreshMessages, refreshBudgets, refreshPending, refreshUsage } from "./projects.js";
+import { refreshSessions, refreshMessages, refreshPending, refreshUsage } from "./projects.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
 import { refreshRunDetail } from "./runs.js";
 import { refreshTasks } from "./tasks.js";
 import { refreshWorktrees } from "./worktrees.js";
 import { refreshIntegrations } from "./integrations.js";
 import { refreshMemory } from "./memory.js";
+import { refreshSchedules } from "./schedules.js";
 import { state, setState } from "./state.js";
 
 export function applyEvent(event: CoreEvent): void {
@@ -62,7 +63,6 @@ export function applyEvent(event: CoreEvent): void {
       void refreshMessages();
       void refreshUsage();
       void refreshRunDetail();
-      void refreshBudgets();
       void refreshPlans();
       void refreshApprovals();
       void refreshAgents();
@@ -104,15 +104,9 @@ export function applyEvent(event: CoreEvent): void {
     case "question.replied":
       void refreshPending();
       break;
-    case "budget.warning":
-    case "budget.exceeded":
-    case "budgets.configured":
-      void refreshBudgets();
-      break;
     case "provider.usage_recorded":
       void refreshUsage();
       void refreshRunDetail();
-      void refreshBudgets();
       break;
     case "plan.created":
     case "plan.revision_created":
@@ -169,6 +163,16 @@ export function applyEvent(event: CoreEvent): void {
     case "memory.recorded":
     case "memory.status_changed":
       void refreshMemory();
+      break;
+    case "schedule.created":
+    case "schedule.updated":
+    case "schedule.removed":
+    case "schedule.fired":
+    case "schedule.skipped":
+    case "schedule.disabled":
+      // Todo 8 (stale_state): la lista se refresca ante cualquier evento de
+      // programadas para que el toggle y la próxima ejecución no queden viejos.
+      void refreshSchedules();
       break;
     default:
       break;

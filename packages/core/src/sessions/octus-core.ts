@@ -4,8 +4,6 @@
  */
 import type {
   AgentInstance,
-  Budget,
-  BudgetUsage,
   Message,
   ModelProvider,
   ModelSelection,
@@ -17,6 +15,9 @@ import type {
   QuestionPrompt,
   QuestionRequest,
   Run,
+  ScheduleProfile,
+  ScheduledRun,
+  ScheduledTask,
   Session,
   StreamEvent,
   Task,
@@ -28,11 +29,11 @@ import type {
   UsageRecord,
 } from "@octus/shared";
 import { createId } from "@octus/shared";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { AgentRegistry } from "../agents/agent-registry.js";
 import { promptHashOf, snapshotOf } from "../agents/definition-loader.js";
 import { ConfigStore } from "../config/config-store.js";
-import { evaluateBudgets, listBudgets, markBudgetsConfigured, saveBudgets, spendInWindow, usageByBudget } from "../costs/budgets.js";
 import { usageForRun, usageForSession } from "../costs/usage.js";
 import { OctusError, isOctusError } from "../errors.js";
 import { EventBus, EventStore } from "../events/event-store.js";
@@ -48,6 +49,7 @@ import { listDirPage, projectRootReal, readFileCapped } from "../explorer/file-e
 import { PlanManager } from "../plans/plan-manager.js";
 import { PLAN_TOOLS } from "../plans/plan-tools.js";
 import { TaskManager } from "../tasks/task-manager.js";
+import { SCHEDULE_BASE_DIRNAME, ScheduledTasksManager } from "../scheduled/scheduled-tasks-manager.js";
 import { TaskPlanner } from "../tasks/task-planner.js";
 import { TaskScheduler } from "../tasks/task-scheduler.js";
 import { RepositoryManager } from "../repositories/repository-manager.js";
@@ -64,7 +66,7 @@ import { MEMORY_TOOLS } from "../memory/memory-tools.js";
 import { TASK_TOOLS } from "../tasks/task-tools.js";
 import { GoAdapter } from "../providers/go-adapter.js";
 import { MetaAdapter } from "../providers/meta-adapter.js";
-import { ModelRouter } from "../providers/model-router.js";
+import { ModelRouter, selectCheapestToolCallModel } from "../providers/model-router.js";
 import { QuestionService } from "../questions/question-service.js";
 import { AgentRuntime, type RuntimeOptions } from "../runtime/agent-runtime.js";
 import { ContextBuilder, deserializeMessage } from "../runtime/context-builder.js";
@@ -134,6 +136,10 @@ export class OctusCore {
   readonly conflicts: ConflictManager;
   readonly memory: MemoryService;
   readonly memoryWriter: MemoryWriter;
+  /** Todo workbench-chat-terminal/7: programadas por cron (sin DAG). */
+  readonly schedules: ScheduledTasksManager;
+  /** Todo workbench-chat-terminal/7: dir de usuario para la base auto. */
+  private readonly dataDir: string;
   /** Todo 23: runtime de skills (ausente si no se pasan `skillsDirs`). */
   readonly skills?: SkillRuntime;
 
@@ -221,6 +227,14 @@ export class OctusCore {
     this.repositories = new RepositoryManager(db);
     this.worktrees = new WorktreeManager(db, this.events, this.bus, this.repositories, options.dataDir, () => this.integrations);
     this.tests = new TestRunner(db);
+    this.dataDir = options.dataDir;
+    // Todo workbench-chat-terminal/7: programadas con base auto y disparo por el camino existente.
+    this.schedules = new ScheduledTasksManager(db, this.events, this.bus, {
+      ensureBase: () => this.ensureScheduleBase(),
+      openSession: (projectId, title, profile) => this.openScheduleSession(projectId, title, profile),
+      startPrompt: (sessionId, promptText) => this.startSchedulePrompt(sessionId, promptText),
+      isRunActive: (runId) => this.isScheduleRunActive(runId),
+    });
     this.validations = new ValidationService(db, this.events, this.bus, this.tests);
     this.integrations = new IntegrationManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir, this.validations);
     this.runtime = new AgentRuntime(db, this.events, this.bus, this.router, this.gateway, this.context, {
@@ -407,13 +421,18 @@ export class OctusCore {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
+    // Memoria por workspace (todo 9): la sesión nueva hereda el último modelo
+    // usado en el proyecto; sin memoria queda sin modelo (gana el barato). Sin
+    // memoria válida el router resuelve contra el default de la definición.
+    const inherited = await this.readWorkspaceLastModel(project.id);
+    if (inherited) session.model = inherited;
     await this.db.exec("INSERT INTO sessions (id, project_id, title, directory, profile, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
       session.id,
       session.projectId,
       session.title,
       session.directory,
       session.profile,
-      null,
+      session.model ? JSON.stringify(session.model) : null,
       session.createdAt,
       session.updatedAt,
     ]);
@@ -429,6 +448,12 @@ export class OctusCore {
 
   async getSession(sessionId: string): Promise<{ session: Session; runs: Run[] }> {
     const session = await this.requireSession(sessionId);
+    // Restaurar al reabrir (todo 9): la memoria de sesión prevalece; sin modelo
+    // propio se hereda el último del workspace. Solo lectura (sin persistir).
+    if (!session.model) {
+      const inherited = await this.readWorkspaceLastModel(session.projectId);
+      if (inherited) session.model = inherited;
+    }
     const rows = await this.db.query<Record<string, string | number | null>>(
       "SELECT * FROM runs WHERE session_id = ? ORDER BY created_at ASC",
       [sessionId],
@@ -453,10 +478,16 @@ export class OctusCore {
   }
 
   async setSessionModel(sessionId: string, model: ModelSelection): Promise<void> {
-    await this.requireSession(sessionId);
+    const session = await this.requireSession(sessionId);
     // Validación estricta inmediata (nada silencioso, ADR-015.10/13).
     this.router.resolve({ session: model, globalDefault: model });
     await this.db.exec("UPDATE sessions SET model = ?, updated_at = ? WHERE id = ?", [JSON.stringify(model), now(), sessionId]);
+    // Último modelo por workspace (todo 9): prevalece al reabrir.
+    await this.db.exec("INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", [
+      workspaceLastModelKey(session.projectId),
+      JSON.stringify(model),
+      now(),
+    ]);
   }
 
   async sessionMessages(sessionId: string, runId?: string): Promise<Message[]> {
@@ -959,7 +990,63 @@ export class OctusCore {
               (SELECT COUNT(*) FROM scheduler_reservations WHERE session_id = ?) AS reservations`,
       [sessionId, sessionId],
     );
-    return { lastRunId, active: { tasks: active?.tasks ?? 0, reservations: active?.reservations ?? 0 } };
+    return { lastRunId, active: { tasks: active?.tasks ?? 0, reservations: active?.reservations ?? 0 }, scheduled: await this.schedules.dueCount().catch(() => ({ due: 0, enabled: 0 })) };
+  }
+
+  // ------------------------------------------------------ programadas (Todo workbench-chat-terminal/7)
+  async listSchedules(): Promise<ScheduledTask[]> {
+    return this.schedules.list();
+  }
+
+  async getSchedule(id: string): Promise<ScheduledTask> {
+    return this.schedules.get(id);
+  }
+
+  async createSchedule(input: { name: string; prompt: string; profile?: ScheduleProfile; cron: string; timezone?: string }): Promise<ScheduledTask> {
+    return this.schedules.create(input);
+  }
+
+  async setScheduleEnabled(id: string, enabled: boolean): Promise<ScheduledTask> {
+    return this.schedules.setEnabled(id, enabled);
+  }
+
+  async removeSchedule(id: string): Promise<void> {
+    return this.schedules.remove(id);
+  }
+
+  async listScheduleRuns(taskId: string, limit?: number): Promise<ScheduledRun[]> {
+    return this.schedules.runs(taskId, limit);
+  }
+
+  async tickSchedules(at?: number): Promise<{ due: number; fired: number; skipped: number; failed: number }> {
+    return this.schedules.tickDue(at);
+  }
+
+  /** Base auto `scheduled_tasks` bajo el dir de usuario, creada al primer uso. */
+  private async ensureScheduleBase(): Promise<{ projectId: string; baseDir: string }> {
+    const baseDir = path.join(this.dataDir, SCHEDULE_BASE_DIRNAME);
+    mkdirSync(baseDir, { recursive: true });
+    const existing = (await this.listProjects()).find((p) => p.rootPath === baseDir);
+    if (existing) return { projectId: existing.id, baseDir };
+    const project = await this.createProject(SCHEDULE_BASE_DIRNAME, baseDir);
+    return { projectId: project.id, baseDir };
+  }
+
+  private async openScheduleSession(projectId: string, title: string, profile: "plan" | "build"): Promise<{ sessionId: string }> {
+    const session = await this.createSession({ projectId, title });
+    if (profile !== session.profile) await this.setSessionProfile(session.id, profile);
+    return { sessionId: session.id };
+  }
+
+  private async startSchedulePrompt(sessionId: string, promptText: string): Promise<{ runId: string }> {
+    return this.prompt(sessionId, promptText);
+  }
+
+  private isScheduleRunActive(runId: string): boolean {
+    for (const runs of this.activeRuns.values()) {
+      if (runs.has(runId)) return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------------ worktrees y repos (Etapa 4)
@@ -1064,10 +1151,6 @@ export class OctusCore {
       .catch(() => [] as Array<{ id: string; title: string; error: string | null }>);
     for (const t of failedTasks) {
       problems.push({ id: `task-${t.id}`, severity: "error", source: "tasks", message: `Tarea fallida ${t.title}: ${t.error ?? "sin detalle"}` });
-    }
-    const budgets = await this.budgetsStatus().catch(() => undefined);
-    if (budgets && !budgets.configured) {
-      problems.push({ id: "budgets-unconfigured", severity: "warning", source: "budgets", message: "Presupuestos sin configurar: las llamadas de pago están bloqueadas." });
     }
     return { projectId, problems };
   }
@@ -1517,6 +1600,39 @@ export class OctusCore {
     if (!this.router.get(providerId)) throw new OctusError("not_found", `Unknown provider '${providerId}'`);
     if (!apiKey.trim()) throw new OctusError("invalid_tool_args", "API key must not be empty");
     await this.secrets.set(secretRefForProvider(providerId), apiKey.trim());
+    // Default barato único (todo 9): al cargar una key, todas las definitions
+    // comparten el modelo toolCall más barato según pricing.ts.
+    await this.applyCheapestDefaultModel();
+  }
+
+  /** El toolCall más barato se aplica igual a todas las definitions. Sin
+      candidato toolCall no hay default (la UI informa, sin silencios). */
+  async applyCheapestDefaultModel(at?: Date): Promise<ModelSelection | undefined> {
+    const candidates = this.router.list().flatMap((p) => p.models().map((m) => ({ ...m })));
+    const cheapest = selectCheapestToolCallModel(candidates, at);
+    if (!cheapest) return undefined;
+    this.router.resolve({ globalDefault: cheapest });
+    const defs = await this.registry.list();
+    for (const def of defs) {
+      await this.db.exec("UPDATE agent_definitions SET default_model = ? WHERE id = ?", [JSON.stringify(cheapest), def.id]);
+    }
+    return cheapest;
+  }
+
+  /** Último modelo del workspace, validado contra el catálogo vivo. */
+  private async readWorkspaceLastModel(projectId: string): Promise<ModelSelection | undefined> {
+    const row = await this.db.queryOne<{ value: string }>("SELECT value FROM kv WHERE key = ?", [workspaceLastModelKey(projectId)]).catch(() => null);
+    if (!row) return undefined;
+    try {
+      const parsed: unknown = JSON.parse(row.value);
+      if (typeof parsed !== "object" || parsed === null) return undefined;
+      const model = parsed as ModelSelection;
+      if (typeof model.providerId !== "string" || typeof model.modelId !== "string") return undefined;
+      this.router.resolve({ session: model, globalDefault: model });
+      return { providerId: model.providerId, modelId: model.modelId };
+    } catch {
+      return undefined;
+    }
   }
 
   async removeProviderKey(providerId: string): Promise<void> {
@@ -1533,25 +1649,6 @@ export class OctusCore {
   async refreshGoCatalog(): Promise<{ ok: boolean; count?: number; error?: string }> {
     if (!this.go) return { ok: false, error: "Go adapter is not registered" };
     return this.go.refreshCatalog();
-  }
-
-  async budgetsStatus(): Promise<{ configured: boolean; budgets: Budget[]; usage: BudgetUsage[] }> {
-    const configured = (await this.db.queryOne<{ value: string }>("SELECT value FROM kv WHERE key = 'budgets.configured'"))?.value === "1";
-    const budgets = await listBudgets(this.db);
-    const usage = await usageByBudget(this.db, { providerId: "", modelId: "", agentDefinitionId: "", sessionId: "", runId: "" }).catch(() => [] as BudgetUsage[]);
-    return { configured, budgets, usage };
-  }
-
-  async configureBudgets(budgets: Array<Omit<Budget, "id" | "createdAt" | "updatedAt">>): Promise<Budget[]> {
-    const saved = await saveBudgets(this.db, budgets);
-    const event = await this.events.append({
-      type: "budgets.configured",
-      aggregate: { kind: "budget", id: "global" },
-      correlationId: createId("cor"),
-      payload: { count: saved.length },
-    });
-    this.bus.publish(event);
-    return saved;
   }
 
   async runUsage(runId: string): Promise<UsageRecord[]> {
@@ -1637,6 +1734,11 @@ export class OctusCore {
   }
 }
 
+/** Memoria del último modelo usado por workspace (todo 9, prevalece al reabrir). */
+function workspaceLastModelKey(projectId: string): string {
+  return `lastModel.${projectId}`;
+}
+
 function deserializeSession(row: Record<string, string | number | null>): Session {
   return {
     id: String(row.id),
@@ -1665,7 +1767,7 @@ function deserializeRun(row: Record<string, string | number | null>): Run {
   };
 }
 
-export { markBudgetsConfigured, evaluateBudgets, spendInWindow };
+
 
 const AFFIRMATIVE_START = /^(sí|si|vale|de acuerdo|ok(ay)?|dale|adelante|aprobado|apruebo|approved|approve|yes|yeah|sure|go ahead)(?![\p{L}])/iu;
 

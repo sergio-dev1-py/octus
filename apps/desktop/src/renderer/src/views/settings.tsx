@@ -1,13 +1,12 @@
-/** Renderer/views — vista de ajustes: agentes, proyecto, apariencia y settings. */
-import { For, Show } from "solid-js";
+/** Renderer/views — vista de ajustes: modal por secciones (Todo 4). */
+import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { invoke } from "../api.js";
 import {
   setError,
   setUiPrefs,
   state,
 } from "../store.js";
-import { ProviderSettings, BudgetSettings } from "./sections.jsx";
-import { SkillsManagerView } from "./skills.jsx";
+import { ProviderSettings } from "./sections.jsx";
 
 export function AgentSettings() {
   let maxSession: HTMLInputElement | undefined;
@@ -33,6 +32,7 @@ export function AgentSettings() {
             <input ref={maxDepth} type="number" min="1" max="10" value={state.agentLimits.maxDepth} />
           </label>
           <button
+            type="button"
             class="primary"
             onClick={() => {
               void (async () => {
@@ -67,6 +67,8 @@ export function AgentSettings() {
               <input ref={(el) => ((modelInputs[definition.id] ??= {}).model = el)} placeholder="modelId" value={definition.defaultModel.modelId} />
               <input ref={(el) => ((modelInputs[definition.id] ??= {}).effort = el)} placeholder="effort (optional)" value={definition.defaultModel.effort ?? ""} />
               <button
+                type="button"
+                class="primary"
                 onClick={() => {
                   void (async () => {
                     const entry = modelInputs[definition.id] ?? {};
@@ -245,23 +247,75 @@ export function AppearanceSettings() {
   );
 }
 
-export function SettingsView() {
+export function SettingsView(props: { onClose?: () => void } = {}) {
+  // Modal Ajustes (plan octus-welcome-settings-theme, todo 4): cabecera con X
+  // + nav lateral de 2 secciones. Los paneles reutilizan los componentes de
+  // las todos 5/6 sin redisenar su interior; Skills/Appearance/Project quedan
+  // fuera de este modal.
+  const [section, setSection] = createSignal<"providers" | "agents">("providers");
+  onMount(() => {
+    if (typeof window === "undefined") return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") props.onClose?.();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    onCleanup(() => window.removeEventListener("keydown", onKeyDown));
+  });
   return (
-    <main class="settings-view">
-      <Show when={state.error}>
-        <div class="banner err">
-          {state.error}
-          <button onClick={() => setError(undefined)}>×</button>
+    <div
+      id="settings-overlay"
+      class="oc-settings-overlay"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) props.onClose?.();
+      }}
+    >
+      <div id="settings-modal" class="oc-settings-dialog" role="dialog" aria-modal="true" aria-label="Ajustes">
+        <div class="oc-settings-head">
+          <h2 class="oc-settings-title">Ajustes</h2>
+          <Show when={props.onClose}>
+            <button
+              id="settings-close"
+              type="button"
+              class="oc-btn oc-btn--ghost"
+              aria-label="Cerrar ajustes"
+              onClick={() => props.onClose?.()}
+            >
+              ×
+            </button>
+          </Show>
         </div>
-      </Show>
-      <section aria-label="Sección de Skills en configuración">
-        <SkillsManagerView />
-      </section>
-      <AppearanceSettings />
-      <ProviderSettings />
-      <BudgetSettings />
-      <AgentSettings />
-      <ProjectSettings />
-    </main>
+        <div class="oc-settings-body">
+          <nav class="oc-settings-nav" aria-label="Secciones de ajustes">
+            <button
+              id="settings-nav-providers"
+              type="button"
+              aria-selected={section() === "providers" ? "true" : "false"}
+              onClick={() => setSection("providers")}
+            >
+              Proveedores
+            </button>
+            <button
+              id="settings-nav-agents"
+              type="button"
+              aria-selected={section() === "agents" ? "true" : "false"}
+              onClick={() => setSection("agents")}
+            >
+              Agentes
+            </button>
+          </nav>
+          <div id="settings-panel" class="oc-settings-panel">
+            <Show when={state.error}>
+              <div class="banner err">
+                {state.error}
+                <button onClick={() => setError(undefined)}>×</button>
+              </div>
+            </Show>
+            <Show when={section() === "providers"} fallback={<AgentSettings />}>
+              <ProviderSettings />
+            </Show>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

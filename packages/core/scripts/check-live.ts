@@ -172,11 +172,7 @@ writeFileSync(path.join(workspace, "fixture.txt"), "live-fixture-content-42\n");
 
 const core = await OctusCore.create({ dataDir: path.join(dir, "data"), primarySecrets: new MemorySecretStore() });
 try {
-  // Presupuestos estrictos para la propia validación (la puerta los exige).
-  await core.configureBudgets([
-    { scope: { kind: "global", ref: "" }, limitMicroUsd: 500_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-    { scope: { kind: "run", ref: "" }, limitTokens: 25_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-  ]);
+  // Sin puerta de presupuestos (todo 7): las llamadas de pago ya no se bloquean.
   const project = await core.createProject("live", workspace);
 
   if (MODEL_KEY) {

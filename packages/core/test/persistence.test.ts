@@ -17,7 +17,7 @@ describe("persistence worker", () => {
     try {
       const tables = await db.query<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name");
       const names = tables.map((t) => t.name);
-      for (const expected of ["projects", "sessions", "runs", "agent_instances", "messages", "tool_invocations", "events", "artifacts", "provider_configs", "permission_rules", "usage_records", "budgets", "kv", "schema_migrations"]) {
+      for (const expected of ["projects", "sessions", "runs", "agent_instances", "messages", "tool_invocations", "events", "artifacts", "provider_configs", "permission_rules", "usage_records", "kv", "schema_migrations"]) {
         expect(names).toContain(expected);
       }
       // Etapa 6: memory_entries ya existe legítimamente (no hay etapas futuras).

@@ -1,4 +1,4 @@
-/** Renderer/store — proyectos, sesiones, mensajes, proveedores, presupuestos y prompts. */
+/** Renderer/store — proyectos, sesiones, mensajes, proveedores y prompts. */
 import { reconcile } from "solid-js/store";
 import { invoke } from "../api.js";
 import {
@@ -11,7 +11,7 @@ import {
 import { setError, state, setState } from "./state.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
 import { refreshRunDetail } from "./runs.js";
-import { refreshProjectSettings } from "./settings.js";
+import { refreshDefinitions, refreshProjectSettings } from "./settings.js";
 import { refreshTasks } from "./tasks.js";
 import { refreshWorktrees } from "./worktrees.js";
 import { refreshIntegrations } from "./integrations.js";
@@ -37,6 +37,8 @@ export async function refreshSessions(): Promise<void> {
   }
   const { sessions } = await invoke("sessions.list", { projectId: state.activeProjectId });
   setState("sessions", sessions);
+  // Todo 2 (fix): espejo en el caché por proyecto (conteos exactos tras crear/cerrar).
+  setState("sessionsByProject", { ...state.sessionsByProject, [state.activeProjectId]: sessions });
   if (state.activeSessionId && !sessions.some((s) => s.id === state.activeSessionId)) {
     setState("activeSessionId", undefined);
     setState("messages", []);
@@ -75,17 +77,9 @@ export async function refreshProviders(): Promise<void> {
 
 export async function reloadProviders(): Promise<void> {
   await refreshProviders();
-}
-
-export async function refreshBudgets(): Promise<void> {
-  const status = await invoke("budgets.status", {});
-  setState("budgetsConfigured", status.configured);
-  setState("budgets", status.budgets);
-  setState("budgetUsage", status.usage);
-}
-
-export async function reloadBudgets(): Promise<void> {
-  await refreshBudgets();
+  // Todo 9: tras guardar una key el core recalcula el default barato único;
+  // recargar definitions para que Agentes muestre el modelo aplicado.
+  await refreshDefinitions();
 }
 
 export async function refreshPending(): Promise<void> {
@@ -107,6 +101,38 @@ export async function refreshUsage(): Promise<void> {
   if (last) {
     const { records } = await invoke("runs.usage", { runId: last.id });
     setState("usage", records);
+  }
+}
+
+/** Estados de instancia que encienden el dot verde de trabajo. */
+const WORKING_INSTANCE = ["created", "running", "waiting_permission", "waiting_input"];
+
+/** Todo 2 (fix): sesiones de UN proyecto bajo demanda para los grupos
+ * colapsables con conteo + working en CUALQUIER sesión (no solo la activa).
+ * Sin IPC nuevo: sessions.list por proyecto y agents.instances por sesión
+ * (esto último solo con withWorking, al expandir). Los fallos conservan el
+ * caché previo y devuelven false para que la vista pinte el aviso honesto. */
+export async function refreshProjectSessions(projectId: string, opts?: { withWorking?: boolean }): Promise<boolean> {
+  try {
+    const { sessions } = await invoke("sessions.list", { projectId });
+    setState("sessionsByProject", { ...state.sessionsByProject, [projectId]: sessions });
+    if (opts?.withWorking) {
+      const next = { ...state.workingBySession };
+      await Promise.all(
+        sessions.map(async (s) => {
+          try {
+            const { instances } = await invoke("agents.instances", { sessionId: s.id });
+            next[s.id] = instances.some((i) => WORKING_INSTANCE.includes(i.status));
+          } catch {
+            /* conserva el valor previo de esa sesión */
+          }
+        }),
+      );
+      setState("workingBySession", next);
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -289,7 +315,7 @@ export async function loadModels(providerId: string): Promise<void> {
   }
 }
 
-export async function setSessionModel(model: { providerId: string; modelId: string }): Promise<void> {
+export async function setSessionModel(model: { providerId: string; modelId: string; effort?: string }): Promise<void> {
   if (!state.activeSessionId) return;
   setError(undefined);
   try {

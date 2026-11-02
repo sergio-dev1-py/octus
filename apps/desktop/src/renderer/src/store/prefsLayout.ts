@@ -33,11 +33,29 @@ export async function loadLayout(): Promise<void> {
 async function persistLayout(next: WorkbenchLayout): Promise<void> {
   setState("layout", next);
   try {
-    const { layout } = await invoke("layout.set", { layout: next });
+    // state.layout es un proxy del store Solid: Electron no puede clonarlo
+    // por contextBridge ("An object could not be cloned"). Serializar a POJO
+    // plano antes del invoke; el comportamiento en memoria no cambia.
+    const { layout } = await invoke("layout.set", { layout: toCloneableLayout(next) });
     setState("layout", parseWorkbenchLayout(layout));
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error));
   }
+}
+
+/** POJO structured-clone-safe del layout (sin proxies ni prototipos). */
+export function toCloneableLayout(layout: WorkbenchLayout): WorkbenchLayout {
+  const parsed = parseWorkbenchLayout(layout);
+  return {
+    activity: parsed.activity,
+    sidebarVisible: parsed.sidebarVisible,
+    sidebarWidth: parsed.sidebarWidth,
+    inspectorVisible: parsed.inspectorVisible,
+    inspectorWidth: parsed.inspectorWidth,
+    bottomVisible: parsed.bottomVisible,
+    bottomHeight: parsed.bottomHeight,
+    bottomTab: parsed.bottomTab,
+  };
 }
 
 export function dismissLayoutNotice(): void {

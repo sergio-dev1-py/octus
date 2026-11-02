@@ -26,6 +26,7 @@ import {
 } from "@octus/shared";
 import { ElectronSecretStore } from "./secret-store.js";
 import { decideExternalLink, isAllowedNavigationUrl } from "./security-policy.js"; // Todo 35: política de navegación/enlaces auditada
+import { MainMcpService } from "./mcp-service.js"; // Todo 10 (workbench-chat-terminal): servicio MCP en main
 import { MainSkillsService } from "./skills-service.js"; // Todo 24 (montaje aditivo): servicio de Skills en main
 import { TerminalService } from "./terminal-service.js"; // Todo 32: PTY persistente en main
 import { checkDirectoryReadable, directoryErrorMessage } from "./validate-directory.js";
@@ -59,8 +60,6 @@ const CHANNELS: IpcChannel[] = [
   "providers.setKey",
   "providers.removeKey",
   "providers.test",
-  "budgets.status",
-  "budgets.configure",
   "permissions.pending",
   "permissions.reply",
   "permissions.saved",
@@ -95,6 +94,12 @@ const CHANNELS: IpcChannel[] = [
   "tasks.retry",
   "tasks.review",
   "tasks.scheduler",
+  // Todo workbench-chat-terminal/7: programadas por cron (sin DAG).
+  "schedules.list",
+  "schedules.create",
+  "schedules.setEnabled",
+  "schedules.remove",
+  "schedules.runs",
   "worktrees.list",
   "worktrees.get",
   "worktrees.cleanup",
@@ -170,6 +175,23 @@ const CHANNELS: IpcChannel[] = [
   "skills.setScope",
   "skills.history",
   "skills.resource",
+  // Todo 10 (workbench-chat-terminal): superficie IPC de MCP (store/mcp.ts por
+  // puente dinámico; tipos en @octus/shared; sin secretos en respuestas).
+  "mcp.list",
+  "mcp.add",
+  "mcp.import",
+  "mcp.update",
+  "mcp.remove",
+  "mcp.verify",
+  "mcp.connect",
+  "mcp.disconnect",
+  "mcp.retry",
+  "mcp.setTrust",
+  "mcp.setSecret",
+  "mcp.tools",
+  "mcp.resources",
+  "mcp.prompts",
+  "mcp.audit",
 ];
 
 let mainWindow: BrowserWindow | undefined;
@@ -205,6 +227,7 @@ type Handler<C extends IpcChannel> = (payload: IpcRequest<C>) => Promise<IpcResp
 
 let skillsService: MainSkillsService | undefined;
 let terminalService: TerminalService | undefined;
+let mcpService: MainMcpService | undefined;
 
 function handlers(): { [C in IpcChannel]: Handler<C> } {
   const need = (): OctusCore => {
@@ -215,6 +238,12 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
   const skills = (): MainSkillsService => {
     if (!skillsService) skillsService = new MainSkillsService(need().db, dataDir());
     return skillsService;
+  };
+  // Todo 10 (workbench-chat-terminal, montaje aditivo): singleton perezoso de MCP.
+  // Delega en McpClientManager + mcp-server-management del core sin cambiarlos.
+  const mcp = (): MainMcpService => {
+    if (!mcpService) mcpService = new MainMcpService(need().db, need().secrets);
+    return mcpService;
   };
   // Todo 32: singleton perezoso de terminales PTY. La raíz se valida aquí
   // (proyecto existente + carpeta legible) y el CWD queda fijado a ella.
@@ -387,19 +416,6 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     "providers.test": async (payload) => {
       if (!isNonEmptyString(payload.providerId)) throw new Error("invalid payload");
       return need().testProvider(payload.providerId);
-    },
-    "budgets.status": async () => need().budgetsStatus(),
-    "budgets.configure": async (payload) => {
-      if (!Array.isArray(payload.budgets)) throw new Error("invalid payload");
-      for (const budget of payload.budgets) {
-        if (typeof budget !== "object" || budget === null) throw new Error("invalid budget");
-        const scope = (budget as { scope?: { kind?: unknown } }).scope;
-        if (!scope || !["global", "provider", "model", "agent", "session", "run"].includes(scope.kind as string)) {
-          throw new Error("invalid budget scope");
-        }
-      }
-      await need().configureBudgets(payload.budgets);
-      return { ok: true };
     },
     "permissions.pending": async (payload) => ({ requests: need().permissions.pendingFor(payload.sessionId) }),
     "permissions.reply": async (payload) => {
@@ -605,6 +621,46 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     "tasks.scheduler": async (payload) => {
       if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
       return need().schedulerStatus(payload.sessionId);
+    },
+    // Todo workbench-chat-terminal/7: CRUD + historial de programadas (sin DAG).
+    // El cron inválido se rechaza en create (ok:false con error honesto).
+    "schedules.list": async () => ({ schedules: await need().listSchedules() }),
+    "schedules.create": async (payload) => {
+      try {
+        const schedule = await need().createSchedule(payload);
+        return { ok: true as const, schedule };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "schedules.setEnabled": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.enabled !== "boolean") throw new Error("invalid payload");
+      try {
+        await need().setScheduleEnabled(payload.id, payload.enabled);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "schedules.remove": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        await need().removeSchedule(payload.id);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "schedules.runs": async (payload) => {
+      if (!isNonEmptyString(payload.taskId)) throw new Error("invalid payload");
+      if (payload.limit !== undefined && (typeof payload.limit !== "number" || !Number.isFinite(payload.limit))) {
+        throw new Error("invalid payload");
+      }
+      try {
+        return { runs: await need().listScheduleRuns(payload.taskId, payload.limit) };
+      } catch (error) {
+        return { runs: [], error: error instanceof Error ? error.message : String(error) };
+      }
     },
     "worktrees.list": async (payload) => {
       if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
@@ -1115,6 +1171,100 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
       }
     },
+    // Todo 10 (workbench-chat-terminal): handlers de MCP sobre MainMcpService.
+    // Sin secretos al renderer (solo hasSecret); verify/connect/retry devuelven
+    // {ok, error} honestos; lo no conectado/no autorizado nunca inventa datos.
+    "mcp.list": async (payload) => {
+      if (typeof payload.projectId !== "string") throw new Error("invalid payload");
+      return mcp().list(payload.projectId);
+    },
+    "mcp.add": async (payload) => {
+      if (!isNonEmptyString(payload.name) || (payload.transport !== "stdio" && payload.transport !== "http")) {
+        throw new Error("invalid payload");
+      }
+      return mcp().add(payload);
+    },
+    "mcp.import": async (payload) => {
+      if (typeof payload.jsonText !== "string") throw new Error("invalid payload");
+      return mcp().importJson(payload.jsonText);
+    },
+    "mcp.update": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        await mcp().update(payload.id, payload);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "mcp.remove": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        await mcp().remove(payload.id);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "mcp.verify": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.projectId !== "string") throw new Error("invalid payload");
+      return mcp().verify(payload.id, payload.projectId);
+    },
+    "mcp.connect": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.projectId !== "string") throw new Error("invalid payload");
+      return mcp().connect(payload.id, payload.projectId);
+    },
+    "mcp.disconnect": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.projectId !== "string") throw new Error("invalid payload");
+      try {
+        await mcp().disconnect(payload.id, payload.projectId);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "mcp.retry": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.projectId !== "string") throw new Error("invalid payload");
+      return mcp().retry(payload.id, payload.projectId);
+    },
+    "mcp.setTrust": async (payload) => {
+      if (!isNonEmptyString(payload.id) || (payload.scope !== "global" && payload.scope !== "workspace") || typeof payload.trusted !== "boolean" || typeof payload.projectId !== "string") {
+        throw new Error("invalid payload");
+      }
+      try {
+        await mcp().setTrust(payload.id, payload.scope, payload.trusted, payload.projectId);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "mcp.setSecret": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.token !== "string" || !payload.token.trim()) {
+        throw new Error("invalid payload");
+      }
+      try {
+        await mcp().setSecret(payload.id, payload.token);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "mcp.tools": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.projectId !== "string") throw new Error("invalid payload");
+      return mcp().tools(payload.id, payload.projectId);
+    },
+    "mcp.resources": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      return mcp().resources(payload.id);
+    },
+    "mcp.prompts": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      return mcp().prompts(payload.id);
+    },
+    "mcp.audit": async (payload) => {
+      if (payload.id !== undefined && !isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      return mcp().audit(payload.id);
+    },
     // Todo 32: terminal persistente con PTY. El principal es el usuario (su gesto
     // crea la terminal); los gates deterministas viven en TerminalService (proyecto
     // existente, CWD fijado a la raíz validada, env depurado, killTree, buffer
@@ -1341,19 +1491,9 @@ async function runSmoke(): Promise<number> {
     try {
       const project = await core.createProject("smoke", dir);
       const session = await core.createSession({ projectId: project.id });
-      // Sin presupuestos: la puerta debe bloquear con error claro (sin llamar al proveedor).
-      const gated = await core.prompt(session.id, "smoke prompt");
-      await core.waitForIdle(session.id);
-      const gatedRun = (await core.getRun(gated.runId)).run;
-      if (gatedRun.status !== "failed" || !/not configured/i.test(gatedRun.error ?? "")) {
-        throw new Error(`budget gate did not block as expected: ${gatedRun.status} ${gatedRun.error ?? ""}`);
-      }
-      console.log("[smoke] budget gate blocks unconfigured paid calls ok");
-      await core.configureBudgets([
-        { scope: { kind: "global", ref: "" }, limitMicroUsd: 50_000, warnRatio: 0.8, action: "block", window: "span", enabled: true },
-      ]);
-      // Con presupuestos pero sin claves: fallo de auth limpio, conversación intacta.
-      const unauth = await core.prompt(session.id, "smoke prompt 2");
+      // Sin puerta de presupuestos (todo 7): las llamadas de pago ya no se
+      // bloquean; sin claves el fallo es de auth limpio, conversación intacta.
+      const unauth = await core.prompt(session.id, "smoke prompt");
       await core.waitForIdle(session.id);
       const unauthRun = (await core.getRun(unauth.runId)).run;
       if (unauthRun.status !== "failed" || !/API key|auth/i.test(unauthRun.error ?? "")) {
@@ -1425,6 +1565,16 @@ async function main(): Promise<void> {
   core = await createCore();
   registerIpc();
   createWindow();
+  // Todo workbench-chat-terminal/7: timer de programadas (30s + disparo al arrancar).
+  // El tick es idempotente y avanza next_run_at: un apagón no provoca espiral.
+  const tickSchedules = (): void => {
+    void core?.tickSchedules(Date.now()).catch((error: unknown) => {
+      console.error(`[schedules] tick failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+  tickSchedules();
+  const schedulesTimer = setInterval(tickSchedules, 30_000);
+  if (typeof schedulesTimer.unref === "function") schedulesTimer.unref();
   if (autoquit) {
     // Verificación de arranque GUI: cierra solo tras pintar, salvo fallo de carga.
     const ms = Number.parseInt(autoquit.split("=")[1] ?? "8000", 10) || 8000;
@@ -1452,12 +1602,21 @@ async function main(): Promise<void> {
     if (process.platform !== "darwin") void app.quit();
   });
   app.on("before-quit", () => {
+    clearInterval(schedulesTimer);
     try {
       terminalService?.disposeAll();
     } catch {
       // ignore: el cierre no debe bloquear la salida
     }
     terminalService = undefined;
+    // Todo 10: cortar transportes MCP vivos (hijos STDIO) antes de cerrar el core.
+    const stoppingMcp = mcpService;
+    mcpService = undefined;
+    try {
+      void stoppingMcp?.close();
+    } catch {
+      // ignore: el cierre no debe bloquear la salida
+    }
     void core?.close();
   });
 }

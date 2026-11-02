@@ -20,8 +20,8 @@ export type AggregateKind =
   | "plan"
   | "plan_revision"
   | "memory"
-  | "budget"
-  | "provider";
+  | "provider"
+  | "schedule";
 
 /** Eventos persistidos en el EventStore (cambios de estado). */
 export type PersistedEventType =
@@ -49,9 +49,6 @@ export type PersistedEventType =
   | "permission.replied"
   | "question.asked"
   | "question.replied"
-  | "budget.warning"
-  | "budget.exceeded"
-  | "budgets.configured"
   | "provider.usage_recorded"
   | "task.created"
   | "task.status_changed"
@@ -104,6 +101,12 @@ export type PersistedEventType =
   | "agent.delivery_ready"
   | "memory.recorded"
   | "memory.status_changed"
+  | "schedule.created"
+  | "schedule.updated"
+  | "schedule.removed"
+  | "schedule.fired"
+  | "schedule.skipped"
+  | "schedule.disabled"
   | "error.raised";
 
 export interface EventEnvelope<TType extends string = string, TPayload = unknown> {
