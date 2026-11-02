@@ -10,6 +10,7 @@ import {
 } from "../timeline.js";
 import { setError, state, setState } from "./state.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
+import { refreshRunDetail } from "./runs.js";
 import { refreshProjectSettings } from "./settings.js";
 import { refreshTasks } from "./tasks.js";
 import { refreshWorktrees } from "./worktrees.js";
@@ -143,7 +144,7 @@ export async function selectSession(sessionId: string): Promise<void> {
   setState("live", reconcile({}));
   setState("cancelReason", undefined);
   setState("attachments", []);
-  await Promise.all([refreshMessages(), refreshPending(), refreshUsage(), refreshPlans(), refreshApprovals(), refreshAgents(), refreshTasks(), refreshIntegrations(), refreshMemory()]);
+  await Promise.all([refreshMessages(), refreshPending(), refreshUsage(), refreshRunDetail(), refreshPlans(), refreshApprovals(), refreshAgents(), refreshTasks(), refreshIntegrations(), refreshMemory()]);
 }
 
 export async function createProject(name: string, rootPath: string): Promise<void> {

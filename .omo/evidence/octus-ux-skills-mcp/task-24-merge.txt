@@ -1,0 +1,12 @@
+task-24 merge (feat/ux-skills-mcp-w12-skills + main olas 7-11)
+fecha: 2026-11-02
+conflicto: apps/desktop/src/renderer/src/store/state.ts (linea import types)
+resolucion: union de imports HEAD (SkillCatalogError, SkillCatalogItem, SkillDetail) + main (ToolCallRecord); cuerpo ya traia ambas piezas (selectedRunId/runDetail + skills*), sin cambios de conducta, sin re-monolitizar.
+verificaciones:
+- bun run --cwd apps/desktop typecheck: exit 0
+- bun test skills+layout dirigidos (10 ficheros: discovery/install/activation/runtime/ui-layout/ui-prefs/layout/prefs/session-management/task-graph): 58 pass 0 fail
+- extra runtime/session/task-graph: 16 pass 0 fail
+- bun scripts/verify-task-16-agents.mjs: 31/31 OK exit 0
+- bun scripts/verify-task-24-skills.mjs: 72 PASS 0 FAIL exit 0
+- node scripts/verify-task-9-parity.mjs: ALL PASS exit 0
+- full bun test raiz: colgado sin salida (sesion bash_6 matada); sustituido por suites dirigidas verdes arriba
