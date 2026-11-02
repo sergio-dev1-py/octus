@@ -13,6 +13,7 @@
     "check:live:stage3": "bun scripts/check-live-stage3.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@octus/shared": "workspace:*",
     "openai": "7.45.1",
     "yaml": "2.9.1",
