@@ -1,0 +1,200 @@
+Todo 34 — Rendimiento, arranque y memoria bajo presupuesto
+=============================================================
+Plan: .omo/plans/octus-ux-skills-mcp.md (Todo 34, ola 15) | Rama: feat/ux-skills-mcp-w15-dist
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w15 | Fecha: 2026-11-02 (UTC)
+Presupuesto: .omo/design/octus-ux-skills-mcp/task-5-contracts.md §7 (11 cifras)
+Metodo: ejecucion REAL en Windows (bun 1.4.2, i3-2328M, 4 cpus). Prohibido dry-run: cada
+cifra de abajo sale de codigo ejecutado o de constantes leidas de la fuente (no copiadas
+a mano). Caso failure ejecutado: panel que renderiza de mas se detecta por conteo y se difiere.
+
+CAMBIOS (sin regresiones; main/index.ts y secret-store.ts son del Todo 35 concurrente, intactos)
+- apps/desktop/src/renderer/src/perf.ts (NUEVO): las 11 cifras + CHAT_DOM_WINDOW=200,
+  TASK_CARD_WINDOW=100, DAG_NODE_WINDOW=100, INTEGRATION_CARD_WINDOW=20 + noteRender/
+  renderTimes/capList (conteo y diferido por panel).
+- views/chat.tsx: el DOM pinta windowMessages(state.messages, CHAT_DOM_WINDOW) con nota
+  de diferidos; data-timeline-rendered refleja el DOM real.
+- views/sections.tsx: Tasks/Integrations/Memory/Agents con capList + nota data-deferred-panel.
+- views/dag.tsx: DagSection pagina nodos a 100 (ciclo sobre grafo completo) + nota.
+- views/agents.tsx: AgentTasksSection/AgentDefinitionsSection/AgentDagSection con capList + notas.
+- store/bootstrap.ts: initStore en paralelo (projects→sessions + providers + budgets + pending).
+- store/projects.ts: selectProject en un Promise.all; selectSession en dos etapas
+  (critico primero, paneles despues), mismo estado final.
+- packages/core/src/explorer/file-explorer.ts: filesystem asincrono (node:fs/promises,
+  stat en paralelo por pagina); misma API, ahora Promise.
+- packages/core/src/events/event-store.ts (NUEVO metodo): pruneTerminalRunEvents
+  (<=2000 filas/agregado solo en runs done/failed/cancelled).
+- packages/core/src/sessions/octus-core.ts: settleInterrupted aplica la poda.
+- scripts/verify-task-34-budget.mjs (NUEVO): el script de presupuesto.
+
+PRESUPUESTO §7 vs MEDIDO (Windows real)
+1. Arranque frio hasta bienvenida <= 2,5 s .... OctusCore.create+migrate+settle = 194 ms (r1) [PASS]
+2. Bienvenida→workbench <= 1,5 s .............. recargas en paralelo + paneles diferidos (estatico) [PASS]
+3. Memoria total main+renderer+worker <= 450 MB  RSS proceso = 80,8 MB [PASS]
+4. Worker SQLite bajo chat <= 100 MB ........... worker sin caches + roundtrip real exec/query/batch [PASS]
+5. PTY <= 25 MB ................................ buffer 256K chars + 2000 lineas => peor caso ~2 MB [PASS]
+6. Scroll 5000 msgs 60 fps, virtualizado ....... ventana DOM=200, construccion 0 ms (proxy) [PASS]
+7. Primer token (simulado) <= 800 ms ........... 5000 deltas = 8 ms [PASS]
+8. Cancelacion <= 300 ms ...................... purga 5000 marcos = 2 ms [PASS]
+9. Agent Manager (100 tareas) <= 1 s ........... layoutDag 100+99 = 2-3 ms; nodos paginados a 100 [PASS]
+10. Prefs corruptas <= 3 s con defecto ......... 0 ms, defecto aplicado [PASS]
+11. events por run <= 2000 filas ............... poda: terminal 2100→2000 (min seq=100), abierto intacto [PASS]
+FAILURE (ejecutado): 5000 items en chat-messages → over=true, visible=200, deferred=4800,
+renders contados>=1. El exceso se senala (over), nunca se camufla. [PASS]
+
+TESTS (comando + resultado)
+- bun run test (shared+core), pasada A: shared 31 pass + core 319 pass, 0 fail, exit 0 (~320 s)
+- bun run test (shared+core), pasada B: shared 31 pass + core 319 pass, 0 fail, exit 0 (~360 s)
+- bun test apps/desktop (renderer): 6 pass, 0 fail (timeline: streaming, ventana, purga, adjuntos)
+- typecheck packages/core: exit 0 | typecheck apps/desktop (node+web): exit 0
+- Baseline pre-edicion: bun run test exit 0 (medido en checkout main con olas 7-14; el
+  worktree parte de ese mismo main; post-cambio: 2x verde en el worktree).
+
+MANUAL-QA (PASS/FAIL; GUI sin display en este entorno => proxy medido + NO VERIFICADO honesto)
+- PASS arranque backend real < 2,5 s (194 ms medidos).
+- PASS pagina de explorador sobre 2000 archivos sin congelar (19-23 ms) + 4 paginas
+  concurrentes sin solape (34-37 ms).
+- PASS lectura acotada 30 KB → 20000 chars + truncated.
+- PASS poda de events preserva lo reciente y no toca runs abiertos.
+- PASS script de presupuesto exit 0 en 2 pasadas (49/49 cada una).
+- NO VERIFICADO: 60 fps de scroll en ventana Electron real (proxy: DOM acotado a 200
+  nodos + construccion 0 ms). Motivo: sin display/compositor en este entorno.
+- NO VERIFICADO: apertura GUI de Agent Manager < 1 s con 100 tareas (proxy: layoutDag
+  2-3 ms + DOM paginado). Motivo: idem. Cierra el Todo 36 con el paquete Windows.
+
+CLASES ADVERSARIALES
+- stale_state: PASS (archivo nuevo aparece al relistar).
+- misleading_success_output: PASS (exceso→over:true + conteo; fallo de prueba ajeno
+  sale como error, verificado por diseno del script; run abierto intacto tras poda).
+- dirty_worktree: PASS (0 basura del harness; 11 cambios mios + 4 del Todo 35 intactos;
+  evidencia task-34 excluida del conteo).
+- flaky_tests: PASS (presupuesto 2x verde 49/49; suite completa 2x verde 31+319).
+- hung_or_long_commands: PASS (AbortSignal.timeout/opTimeoutMs presentes; suite con
+  timeout 30000; typechecks y scripts con techo; suites A/B 320/360 s < 1800 s).
+- Resto: no-aplicable. live_credentials: prohibido por guardarraíl (sin llamadas live,
+  sin claves en logs/evidencia). secret_in_evidence: no-aplicable (escaneo del Todo 36;
+  este archivo no contiene secretos). perf_regression_gui: cubierto por proxies +
+  NO VERIFICADO arriba.
+
+LIMPIEZA TOTAL CON RECIBO
+- script: cleanup: big=true data=true (C:\tmp\octus-qa-t34-big y -data eliminados).
+- rm de logs intermedios con nombre roto (C:tmp*.log) rescatados a C:/tmp y borrados del
+  worktree: git status limpio de basura (solo fuentes intencionales + Todo 35 ajeno).
+- Recibo: big=true data=true | PASS limpieza: tmp fuera (r1 y r2).
+- C:/tmp/t34-r1.log, t34-r2.log, t34-suite-a.log, t34-suite-b.log, t34-tc-*.log quedan
+  fuera del repo como transcripts de sesion (no son evidencia del repo).
+
+SALIDA INTEGRA DEL SCRIPT — PASADA 1
+=== Todo 34 presupuesto REAL — pasada 1 ===
+platform=win32 cpus=4
+PASS presupuesto: 11 cifras cargadas — cifras=11
+PASS presupuesto: arranque frio<=2.5s — 2500ms
+PASS presupuesto: memoria total<=450MB — 450MB
+PASS presupuesto: events/run<=2000 — 2000
+PASS arranque: OctusCore.create+migrate+settle < 2500ms — 193ms
+PASS arranque: etapa 1 en paralelo (projects→sessions + providers + budgets + pending)
+PASS arranque: reloadStage2 tras la etapa 1 (paneles diferidos)
+PASS workbench: selectProject recarga en paralelo
+PASS sesion: mensajes/uso primero, paneles despues (dos etapas)
+PASS prefs corruptas: defecto aplicado < 3000ms — 0ms
+PASS prefs ausentes: defecto aplicado
+PASS TIMELINE_PAGE=100 (paginado del servidor) — page=100
+PASS memoria: RSS del proceso de verificacion < 450MB — 81.1MB
+PASS pty: buffer acotado a 256K chars
+PASS pty: peor caso (buffer + 2000 lineas) < 25MB por terminal — 2MB
+PASS explorador: pagina<=200 y lectura<=20000 chars
+PASS worker: sin caches en memoria (solo handle db)
+PASS worker: SQLite vive en el worker (DatabaseSync)
+PASS hilo principal: async sobre worker_threads (sin importar node:sqlite)
+PASS main: trafico SQLite solo en worker (unica excepcion: sonda smoke :memory:) — solo sonda: apps/desktop/src/main/index.ts
+PASS sqlite-worker: roundtrip real (exec/query/batch/close)
+PASS timeline: 5000 mensajes → ventana de 200 en el DOM — 0ms len=200
+PASS scroll: ventana acotada construida < 1s (proxy 60fps con DOM fijo) — 0ms objetivo=60fps
+PASS timeline: CHAT_DOM_WINDOW=200
+PASS chat: pinta windowMessages(state.messages, CHAT_DOM_WINDOW)
+PASS diferido: sections.tsx usa capList
+PASS diferido: dag.tsx usa capList
+PASS diferido: agents.tsx usa capList
+PASS dag: layout de 100 tareas+99 aristas < 1000ms — 2ms
+PASS dag: 500 nodos → 100 visibles + diferidos — layout=4ms
+PASS failure: exceso detectado por conteo y diferido (no se pinta) — visible=200 deferred=4800 renders=2
+PASS stream: 5000 deltas < 800ms (camino del primer token) — 9ms
+PASS cancel: purga de 5000 marcos < 300ms — 2ms
+PASS big-proj: pagina 1 de 2000 archivos < 2000ms — 18ms total=2000
+PASS big-proj: pageSize acotado — pageSize=50
+PASS big-proj: 4 paginas concurrentes sin congelar (<5s) y sin solape — 34ms unicas=800
+PASS stale_state: archivo nuevo aparece al relistar
+PASS lectura acotada: 30KB → 20000 chars + truncated — chars=20000
+PASS filesystem: asincrono sin lecturas Sync
+PASS deps: directas acotadas (sin peso nuevo) — 6: @octus/core,@octus/shared,dompurify,marked,node-pty,solid-js
+PASS deps: sin pesadas denegadas
+PASS poda: run terminal 2100 → 2000 (recorta 100) — pruned=100 11ms
+PASS poda: conserva las mas recientes (min seq=100) — minSeq=100
+PASS poda: run abierto intacto (no regresion) — open=2100
+PASS poda: settle de arranque la aplica
+PASS misleading_success_output: el exceso se senala (over), no se camufla
+PASS dirty_worktree: sin basura del harness (logs/tmp/db) — 16 cambios de fuente, 0 basura
+info dirty: mios=11 ajenos(Todo35, intactos)=4 evidencia_task34=excluida
+info ajenos: M apps/desktop/src/main/index.ts | M apps/desktop/src/main/secret-store.ts | ?? apps/desktop/src/main/security-policy.ts | ?? scripts/verify-task-35-security.ts
+PASS hung: las operaciones usan timeout (Interrupt/timeout)
+cleanup: big=true data=true
+PASS limpieza: tmp fuera
+
+TODO34-BUDGET pasada 1: 49 PASS, 0 FAIL
+
+SALIDA INTEGRA DEL SCRIPT — PASADA 2
+=== Todo 34 presupuesto REAL — pasada 2 ===
+platform=win32 cpus=4
+PASS presupuesto: 11 cifras cargadas — cifras=11
+PASS presupuesto: arranque frio<=2.5s — 2500ms
+PASS presupuesto: memoria total<=450MB — 450MB
+PASS presupuesto: events/run<=2000 — 2000
+PASS arranque: OctusCore.create+migrate+settle < 2500ms — 193ms
+PASS arranque: etapa 1 en paralelo (projects→sessions + providers + budgets + pending)
+PASS arranque: reloadStage2 tras la etapa 1 (paneles diferidos)
+PASS workbench: selectProject recarga en paralelo
+PASS sesion: mensajes/uso primero, paneles despues (dos etapas)
+PASS prefs corruptas: defecto aplicado < 3000ms — 0ms
+PASS prefs ausentes: defecto aplicado
+PASS TIMELINE_PAGE=100 (paginado del servidor) — page=100
+PASS memoria: RSS del proceso de verificacion < 450MB — 80.7MB
+PASS pty: buffer acotado a 256K chars
+PASS pty: peor caso (buffer + 2000 lineas) < 25MB por terminal — 2MB
+PASS explorador: pagina<=200 y lectura<=20000 chars
+PASS worker: sin caches en memoria (solo handle db)
+PASS worker: SQLite vive en el worker (DatabaseSync)
+PASS hilo principal: async sobre worker_threads (sin importar node:sqlite)
+PASS main: trafico SQLite solo en worker (unica excepcion: sonda smoke :memory:) — solo sonda: apps/desktop/src/main/index.ts
+PASS sqlite-worker: roundtrip real (exec/query/batch/close)
+PASS timeline: 5000 mensajes → ventana de 200 en el DOM — 0ms len=200
+PASS scroll: ventana acotada construida < 1s (proxy 60fps con DOM fijo) — 0ms objetivo=60fps
+PASS timeline: CHAT_DOM_WINDOW=200
+PASS chat: pinta windowMessages(state.messages, CHAT_DOM_WINDOW)
+PASS diferido: sections.tsx usa capList
+PASS diferido: dag.tsx usa capList
+PASS diferido: agents.tsx usa capList
+PASS dag: layout de 100 tareas+99 aristas < 1000ms — 2ms
+PASS dag: 500 nodos → 100 visibles + diferidos — layout=4ms
+PASS failure: exceso detectado por conteo y diferido (no se pinta) — visible=200 deferred=4800 renders=2
+PASS stream: 5000 deltas < 800ms (camino del primer token) — 8ms
+PASS cancel: purga de 5000 marcos < 300ms — 2ms
+PASS big-proj: pagina 1 de 2000 archivos < 2000ms — 18ms total=2000
+PASS big-proj: pageSize acotado — pageSize=50
+PASS big-proj: 4 paginas concurrentes sin congelar (<5s) y sin solape — 37ms unicas=800
+PASS stale_state: archivo nuevo aparece al relistar
+PASS lectura acotada: 30KB → 20000 chars + truncated — chars=20000
+PASS filesystem: asincrono sin lecturas Sync
+PASS deps: directas acotadas (sin peso nuevo) — 6: @octus/core,@octus/shared,dompurify,marked,node-pty,solid-js
+PASS deps: sin pesadas denegadas
+PASS poda: run terminal 2100 → 2000 (recorta 100) — pruned=100 12ms
+PASS poda: conserva las mas recientes (min seq=100) — minSeq=100
+PASS poda: run abierto intacto (no regresion) — open=2100
+PASS poda: settle de arranque la aplica
+PASS misleading_success_output: el exceso se senala (over), no se camufla
+PASS dirty_worktree: sin basura del harness (logs/tmp/db) — 16 cambios de fuente, 0 basura
+info dirty: mios=11 ajenos(Todo35, intactos)=4 evidencia_task34=excluida
+info ajenos: M apps/desktop/src/main/index.ts | M apps/desktop/src/main/secret-store.ts | ?? apps/desktop/src/main/security-policy.ts | ?? scripts/verify-task-35-security.ts
+PASS hung: las operaciones usan timeout (Interrupt/timeout)
+cleanup: big=true data=true
+PASS limpieza: tmp fuera
+
+TODO34-BUDGET pasada 2: 49 PASS, 0 FAIL

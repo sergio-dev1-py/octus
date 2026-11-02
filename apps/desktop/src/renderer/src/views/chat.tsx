@@ -4,6 +4,8 @@ import type { Message, MessagePart } from "@octus/shared";
 import { messageRenderItems } from "@octus/shared";
 import { invoke } from "../api.js";
 import { renderMarkdown } from "../markdown.js";
+import { CHAT_DOM_WINDOW } from "../perf.js";
+import { windowMessages } from "../timeline.js";
 import {
   ModifiedFilesSection,
   RunErrorsSection,
@@ -314,6 +316,11 @@ export function QuestionDialogs() {
 
 export function ChatView() {
   const session = () => state.sessions.find((s) => s.id === state.activeSessionId);
+  // Todo 34 (§7: scroll de 5.000 mensajes a 60 fps): el historial pagina en el
+  // servidor de 100 en 100 y el DOM pinta como máximo CHAT_DOM_WINDOW nodos.
+  // Sin esta ventana, paginar hacia atrás haría crecer el DOM con la conversación.
+  const visibleMessages = () => windowMessages(state.messages, CHAT_DOM_WINDOW);
+  const domHidden = () => state.messages.length - visibleMessages().length;
   let timelineEl: HTMLDivElement | undefined;
   let olderObserver: IntersectionObserver | undefined;
   // N-C-06: carga automática de la página anterior al asomar el centinela.
@@ -397,7 +404,7 @@ export function ChatView() {
         class="timeline message-timeline"
         ref={timelineEl}
         data-timeline-total={state.timelineTotal}
-        data-timeline-rendered={state.messages.length}
+        data-timeline-rendered={visibleMessages().length}
         data-timeline-older={state.timelineHasOlder ? "true" : "false"}
       >
         <Show when={state.timelineHasOlder}>
@@ -408,7 +415,12 @@ export function ChatView() {
             </button>
           </div>
         </Show>
-        <For each={state.messages}>{(message) => <MessageView message={message} />}</For>
+        <Show when={domHidden() > 0}>
+          <p class="muted" data-timeline-dom-window>
+            Ventana del DOM: {visibleMessages().length} de {state.messages.length} cargados (los anteriores quedan diferidos fuera del DOM).
+          </p>
+        </Show>
+        <For each={visibleMessages()}>{(message) => <MessageView message={message} />}</For>
         <For each={Object.values(state.live)}>{(live) => <LiveView live={live} />}</For>
         <div id="timeline-bottom" ref={bottomAnchor} />
       </div>

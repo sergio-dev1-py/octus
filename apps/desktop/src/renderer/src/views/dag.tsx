@@ -7,6 +7,7 @@ import type { IntegrationOperation } from "@octus/shared";
 import { invoke } from "../api.js";
 import { setError, state } from "../store.js";
 import { isPreviewReachable, layoutDag, parseDiffStat, visibleConflicts } from "../dagLogic.js";
+import { DAG_NODE_WINDOW, capList } from "../perf.js";
 
 function nodeStroke(status: string): string {
   if (status === "completed" || status === "reviewed" || status === "integrated") return "var(--oc-success)";
@@ -18,10 +19,14 @@ function nodeStroke(status: string): string {
 /** Grafo de dependencias intra-run (SVG determinista por profundidad). */
 export function DagSection() {
   const layout = () => {
-    const tasks = state.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, needsReview: t.needsReview }));
+    const tasks = state.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, needsReview: t.needsReview })); 
     const deps = Object.entries(state.taskDeps).flatMap(([taskId, list]) => list.map((d) => ({ taskId, dependsOn: d.dependsOn })));
     return layoutDag(tasks, deps);
   };
+  // Todo 34 (§7: DAG paginado con 100 nodos, apertura <1 s): diferido por conteo.
+  const cappedNodes = () => capList("dag-nodes", layout().nodes, DAG_NODE_WINDOW);
+  const visibleIds = () => new Set(cappedNodes().visible.map((n) => n.id));
+  const visibleEdges = () => layout().edges.filter((e) => visibleIds().has(e.from) && visibleIds().has(e.to));
   const width = () => Math.max(...layout().nodes.map((n) => n.x), 88) + 112;
   const height = () => Math.max(...layout().nodes.map((n) => n.y), 32) + 48;
   return (
@@ -35,15 +40,20 @@ export function DagSection() {
         </p>
       </Show>
       <Show when={layout().nodes.length > 0} fallback={<p class="muted">No tasks yet. The coordinator decomposes approved revisions into a task DAG.</p>}>
+        <Show when={cappedNodes().over}>
+          <p class="muted" data-deferred-panel="dag-nodes">
+            Ventana del DOM: {cappedNodes().visible.length} de {layout().nodes.length} nodos ({cappedNodes().deferred} diferidos por presupuesto).
+          </p>
+        </Show>
         <svg id="dag-svg" width={width()} height={height()} role="img" aria-label="Task dependency graph">
-          <For each={layout().edges}>
+          <For each={visibleEdges()}>
             {(edge) => {
               const from = () => layout().nodes.find((n) => n.id === edge.from)!;
               const to = () => layout().nodes.find((n) => n.id === edge.to)!;
               return <line x1={from().x + 80} y1={from().y} x2={to().x - 80} y2={to().y} stroke="var(--oc-text-faint)" stroke-width="1.5" data-dag-edge={`${edge.from}->${edge.to}`} />;
             }}
           </For>
-          <For each={layout().nodes}>
+          <For each={cappedNodes().visible}>
             {(node) => (
               <g data-dag-node={node.id}>
                 <rect x={node.x - 80} y={node.y - 20} width="160" height="40" rx="6" fill="var(--oc-panel)" stroke={nodeStroke(node.status)} stroke-width="1.5" />
@@ -58,7 +68,7 @@ export function DagSection() {
           </For>
         </svg>
         <ul class="muted">
-          <For each={layout().edges}>{(edge) => <li data-dag-dep={`${edge.from}->${edge.to}`}><code>{edge.to}</code> depends on <code>{edge.from}</code></li>}</For>
+          <For each={visibleEdges()}>{(edge) => <li data-dag-dep={`${edge.from}->${edge.to}`}><code>{edge.to}</code> depends on <code>{edge.from}</code></li>}</For>
         </ul>
       </Show>
       <Show when={state.integrationConflicts.length > 0 || visibleConflicts(state.integrationConflicts).length > 0}>

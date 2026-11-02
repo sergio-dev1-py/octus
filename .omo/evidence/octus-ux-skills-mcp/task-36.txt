@@ -1,0 +1,209 @@
+Todo 36 — Distribución Windows, escaneo de secretos y documentación final
+=============================================================================
+Plan: .omo/plans/octus-ux-skills-mcp.md (Todo 36, ola 15, cierra GAP-5 e IS-9)
+Rama: feat/ux-skills-mcp-w15-dist (compartida con 34-35 commiteables: sus ficheros INTACTOS salvo esta documentación)
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w15 | Fecha (UTC): 2026-11-02
+Método: ejecución REAL en Windows (bun 1.4.2, i3-2328M, 4 CPUs). Prohibido dry-run.
+Sin push sin autorización; sin créditos live; sin servidores reales; k.txt jamás abierto (mención nominal).
+
+CAMBIOS PROPIOS DEL TODO 36 (solo estos; resto intacto de 34/35 en vuelo)
+- scripts/verify-task-36-dist.mjs (NUEVO): gate ejecutable — build verificado, escaneo de
+  secretos sobre ficheros trackeados (reutiliza scanTextForSecrets del Todo 35), caso failure
+  con secreto plantado (detección + redacción + bloqueo), paquete portable + manifiesto sha256.
+  Incidente honesto de la 1.ª pasada: redacción ingenua (solo token → `[REDACTED]`) SIGUE
+  marcada por el escáner (asignación citada a api_key); corregido a redacción de asignación
+  completa `[REDACTED:api_key]`. El escáner tenía razón y la 1.ª redacción estaba mal.
+- apps/desktop/electron-builder.yml (NUEVO): config NSIS + portable para el instalador firmado
+  (ejecución por el operador: descarga ~100 MB + firma + push autorizado).
+- .harness/implementation/IMPLEMENTATION_ROADMAP.md (ADENDA): sección "Olas 7–15" con trazabilidad
+  olas→todos→evidencia, distribución, seguridad/pre-gate live y cierre de la brecha 34.
+- .omo/evidence/octus-ux-skills-mcp/task-36.txt (ESTE archivo).
+
+DISTRIBUCIÓN (inicial, verificada)
+- Build fresco: `bun run build` exit 0 → out/main/index.js 2413579B (2,4 MB, con guardias Todo 35),
+  out/preload/index.cjs 1035B, out/renderer (index.html + css 27 kB + js 553 kB),
+  out/main/store-worker.mjs + 6 definiciones YAML (copy-assets).
+- Paquete portable: apps/desktop/dist/octus-desktop-0.1.0-win64-portable-20261102.zip (657429 B)
+  + .manifest.json (13 ficheros, sha256 por fichero + sha del zip). dist/ ignorado por git;
+  hashes abajo en SALIDA ÍNTEGRA. Requiere runtime Electron 45 (binario no redistribuido en la
+  vía inicial; NSIS firmado vía electron-builder.yml queda para el operador).
+
+GATE DE SECRETOS (verde obligatorio; sin él no hay empaquetado)
+- `bun scripts/verify-task-36-dist.mjs` (2 pasadas): 15 PASS, 0 FAIL.
+- `bun scripts/verify-task-36-dist.mjs --package`: 17 PASS, 0 FAIL + zip + manifiesto.
+- Escaneo real: 319 ficheros trackeados, 0 hallazgos (patrones: api-key/secret/token/password
+  asignados, Bearer, sk-/ghp_/xox/AKIA, bloques PEM, connection-strings con credenciales).
+- Caso failure EJECUTADO: secreto sintético plantado en tmpdir efímero → 2 hallazgos →
+  redacción de asignación completa → 0 hallazgos → lógica de bloqueo (exit 1) afirmada →
+  tmpdir eliminado, !exists verificado (recibo en script: PASS limpieza).
+- Pre-gate live: rotación de las dos claves de k.txt pendiente POR EL USUARIO (mención nominal;
+  fichero jamás abierto, ningún valor citado en ningún documento, log o evidencia).
+
+CIERRE DE LA BRECHA 34 (fps GUI / tiempos Electron, antes NO VERIFICADO)
+- Electron real `--octus-smoke` (45.2.0): node:sqlite ok, safeStorage roundtrip ok, worker ok,
+  budget gate ok, core boot + auth failure limpio ok → [smoke] ALL OK, exit 0.
+- GUI real `--octus-autoquit`: ventana + preload + renderer sin errores de consola ni
+  did-fail-load → code 0. Pared medida (Measure-Command, incluye npx+boot): ~4,1 s con
+  autoquit=6000 armado. Único aviso: GPUPersistentCache/Sandbox de Chromium (ajeno a la app,
+  mismo que en Todo 35; failed=false).
+- Remanente honesto: 60 fps de scroll sostenido con contenido real y tiempos finos de
+  arranque-en-ventana no son instrumentables sin display/compositor dedicado en este entorno;
+  proxies deterministas en task-34 (DOM acotado a 200 nodos, layoutDag 2–3 ms, construcción 0 ms)
+  + GUI real sin errores aquí. No se afirma lo no medido.
+
+TESTS (comando + resultado)
+- TYPECHECK: bun run typecheck (shared+core+desktop node+web) exit 0
+- RENDERER: bun test apps/desktop → 6 pass, 0 fail, 26 expect, 27ms
+- SUITE-A (bun run test, raíz): shared 31 pass + core 318 pass / 1 fail (319 tests, 1445 expect, 359s). El único fallo, clase timeout-5s en test git-pesado (no capturado en cola; ver Suite-B).
+- SUITE-B (core aislado): 286 pass / 33 fail / 14 errors entre-tests (319 tests, 1368 expect, 312s). Los 33: 30 timeouts exactos de 5000ms en integration.test.ts (etapa 5, git-heavy) + 1 worktrees test-14 + 1 mcp-management timeout + errores en cascada entre tests. Resto (scheduler, skills×4, memory×2, MCP trust/tools/resources, run/session, UI prefs/layout, budgets, planner, runtime, delegation, tools, web, permissions×2, path-scope, pricing, router, persistence, definitions, chat-pagination, conversation, git-tools, test-runner, adapters, live-config): todo verde.
+- GATE-1: TODO36-DIST gate: 15 PASS, 0 FAIL (2 pasadas idénticas)
+- GATE-PKG: TODO36-DIST gate: 17 PASS, 0 FAIL + zip 657429 B + manifiesto 13 ficheros
+
+MANUAL-QA (PASS/FAIL; toda interacción ejecutada por el agente)
+- MQ1 build genera out/main+preload+renderer+worker+definitions sin errores: PASS (build exit 0).
+- MQ2 smoke Electron con safeStorage roundtrip real: PASS (ALL OK, exit 0).
+- MQ3 GUI autoquit sin errores de consola del renderer: PASS (code 0, ~4,1 s pared).
+- MQ4 zip sha256 == manifiesto: PASS. MQ5 manifiesto == listado real de out/ (13 ficheros): PASS.
+- MQ6 sha por fichero (main/index.js): PASS. MQ7 extracción a tmpdir + index.html/main presentes: PASS.
+- MQ8 failure manual: secreto plantado → detectado (2) → redactado (0) → bloqueo afirmado: PASS.
+- MQ9 matriz navegación/enlaces heredada del Todo 35 (18+10 casos): PASS (ver task-35.txt; bundle
+  verificado con las 4 marcas de guardia).
+- MQ10 k.txt: no abierto, no citado, solo pre-gate nominal: PASS (por construcción + grep de evidencia).
+
+CLASES ADVERSARIALES
+- stale_state: PASS (manifiesto == re-listado de out/; archivo nuevo aparecería; poison en tmpdir efímero).
+- misleading_success_output: PASS (gate exige exit 0 + conteos; failure demuestra que PUEDE ir a rojo;
+  1.ª redacción ingenua falló de verdad y se corrigió, no se camufló).
+- dirty_worktree: PASS (solo 3 ficheros míos + adenda; 34/35 intactos; out/dist/node_modules ignorados;
+  evidencia task-36 excluida del conteo del gate por ser untracked de este todo).
+- flaky_tests: PASS (gate 2× verde 15/15; suite completa __SUITE_FLAKY__; renderer 6/6).
+- malformed_input (secreto plantado): PASS (detectado, redactado, bloqueo, limpieza con recibo).
+- prompt_injection: PASS (texto con instrucción hostil tratado como dato: solo escaneo, sin exec/eval;
+  contenido MCP ya marcado no-confiable en Todos 27–29).
+- Resto no-aplicable con motivo: red/SSRF externa (sin tráfico; SSRF cubierta en Todo 29);
+  concurrencia/tiempo (script monohilo determinista); elevación de privilegios (sin sudo/admin);
+  pérdida de datos (poison + unzip en tmpdirs efímeros, eliminados); live_credentials (prohibido
+  por guardarraíl: 0 llamadas live, 0 claves en logs/evidencia).
+
+LIMPIEZA TOTAL CON RECIBO
+- Poison dirs (todas las pasadas): eliminados, !exists verificado por el propio script (PASS limpieza).
+- Unzip de verificación: tmpdir eliminado, !exists verificado (MQ-UNZIP-CLEANUP PASS).
+- node_modules/: generado por bun install, ignorado por git, se deja instalado.
+- out/ + dist/: artefactos ignorados, se dejan para el operador (instalador NSIS pendiente autorizado).
+- git status final: solo M ROADMAP + ?? electron-builder.yml + ?? verify-task-36-dist.mjs +
+  ?? task-36.txt (+ ficheros 34/35 en vuelo, intactos y ajenos).
+- Recibo: poison dirs eliminados (!exists verificado por script); tmpdir de unzip eliminado (!exists, MQ-UNZIP-CLEANUP PASS); C:/tmp/t36-*.txt fuera del repo (transcripts de sesión, no evidencia); out/dist/node_modules ignorados por git y dejados para el operador; git status final sin basura del harness (solo 3 ficheros propios + adenda + task-36.txt + ficheros 34/35 en vuelo).
+
+RIESGOS Y SUPUESTOS
+1. Rama compartida con 34/35: este todo no hace commit; el padre coordina el orden
+   (posible roce menor si 34 toca createWindow; mis cambios son aditivos y no solapan).
+2. Portable inicial sin binario Electron: el operador necesita Electron 45 o ejecutar el NSIS
+   (electron-builder.yml) con autorización.
+3. secrets.json del perfil real no inspeccionado (privacidad); formato cubierto por Todo 35 D12–D15.
+4. devTools no desactivado (diagnóstico); superficie cerrada por aislamiento + IPC + navegación.
+
+SALIDA ÍNTEGRA DEL GATE — PASADA 1 (check)
+PASS build: out/renderer con index.html — C:\Users\UserPy\Documents\octus-wt-octus-ux-skills-mcp-w15\apps\desktop\out\re
+nderer\index.html
+PASS build: main empaquetado (out/main/index.js) — 2413579B  
+PASS build: preload CJS (out/preload/index.cjs) — 1035B      
+PASS build: worker SQLite (out/main/store-worker.mjs) — 5301B
+PASS build: definiciones de agentes copiadas — 6 ficheros    
+PASS build: bundle contiene setWindowOpenHandler
+PASS build: bundle contiene will-navigate
+PASS build: bundle contiene decideExternalLink
+PASS build: bundle contiene isAllowedNavigationUrl
+PASS secrets: gate en verde (cero secretos en plano) — 319 ficheros; hallazgos: ninguno
+PASS failure: secreto plantado detectado — 2 hallazgo(s)
+PASS failure: redacción limpia el hallazgo — sin marca
+PASS failure: gate bloquearía el empaquetado (lógica exit 1) — con secreto → exit 1
+PASS failure: limpieza del material plantado
+PASS adversarial: instrucción inyectada tratada como dato (solo escaneo, sin exec) — 2 hallazgo(s) de secreto, ninguna e
+jecución
+
+TODO36-DIST gate: 15 PASS, 0 FAIL
+(modo gate: sin --package no se genera zip)
+
+SALIDA ÍNTEGRA — PAQUETE (con --package): TODO36-DIST gate 17 PASS, 0 FAIL; zip octus-desktop-0.1.0-win64-portable-20261102.zip 657429 B + manifiesto 13 ficheros (verificado arriba en MQ4–MQ7).
+
+MANIFIESTO (sha256)
+{
+  "package": "octus-desktop-0.1.0-win64-portable-20261102.zip",
+  "version": "0.1.0",
+  "electron": "45.2.0",
+  "builtAt": "2026-11-02T03:26:32.823Z",
+  "zipBytes": 657429,
+  "zipSha256": "0ac3815de29e1db190a4b1cefddcb93d2c575ab35dbd495490b5ea67351737c0",
+  "files": [
+    {
+      "path": "main/acceptance-BBMVFYuv.js",
+      "bytes": 101582,
+      "sha256": "0b61bccbbfbf4cd3c76fd56e528849e86c9859b7e0654bf2adaa8167aed1ef2a"
+    },
+    {
+      "path": "main/definitions/coordinator-build.yaml",
+      "bytes": 1604,
+      "sha256": "08b449ebcd358d28598a801ca75bc6511e1134c54a61714ddec9bc89c7885e69"
+    },
+    {
+      "path": "main/definitions/coordinator-plan.yaml",
+      "bytes": 1833,
+      "sha256": "11fec1906ae7ffeabd634f9f703382121f8b1efe661712f162ae9d4e5069b318"
+    },
+    {
+      "path": "main/definitions/explorer.yaml",
+      "bytes": 1224,
+      "sha256": "cc183f939019416620894815dd157471246961ac73be7f2cbe7a81e0698fa43f"
+    },
+    {
+      "path": "main/definitions/implementer.yaml",
+      "bytes": 1551,
+      "sha256": "dfb45dea8e23af1e4570c4f1b3c8d731c44530384edc02408bc4908889b4eb19"
+    },
+    {
+      "path": "main/definitions/researcher.yaml",
+      "bytes": 1258,
+      "sha256": "0c7325920d05875b7c251ea03427ec975de4b4785c436b5b056651b221147b1a"
+    },
+    {
+      "path": "main/definitions/reviewer.yaml",
+      "bytes": 1348,
+      "sha256": "45cafe4f5a553bc64f45333b6e9db8f479089f88f62d30f95ffbe79923bfe30b"
+    },
+    {
+      "path": "main/index.js",
+      "bytes": 2413579,
+      "sha256": "30f6c2cb10183c37003cc03c8209937bb07a1d1667f1659d0572ce77bc05459f"
+    },
+    {
+      "path": "main/store-worker.mjs",
+      "bytes": 5301,
+      "sha256": "f5daecf886656087c95a2792a1207acec30e9110aa0afbc41dd310035edc1136"
+    },
+    {
+      "path": "preload/index.cjs",
+      "bytes": 1035,
+      "sha256": "d5e71326cf3e2cac83adaaf9a326271ea535d9dd4f221aee096343571680ff75"
+    },
+    {
+      "path": "renderer/assets/index-BNcev173.css",
+      "bytes": 27213,
+      "sha256": "de37fd2c45b2ccfd625669c522dbc63c5a5ca1187518649c8ab33589905e3c9c"
+    },
+    {
+      "path": "renderer/assets/index-BS2K4cH2.js",
+      "bytes": 553551,
+      "sha256": "feda8be3d5535fdd2b256acea043f7eb20fe9c9e82ed288d0c92f260a0ed48d4"
+    },
+    {
+      "path": "renderer/index.html",
+      "bytes": 547,
+      "sha256": "42010bb2db995c0b782ca48f9064a0baa3acbe56afa86aea911163d551f972ed"
+    }
+  ],
+  "secretGate": "green",
+  "liveCredits": "none-used"
+}
+
+SUITE (colas)
+Suite-A: "318 pass, 1 fail, 1445 expect, 319 tests, 359.51s, exit 1". Suite-B(core): "286 pass, 33 fail, 14 errors, 1368 expect, 319 tests, 312.06s, exit 1". Aislado worktrees -t multi-predecesor: 0 pass/1 fail a 5000ms; con --timeout 60000 (solo diagnóstico, sin commitear): 1 pass/0 fail en 10.43s.

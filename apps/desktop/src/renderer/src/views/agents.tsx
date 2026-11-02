@@ -15,6 +15,7 @@ import {
   selectRun,
   state,
 } from "../store.js";
+import { DAG_NODE_WINDOW, capList } from "../perf.js";
 
 export interface DagEdge {
   from: string;
@@ -97,6 +98,8 @@ function pillClass(status: string): string {
 }
 
 export function AgentDefinitionsSection() {
+  // Todo 34: diferido por conteo.
+  const cappedInstances = () => capList("agent-cards", state.agentInstances);
   return (
     <section aria-label="Definiciones de agentes">
       <h2>Agentes ({state.agentInstances.length} instancias / {state.definitions.length} definiciones)</h2>
@@ -126,7 +129,12 @@ export function AgentDefinitionsSection() {
       <Show when={state.agentInstances.length === 0}>
         <p class="muted">Sin agentes en esta sesión. El coordinador los crea al ejecutar un run.</p>
       </Show>
-      <For each={state.agentInstances}>
+      <Show when={cappedInstances().over}>
+        <p class="muted" data-deferred-panel="agent-cards">
+          Ventana del DOM: {cappedInstances().visible.length} de {state.agentInstances.length} ({cappedInstances().deferred} diferidos por presupuesto).
+        </p>
+      </Show>
+      <For each={cappedInstances().visible}>
         {(instance) => (
           <div class="card">
             <div class="row">
@@ -154,13 +162,20 @@ export function AgentDefinitionsSection() {
 }
 
 export function AgentTasksSection() {
+  // Todo 34 (§7: Agent Manager con 100 tareas en <1 s): diferido por conteo.
+  const capped = () => capList("agent-tasks", state.tasks);
   return (
     <section aria-label="Tareas del DAG">
       <h2>Tareas ({state.tasks.length})</h2>
       <Show when={state.tasks.length === 0}>
         <p class="muted">Sin tareas. El coordinador descompone las revisiones aprobadas en un DAG de tareas.</p>
       </Show>
-      <For each={state.tasks}>
+      <Show when={capped().over}>
+        <p class="muted" data-deferred-panel="agent-tasks">
+          Ventana del DOM: {capped().visible.length} de {state.tasks.length} ({capped().deferred} diferidos por presupuesto).
+        </p>
+      </Show>
+      <For each={capped().visible}>
         {(task) => (
           <div class="card" data-task-id={task.id}>
             <div class="row">
@@ -214,9 +229,12 @@ export function AgentTasksSection() {
 
 export function AgentDagSection() {
   const layout = () => dagLayout(state.tasks, state.taskDeps);
+  // Todo 34 (§7: DAG paginado con 100 nodos): el ciclo se detecta sobre el
+  // grafo completo, pero el DOM pinta como máximo DAG_NODE_WINDOW nodos.
+  const capped = () => capList("agent-dag", state.tasks, DAG_NODE_WINDOW);
   const columns = () => {
     const byDepth = new Map<number, Task[]>();
-    for (const task of state.tasks) {
+    for (const task of capped().visible) {
       const d = layout().depth[task.id] ?? 0;
       const list = byDepth.get(d) ?? [];
       list.push(task);
@@ -230,6 +248,11 @@ export function AgentDagSection() {
       <div id="agent-dag" role="group" aria-label="Grafo de dependencias de tareas">
         <Show when={state.tasks.length === 0}>
           <p class="muted">Sin nodos: crea un run para generar el DAG.</p>
+        </Show>
+        <Show when={capped().over}>
+          <p class="muted" data-deferred-panel="agent-dag">
+            Ventana del DOM: {capped().visible.length} de {state.tasks.length} nodos ({capped().deferred} diferidos por presupuesto).
+          </p>
         </Show>
         <Show when={layout().cycle}>
           <p class="banner err" role="alert">

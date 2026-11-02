@@ -111,3 +111,54 @@
 - Sin secretos en el repo ni en logs; los proveedores falsos son la vía por defecto de prueba.
 - Cada etapa entrega informe con resultados reales de pruebas; "compila" nunca equivale a "terminado" (ADR-016).
 - Dependencias nuevas solo con justificación registrada en DECISIONS (en Etapa 0 no se añadió ninguna).
+
+## Olas 7–15 — Workbench UX, Skills, MCP, terminal y distribución (plan octus-ux-skills-mcp, cierre Todo 36)
+
+Adenda integral sin duplicar: el diseño vive en `docs/ux/01-information-architecture.md`,
+`docs/ux/02-screen-inventory.md`, `docs/ux/03-flows.md` y
+`.omo/design/octus-ux-skills-mcp/task-5-contracts.md` (contratos, mapa de integración,
+matriz de permisos, persistencia, seguridad, pruebas y presupuesto §7 con 11 cifras);
+cada ola deja su evidencia en `.omo/evidence/octus-ux-skills-mcp/task-<N>.txt`.
+Esta adenda solo traza olas → todos → evidencia y registra el cierre de distribución.
+
+| Ola | Todos | Entrega | Evidencia |
+| --- | ----- | ------- | --------- |
+| 7 diseño | 1–5 | Cuarentena documental, IA/navegación/inventario/flujos, sistema de diseño, espec conversación/AgentManager/Skills/MCP, contratos+mapa+matriz+presupuesto | task-1..5.txt |
+| 8 fundamentos | 6–9 | Tokens/temas/densidades persistidos, componentes, layout redimensionable, modularización App/store | task-6..9.txt |
+| 9 bienvenida | 10–11 | Bienvenida drag-drop/nativa/recientes, proyectos+sesiones con recuperación | task-10..11.txt |
+| 10 conversación | 12–14 | Sonda del modelo, timeline virtualizado con streaming/cancelación, tool calls/aprobaciones/preguntas | task-12..14.txt |
+| 11 agentes | 15–17 | Sonda TaskManager/Scheduler/AgentManager, vistas de agentes/runs/worktrees, DAG/integraciones/diffs | task-15..17.txt |
+| 12 skills | 18–24 | Fuente de validación fijada, sonda de scopes, SkillManager 3 ámbitos, instalación, administración, integración runtime, Manager UI | task-18..24.txt |
+| 13 MCP | 25–30 | SDK fijado, Client Manager con confianza por workspace, herramientas aisladas, recursos/prompts con aprobación, credenciales endurecidas, Manager UI | task-25..30.txt |
+| 14 terminal | 31–33 | Sonda de políticas, PTY en main con streaming IPC, explorador/diffs/pruebas/diagnósticos | task-31..33.txt |
+| 15 cierre | 34–36 | Presupuesto de rendimiento, auditoría Electron, distribución Windows + gate de secretos + docs finales | task-34..36.txt |
+
+### Distribución Windows (Todo 36, inicial)
+- Build: `bun run build` (electron-vite + copy-assets: worker SQLite + 6 definiciones YAML) → `apps/desktop/out/`
+  (main 2,4 MB, preload 1 kB, renderer 545 kB).
+- Paquete portable inicial: `.zip` de `out/` + `.manifest.json` con sha256 por fichero en
+  `apps/desktop/dist/` (ignorado por git; hashes en la evidencia task-36). Requiere runtime
+  Electron 45 (el binario no se redistribuye en esta vía inicial).
+- Instalador NSIS/portable firmado: `apps/desktop/electron-builder.yml` listo; su ejecución
+  (`electron-builder --win`) queda para el operador (descarga ~100 MB, firma y push autorizados).
+- Sin push sin autorización; sin mezclar funcionalidades incompletas (rama compartida con 34–35:
+  sus ficheros intactos salvo esta documentación).
+
+### Seguridad y pre-gate live (IS-9)
+- Gate de secretos en verde obligatorio antes de empaquetar: `bun scripts/verify-task-36-dist.mjs --package`
+  (reutiliza `scanTextForSecrets` del Todo 35; 0 hallazgos en 319 ficheros trackeados).
+  Caso failure ejecutado de verdad: secreto plantado → detectado → redactado (asignación completa
+  eliminada) → empaquetado bloqueado; material plantado en tmpdir efímero, eliminado con recibo.
+- Pre-gate del usuario para live: rotación de las dos claves de `k.txt` (ruta nominal citada por el
+  plan; el fichero jamás se abrió ni se citará valor alguno). Sin rotación no hay verificación live;
+  todo el cierre se hizo con simulados locales, sin créditos live ni servidores reales.
+
+### Brecha 34 cerrada en la medida posible (fps GUI / tiempos Electron)
+- Smoke Electron real (`--octus-smoke`): node:sqlite ok, safeStorage roundtrip ok, worker ok,
+  budget gate ok, core boot ok → ALL OK.
+- Arranque GUI real (`--octus-autoquit=10000`): ventana + preload + renderer sin errores de consola
+  ni did-fail-load, salida code 0 (tiempos medidos en la evidencia task-36).
+- Remanente honesto: 60 fps de scroll sostenido con contenido real y timings finos de arranque en
+  hardware del usuario no son medibles sin display/compositor dedicado en este entorno; proxies
+  deterministas (DOM acotado a 200 nodos, layoutDag 2–3 ms) en task-34 + verificación GUI real de
+  ausencia de errores en task-36. No se afirma lo no medido.

@@ -69,6 +69,35 @@ export class EventStore {
     );
     return rows.map(deserialize);
   }
+
+  /**
+   * Poda por política (Todo 34, presupuesto §7: `events` ≤ 2.000 filas por
+   * run típico). Solo toca agregados (`run`, `task`, `instance`) de runs ya
+   * terminales (`done`/`failed`/`cancelled`) que superen el tope, y conserva
+   * sus últimas `limitPerAggregate` filas. Los runs típicos están muy por
+   * debajo del tope y conservan su auditoría completa; solo el crecimiento
+   * patológico se recorta.
+   */
+  async pruneTerminalRunEvents(limitPerAggregate = 2000): Promise<{ pruned: number; aggregates: number }> {
+    const keep = Math.max(1, Math.floor(limitPerAggregate));
+    const scope =
+      "(e.aggregate_kind = 'run' AND e.aggregate_id IN (SELECT id FROM runs WHERE status IN ('done','failed','cancelled')))" +
+      " OR (e.aggregate_kind = 'task' AND e.aggregate_id IN (SELECT t.id FROM tasks t JOIN runs r ON r.id = t.run_id WHERE r.status IN ('done','failed','cancelled')))" +
+      " OR (e.aggregate_kind = 'instance' AND e.aggregate_id IN (SELECT i.id FROM agent_instances i JOIN runs r ON r.id = i.run_id WHERE r.status IN ('done','failed','cancelled')))";
+    const offenders = await this.db.query<{ kind: string; id: string }>(
+      `SELECT e.aggregate_kind AS kind, e.aggregate_id AS id FROM events e WHERE ${scope} GROUP BY e.aggregate_kind, e.aggregate_id HAVING COUNT(*) > ?`,
+      [keep],
+    );
+    let pruned = 0;
+    for (const offender of offenders) {
+      const result = await this.db.exec(
+        "DELETE FROM events WHERE aggregate_kind = ? AND aggregate_id = ? AND id NOT IN (SELECT id FROM events WHERE aggregate_kind = ? AND aggregate_id = ? ORDER BY seq DESC LIMIT ?)",
+        [offender.kind, offender.id, offender.kind, offender.id, keep],
+      );
+      pruned += result.changes ?? 0;
+    }
+    return { pruned, aggregates: offenders.length };
+  }
 }
 
 function deserialize(row: Record<string, string | number | null>): PersistedEvent {
