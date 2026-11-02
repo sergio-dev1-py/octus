@@ -1,0 +1,179 @@
+Todo 33 — Explorador, diffs, pruebas, problemas y diagnósticos (EJECUCIÓN REAL, no dry-run)
+Fecha: 2026-11-02 | Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w14 | Rama: feat/ux-skills-mcp-w14-terminal | Base: 8a49d25
+Ejecutor: senpi-task st_01a199cf. Prohibido dry-run: todo lo afirmado se ejecutó de verdad.
+Restricción: jamás citar ni abrir C:/Users/UserPy/Desktop/PromtHack/k.txt (cumplido: ni se lista ese directorio).
+
+================================================================
+A. IMPLEMENTACIÓN (archivos del Todo 33; NO se tocaron los del Todo 32
+   en vuelo: terminal-service.ts, terminal-panel.tsx, preload, package.json)
+================================================================
+NUEVOS
+- packages/core/src/explorer/file-explorer.ts — listado paginado (máx. 200/pág),
+  lectura acotada (20k chars, binarios rechazados), contención sameOrInside, sin UNC.
+- packages/core/src/sessions/octus-core.ts — métodos explorerList, explorerRead,
+  repoDiff, modifiedFiles, runProjectTest (allowlist + copia desechable),
+  projectDiagnostics (repo bloqueado, tareas fallidas, presupuestos).
+- packages/shared/src/ipc.ts — tipos ExplorerEntry/ExplorerPage/ExplorerFile/
+  DiagnosticProblem + canales files.list, files.read, repos.diff, repos.modified,
+  tests.run, diagnostics.list (sufijos propios; terminal.* del Todo 32 intacto).
+- apps/desktop/src/renderer/src/store/files.ts — acciones + CLONACIÓN en la
+  frontera del store (fija aliasing stale_state: Solid fusiona in-place).
+- apps/desktop/src/renderer/src/views/files.tsx — #file-explorer, #file-tree,
+  #file-viewer, #repo-diff, #modified-list, #test-results, #problems-list,
+  #explorer-prev/#explorer-next.
+- scripts/verify-task-33-core.mjs — verificación backend real (bucles 2×).
+- scripts/verify-task-33-surface.cjs — sonda Playwright real (bucles 2×).
+EDITADOS (aditivos)
+- packages/core/src/index.ts — export explorer.
+- apps/desktop/src/main/index.ts — 6 canales + handlers (convive con terminal.*).
+- apps/desktop/src/renderer/src/store/state.ts — estado Todo 33.
+- apps/desktop/src/renderer/src/store.ts — reexport files.js.
+- apps/desktop/src/renderer/src/store/projects.ts — refreshFilesWorkspace al
+  seleccionar proyecto.
+- apps/desktop/src/renderer/src/views/workbench.tsx — FilesExplorerPanel en
+  sidebar explorer; ProblemsListPanel + TestResultsPanel en bottom.
+Coexistencia Todo 32: preload/index.ts, terminal-service.ts, terminal-panel.tsx,
+package.json y bun.lock son SOLO del Todo 32 (git diff); main/index.ts e ipc.ts
+contienen ambas superficies y typecheck+build pasan con las dos.
+
+================================================================
+B. TYPECHECK (bun run typecheck, exit 0)
+================================================================
+$ bun run --cwd packages/shared typecheck && bun run --cwd packages/core typecheck && bun run --cwd apps/desktop typecheck
+$ tsc --noEmit
+$ tsc --noEmit
+$ tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json
+(exit 0; incluye views/files.tsx, store/files.ts y ambas superficies IPC)
+
+================================================================
+C. REGRESIÓN (bun run test en raíz, exit 0)
+================================================================
+$ bun run --cwd packages/shared test && bun run --cwd packages/core test
+shared: 31 pass, 0 fail (4 ficheros)
+core: 319 pass, 0 fail, 1445 expect() calls, 38 ficheros, 317.36s
+Incluye etapas 1–6, Skills 18–24 y MCP 25–30 en verde.
+
+================================================================
+D. VERIFICACIÓN BACKEND REAL, 2 PASADAS (flaky_tests)
+   $ bun scripts/verify-task-33-core.mjs 1   (y 2)
+   Núcleo OctusCore real + repo git real C:\tmp\octus-qa-proj.
+================================================================
+--- pasada 1 (16 PASS, 0 FAIL) ---
+PASS explorar: raíz lista total>=4 — total=4
+PASS explorar: contiene src/
+PASS explorar: src contiene app.ts
+PASS explorar: ver archivo con marcador
+PASS diff: muestra modificación — chars=222
+PASS modificados: app.ts M
+PASS modificados: notes.txt untracked
+PASS dirty_worktree: repo sucio con conteos — dirty
+PASS prueba: exit 0 con salida real — dur=93ms
+PASS stale_state: relistar ve fresh-t33.txt
+PASS misleading_success_output: fallo no se camufla como éxito
+PASS diagnósticos: lista disponible — 1 problemas
+PASS big-proj: página 1 rápida (<2s) — 2ms total=11
+PASS big-proj: 3 subdirs sin congelar (<5s) — 23ms
+PASS big-proj: paginación acota (pageSize<=200)
+PASS seguridad: escape del root denegado
+cleanup: big=true data=true qaProj=true
+TODO33-CORE pasada 1: 16 PASS, 0 FAIL
+--- pasada 2 (16 PASS, 0 FAIL; dur=101ms en prueba; big 6ms/19ms) ---
+TODO33-CORE pasada 2: 16 PASS, 0 FAIL
+NOTA: primera ejecución detectó 1 FAIL real (paginación incluía .git en el
+top-3 de dirs); se corrigió el SCRIPT (filtrar dot-dirs), no el producto.
+El producto pagina correctamente con .git presente.
+
+================================================================
+E. SUPERFICIE PLAYWRIGHT REAL, 2 PASADAS (Chromium ms-playwright,
+   bundle construido apps/desktop/out/renderer + stub window.octus
+   determinista con proyecto C:\tmp\octus-qa-proj)
+   $ bun run --cwd apps/desktop build  (exit 0)
+   $ node scripts/verify-task-33-surface.cjs
+================================================================
+--- pasada 1 y pasada 2 (17 PASS, 0 FAIL en ambas) ---
+PASS bienvenida: reciente QA visible
+PASS workbench visible tras continuar
+PASS explorar: panel visible
+PASS explorar: dir src en el árbol
+PASS explorar: README.md en el árbol
+PASS explorar: subdir src lista app.ts
+PASS explorar: visor con marcador
+PASS explorar: hay página siguiente (pagina, no congela)
+PASS explorar: página 2 muestra extra2.txt
+PASS diff: muestra T33-DIRTY
+PASS modificados: app.ts M
+PASS modificados: notes.txt untracked
+PASS pruebas: panel visible
+PASS pruebas: salida qa-ok del run
+PASS problemas: diagnóstico task-t1
+PASS failure: error de archivos visible sin romper la UI
+PASS failure: workbench sigue en pie
+SONDA PLAYWRIGHT TODO 33: todo PASS
+PNG: .omo/evidence/octus-ux-skills-mcp/task-33-surface.png (1366×900)
+HALLAZGO REAL CORREGIDO: la 1.ª pasada falló en "Subir" (stale_state por
+aliasing: Solid fusiona in-place el objeto IPC y mutaba el fixture del stub).
+Se fijó el PRODUCTO (clonación en store/files.ts: clonePage/cloneProblems +
+copias en explorerFile/modifiedFiles), no el script. Tras el fix: 17/17 ×2.
+
+================================================================
+F. CASO FAILURE (proyecto grande pagina sin congelar)
+================================================================
+Backend real (D): C:\tmp\octus-qa-big con 500 ficheros en 10 subdirs;
+página 1 en 2–6ms (total=11 con .git), 3 subdirs en 15–23ms (<5s),
+pageSize<=200. El árbol NUNCA carga el proyecto entero.
+Superficie (E): stub de 2 páginas; #explorer-next habilitado y página 2
+visible; backend roto (ok:false) → error con role=alert visible y workbench
+en pie (sin pantalla en blanco).
+
+================================================================
+G. CLASES ADVERSARIALES
+================================================================
+- stale_state: PASS. Relistar tras crear fichero lo muestra; además se
+  encontró y corrigió aliasing real Solid/IPC (ver E).
+- misleading_success_output: PASS. Entrada qa-fail (exit 3) lanza
+  tool_failed con salida; jamás ok:true.
+- dirty_worktree: PASS. Repo sucio (M + ??) listado y con diff no vacío;
+  inspectRepository confirma status=dirty con conteos.
+- flaky_tests (repetir 2×): PASS. Backend 16/16 en ambas pasadas;
+  superficie 17/17 en ambas pasadas.
+- secret_exposure: N/A (el flujo es solo-lectura salvo tests.run contra
+  copia desechable; ningún secreto transita; no se abrió k.txt).
+- permission_bypass: N/A con prueba (escape ../.. denegado con
+  scope_violation; tests.run exige allowlist explícita).
+- concurrency_race: N/A (IPC secuencial de un solo usuario; sin hilos).
+- time_travel/clock_skew: N/A (sin relojes en el flujo).
+
+================================================================
+H. MANUAL-QA DE SUPERFICIE REAL (protocolo ejecutado por el agente,
+   ninguna interacción la hizo el usuario) — todo PASS
+================================================================
+Bienvenida→workbench con QA: PASS | Explorar raíz/subdir/ver: PASS
+Paginar (prev/next, 2 págs): PASS | Ver diff (staged/stat): PASS
+Modificados (M/??): PASS | Ejecutar prueba y ver salida: PASS
+Problemas (task-t1): PASS | Failure backend roto: PASS
+Selectores fijos verificados: #file-explorer #file-tree #file-viewer
+#repo-diff #modified-list #test-results #problems-list #explorer-prev
+#explorer-next [data-test-output="qa-echo"] [data-problem-id="task-t1"].
+
+================================================================
+I. RIESGOS / NOTAS
+================================================================
+- Rama compartida con Todo 32: ningún archivo suyo tocado; main/index.ts e
+  ipc.ts llevan ambas superficies y compilan juntos. Coordinación de
+  nombres cumplida (files.*/repos.*/tests.run/diagnostics.list, sin
+  terminal.*).
+- Sin commit (lo decide el padre sobre la rama compartida).
+- k.txt: ni listado ni abierto (grep confinado a apps/desktop y packages).
+
+================================================================
+J. LIMPIEZA TOTAL CON RECIBO
+================================================================
+- scripts/dbg-t33.cjs y scripts/dbg2-t33.cjs (debug temporal): eliminados.
+- C:\tmp\octus-qa-big: eliminado (exists=false).
+- C:\tmp\octus-qa-t33-data: eliminado (exists=false).
+- C:\tmp\octus-qa-proj: restaurado a fixture limpio comprometido
+  (git checkout + clean; status vacío; ficheros: README.md src/app.ts
+  src/util.ts).
+- Quedan (artefactos deliberados del todo): scripts/verify-task-33-core.mjs,
+  scripts/verify-task-33-surface.cjs, task-33-surface.png y este fichero.
+RECIBO: big=false data=false qaProjDirty=false dbgScripts=false

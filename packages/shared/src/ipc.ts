@@ -202,6 +202,20 @@ export interface OctusIPC {
   "skills.setScope": { request: { projectId: string; name: string; scope: SkillScopeName }; response: { ok: boolean; error?: string } };
   "skills.history": { request: { runId: string }; response: { skills: string[]; bypass: Array<{ skill: string; action: string; at: number }> } };
   "skills.resource": { request: { name: string; relativePath: string }; response: { ok: boolean; content?: string; error?: string } };
+  "files.list": { request: { projectId: string; relDir?: string; page?: number; pageSize?: number }; response: { ok: boolean; page?: ExplorerPage; error?: string } };
+  "files.read": { request: { projectId: string; relPath: string }; response: { ok: boolean; file?: ExplorerFile; error?: string } };
+  "repos.diff": { request: { projectId: string; staged?: boolean; stat?: boolean; paths?: string[] }; response: { ok: boolean; rootPath?: string; diff?: string; truncated?: boolean; error?: string } };
+  "repos.modified": { request: { projectId: string }; response: { ok: boolean; rootPath?: string; isGit?: boolean; files?: Array<{ path: string; x: string; y: string }>; error?: string } };
+  "tests.run": { request: { projectId: string; entryId: string }; response: { ok: boolean; entryId?: string; exitCode?: number; output?: string; truncated?: boolean; durationMs?: number; error?: string } };
+  "diagnostics.list": { request: { projectId: string }; response: { ok: boolean; problems?: DiagnosticProblem[]; error?: string } };
+  "terminal.create": { request: { projectId: string; name?: string; cols?: number; rows?: number }; response: { ok: boolean; terminal?: TerminalInfo; error?: string } };
+  "terminal.list": { request: { projectId: string }; response: { terminals: TerminalInfo[] } };
+  "terminal.write": { request: { id: string; data: string }; response: { ok: boolean; error?: string } };
+  "terminal.read": { request: { id: string; sinceSeq?: number }; response: { ok: boolean; chunks?: TerminalChunk[]; nextSeq?: number; status?: TerminalStatus; exitCode?: number; error?: string } };
+  "terminal.resize": { request: { id: string; cols: number; rows: number }; response: { ok: boolean; error?: string } };
+  "terminal.kill": { request: { id: string; sinceSeq?: number }; response: { ok: boolean; restarted?: boolean; chunks?: TerminalChunk[]; nextSeq?: number; error?: string } };
+  "terminal.close": { request: { id: string }; response: { ok: boolean; error?: string } };
+  "terminal.select": { request: { id: string }; response: { ok: boolean; error?: string } };
 }
 
 /** Todo 24 — tipos de Skills para el IPC (planos y serializables; `installed` y `enabled` siempre distintos). */
@@ -241,6 +255,70 @@ export interface SkillDetail extends SkillCatalogItem {
   /** Archivos relativos dentro de la skill (recursos). */
   files: string[];
 }
+
+/* Todo 33 — explorador, diffs, pruebas y diagnósticos (sufijos -explorer/-diff/-modified/-run/-diagnostics: sin colisión con terminal.* del Todo 32). */
+
+export interface ExplorerEntry {
+  name: string;
+  relPath: string;
+  kind: "dir" | "file";
+  size?: number;
+}
+
+export interface ExplorerPage {
+  rootPath: string;
+  relDir: string;
+  entries: ExplorerEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
+export interface ExplorerFile {
+  rootPath: string;
+  relPath: string;
+  content: string;
+  truncated: boolean;
+  size: number;
+}
+
+export interface DiagnosticProblem {
+  id: string;
+  severity: "error" | "warning";
+  source: string;
+  message: string;
+}
+
+/* Todo 32 — terminal persistente con PTY en main (canales terminal.*: sin colisión con files.* del Todo 33). */
+
+/** Estado de una terminal PTY persistente. */
+export type TerminalStatus = "open" | "exited";
+
+export interface TerminalInfo {
+  id: string;
+  name: string;
+  projectId: string;
+  /** CWD fijado al crearla: raíz validada del proyecto. */
+  cwd: string;
+  cols: number;
+  rows: number;
+  status: TerminalStatus;
+  exitCode?: number;
+  /** Elegida entre varias (terminal.select). */
+  active: boolean;
+  createdAt: number;
+}
+
+/** Fragmento de salida con secuencia monótona por terminal (streaming + polling de respaldo). */
+export interface TerminalChunk {
+  id: string;
+  seq: number;
+  data: string;
+}
+
+/** Canal de eventos de streaming PTY (main → renderer), fuera del canal CoreEvent. */
+export const TERMINAL_DATA_CHANNEL = "octus:terminal-data";
 
 export type IpcChannel = keyof OctusIPC;
 export type IpcRequest<C extends IpcChannel> = OctusIPC[C]["request"];

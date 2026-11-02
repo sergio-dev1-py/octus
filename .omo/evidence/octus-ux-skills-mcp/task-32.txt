@@ -1,0 +1,149 @@
+Todo 32 — Terminal persistente con PTY en main y streaming IPC (EJECUTADO DE VERDAD, sin dry-run)
+Fecha: 2026-11-02 | Worktree: octus-wt-octus-ux-skills-mcp-w14 | Rama: feat/ux-skills-mcp-w14-terminal
+Base inicial: 8a49d25 (merge ola 13). Commit: N (deferido a propósito — ver §7).
+
+1. DECISIÓN DE POLÍTICA (deep-high: la decisión que la evidencia no cerraba sola)
+- PTY-directo CONFIRMADO (nota de peso del Todo 3): node-pty@1.1.0 en el proceso
+  main, streaming por IPC al renderer. La alternativa child_process sin PTY no da
+  ConPTY en Windows (sin resize ni ANSI fiable) y no sirve como terminal del
+  workbench (IS-7). Coste real: solo el prebuild win32-x64 (verificado presente en
+  node_modules/node-pty/prebuilds/win32-x64) + ~100 KB de JS.
+- Principal de la terminal = EL USUARIO, no un agente. El gesto explícito de crear
+  una terminal equivale a su aprobación por vez (nunca "siempre" persistente; cada
+  terminal exige su propio gesto; cerrar elimina todo). Los perfiles plan/build del
+  Todo 31 aplican a los AGENTES, no a los dedos del usuario.
+- Alternativa rechazada: pasar cada write por PermissionManager.preview/decide.
+  Imposible sin romper la interactividad (no hay sesión/run para el AskContext y
+  los chunks son teclas, no comandos) y daría una falsa sensación de control.
+  En su lugar, gates deterministas + exclusión estructural de agentes:
+  proyecto existente y CWD fijado a la raíz validada (checkDirectoryReadable),
+  env hijo = scrubbedEnv() por allowlist (sin secretos heredados), validación de
+  carga de cada canal IPC (tipos/tamaños/rangos), killTree (taskkill /T /F) al
+  cancelar/cerrar/salir, buffer truncado (256 KB / 64 KB por write), y NINGUNA
+  herramienta de agente enruta hacia terminal.write (no hay definición en
+  tool-definitions ni puerta en ToolGateway; solo el renderer-usuario llega por IPC).
+- shell-guard (ADR-026) NO se aplica a keystrokes: es una guarda contra agentes
+  que evaden la puerta por shell; en la terminal propia del usuario (como VS Code)
+  el usuario puede usar git libremente.
+
+2. QUÉ SE CONSTRUYÓ (ficheros propios del Todo 32; los del Todo 33 no se tocaron)
+- packages/shared/src/ipc.ts: canales terminal.create/list/write/read/resize/kill/
+  close/select + tipos TerminalInfo/TerminalStatus/TerminalChunk + TERMINAL_DATA_CHANNEL.
+- packages/core/src/index.ts: +1 línea (export de tools/process-tree.js para main).
+- apps/desktop/src/main/terminal-service.ts (NUEVO): TerminalService sobre node-pty
+  (crear/listar/escribir/leer/resize/kill/close/select, buffer con seq, streaming
+  por callback, kill amable→killTree→re-spawn reutilizable, disposeAll).
+- apps/desktop/src/main/index.ts: 8 canales en CHANNELS + handlers + singleton
+  terminals() con resolveRoot validada + push a TERMINAL_DATA_CHANNEL + dispose
+  en before-quit. (Hunks adyacentes a los del Todo 33, sin solape.)
+- apps/desktop/src/preload/index.ts: onTerminalData (fuera del canal CoreEvent).
+- apps/desktop/src/renderer/src/views/terminal-panel.tsx (NUEVO): panel con
+  crear/elegir/enviar/kill/cerrar, streaming con re-sincronía por polling,
+  deduplicación por seq (carrera streaming↔polling) y append en huecos.
+- apps/desktop/src/renderer/src/views/workbench.tsx: 2 líneas (import + montar el
+  panel en la pestaña terminal; el placeholder "llega en el Todo 32" eliminado).
+- apps/desktop/package.json + bun.lock: node-pty@1.1.0.
+- scripts/qa-task-32.mjs + scripts/task32-resolve-hook.mjs: QA de servicio real
+  (2 pasadas, 46 checks). scripts/qa-task-32-surface.mjs +
+  scripts/task-32-terminal.entry.tsx: QA de superficie real (Chromium por CDP
+  contra TerminalService real puenteado por HTTP).
+- typecheck en verde: bun run typecheck (shared + core + desktop node/web).
+
+3. VERIFICACIÓN (todo ejecutado de verdad en Windows)
+- `node --experimental-transform-types scripts/qa-task-32.mjs` → 46 PASS / 0 FAIL
+  × 2 pasadas (crear+CWD, eco por STREAMING afirmado en onData, read de respaldo,
+  resize 100x30, dos terminales + select, kill de ping largo + reutilizable,
+  failure con durmiente real + killTree, 7 malformed, disposeAll).
+  Nota: corre bajo node, no bun — node-pty+ConPTY no entrega salida bajo el
+  runtime Bun (AttachConsole failed / writes perdidos); el runtime productivo es
+  Electron/Node. El hook solo mapea workspaces para el harness.
+- `node --experimental-transform-types scripts/qa-task-32-surface.mjs` →
+  8/8 checks PASS en Chromium headless real (panel visible, sin terminales,
+  crear pestaña, eco por streaming en el DOM, marcador "shell reiniciado" tras
+  kill, historial conservado, reutilizable tras kill, cerrar) + captura
+  .omo/evidence/octus-ux-skills-mcp/task-32-surface.png.
+- `bun run --cwd apps/desktop build` → OK (main 2,4 MB + preload + renderer).
+- `electron ./out/main/index.js --octus-smoke` → ALL OK.
+- `bunx electron ./out/main/index.js --octus-autoquit=15000` → code 0 (la app
+  real arranca y el renderer pinta sin errores con el panel montado).
+- `bun run test` (raíz: shared+core) → shared 31/31; core 318 pass + 1 fail:
+  J4 workbase (timeout 30 s bajo carga: 5 suites pesadas + chrome + builds en
+  paralelo en un i3). Rerun aislado `bun test test/integration.test.ts
+  -t "J4: task con dos predecesores"` → 1 PASS (33,5 s; supera el timeout de
+  30 s por carga, no por regresión). Sin relación con este Todo (orquestación
+  Etapa 5; mi cambio en core es una línea de export). Preexistente/flaky, no rojo propio.
+
+4. MANUAL-QA DE SUPERFICIE REAL (agente, ninguna mano humana)
+- PASS panel visible y estado inicial "Sin terminales".
+- PASS crear terminal → pestaña [data-terminal-id] presente.
+- PASS eco por streaming en el DOM (no solo polling).
+- PASS failure en superficie: ping largo → kill → marcador "[terminal] proceso
+  cancelado; shell reiniciado." visible + historial anterior conservado.
+- PASS reutilizable tras kill (nuevo eco) y cerrar vuelve a "Sin terminales".
+- Captura: task-32-surface.png. Resultado global: PASS.
+
+5. CLASES ADVERSARIALES
+- stale_state: APROBADA. status open/exited + exitCode visibles por list/read; el
+  kill re-spawnea el MISMO id (reutilizable, no fantasma); resync por seq con
+  dedupe evita pintar estado viejo/duplicado (bug real de carrera encontrado y
+  corregido: lastSeq seguía nextSeq y perdía el chunk del marcador — §6).
+- misleading_success_output: APROBADA. Se afirma el marcador exacto
+  ("eco-32-*", "shell reiniciado"), no "salida no vacía"; ANSI despojado antes de
+  afirmar; el bug del selector `outText` (función sin invocar → FAIL permanente)
+  se detectó porque la aserción era real y falló en vez de pasar en falso.
+- dirty_worktree: APROBADA. El Todo 33 editaba en paralelo la misma rama y los
+  mismos ficheros compartidos (ipc.ts, main/index.ts, workbench.tsx): se leyó su
+  diff antes de cada edición, anclas únicas fuera de sus hunks, sus ficheros
+  (explorer/, files.tsx, files.ts, store/*, octus-core.ts) intactos, y NO se hace
+  commit para no barrer su trabajo a medias (ver §7).
+- flaky_tests (2×): APROBADA. Servicio 46/46 en dos pasadas; superficie con
+  timeouts acotados y reintento por poll (no sleeps fijos como veredicto);
+  J4 documentado arriba con rerun aislado en verde.
+- cancel_resume: APROBADA. kill() amable (1,5 s) → killTree (5 s) → re-spawn;
+  durmiente real terminado por el harness; disposeAll en before-quit (0 colgadas).
+- malformed_input: APROBADA. 7 casos (projectId vacío/desconocido, write vacío/
+  >64 KB, id desconocido, resize NaN, clamp 240x100) todos rechazados o
+  recortados sin romper el servicio.
+- hung_or_long_commands: APROBADA. ping -n 20/30 cancelados con esperas acotadas
+  (1,5 s + 5 s); ningún wait sin deadline; CDP con timeouts por llamada.
+- No-aplicable con motivo: prompt_injection (sin LLM en el loop; la salida PTY se
+  pinta como texto — Solid text node, nunca innerHTML — y jamás se ejecuta);
+  secret_leak en evidencia (scrubbedEnv por allowlist; solo marcadores eco-32);
+  persistencia entre reinicios (las terminales son efímeras por diseño: disposeAll
+  al salir, igual que VS Code no reabre PTYs vivas).
+
+6. DEFECTOS REALES ENCONTRADOS Y CORREGIDOS DURANTE EL TODO
+- D1 (contrato): `terminal.kill` sin sinceSeq + panel con lastSeq=nextSeq perdía el
+  marcador si caía en el hueco. Fix: kill acepta sinceSeq y devuelve chunks+nextSeq;
+  el panel avanza lastSeq solo con seqs vistos (nota: el siguiente chunk puede
+  reutilizar el seq de nextSeq).
+- D2 (panel): resync post-kill en modo replace limpiaba el historial. Fix: append.
+- D3 (panel): sin dedupe, streaming+polling duplicaban líneas en carreras. Fix:
+  seenSeqs.
+- D4 (harness): `bun test` no sirve para ConPTY (runtime Bun incompatible con
+  node-pty: AttachConsole failed); la verificación corre bajo node puro con hook
+  de resolución solo para el harness. El primer test bun se eliminó y se documenta.
+
+7. LIMPIEZA Y COMMIT
+- Recibo de limpieza: eliminados scripts/.task32-surface.log,
+  scripts/.task32-progress.log, scripts/.task32-roottests.log(.done),
+  scripts/.task32-dist, scripts/.task32-profile, C:\tmp/{octus-term*,pty-*,strip-test*,
+  chrome-probe,probe-import.mjs}, probes del repo; 0 procesos residuales
+  (node/bun/chrome del QA); .task32-dist/.task32-profile ausentes en el repo.
+  Se CONSERVAN como harness reproducible: scripts/qa-task-32.mjs,
+  scripts/qa-task-32-surface.mjs, scripts/task32-resolve-hook.mjs,
+  scripts/task-32-terminal.entry.tsx (paralelo a qa-task-30.mjs del Todo 30).
+- Commit: NO se hace commit en este turno. Motivo: la rama se comparte con el
+  Todo 33, que tiene ediciones sin commitear en los mismos ficheros compartidos
+  (ipc.ts, main/index.ts, workbench.tsx, core/index.ts) y ficheros nuevos propios;
+  commitear ahora barrería su trabajo a medias o generaría ruido. El merge de la
+  ola (como el merge ola 13 8a49d25) lo hará el coordinador al cerrar 32+33.
+  Ficheros del Todo 32 listos para `git add` selectivo en el DoneClaim.
+
+8. SUPUESTOS REGISTRADOS
+- COMSPEC/cmd.exe como shell en Windows; xterm-256color; 80x24 por defecto.
+- `Page.loadEventFired` no se observa en el harness CDP (long-poll abierto);
+  el QA sigue tras timeout de 15 s (la página es usable igual).
+- Ruido conocido: node-pty imprime "AttachConsole failed" de su agente
+  conpty_console_list_agent en stderr durante kills; no afecta (proceso agente
+  propio de node-pty, salida del PTY intacta).

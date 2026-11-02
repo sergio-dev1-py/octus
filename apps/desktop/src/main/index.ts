@@ -9,6 +9,7 @@ import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "el
 import { OctusCore } from "@octus/core";
 import {
   IPC_EVENT_CHANNEL,
+  TERMINAL_DATA_CHANNEL,
   UI_LAYOUT_KEY,
   UI_PREFS_KEY,
   isUiPrefs,
@@ -21,9 +22,11 @@ import {
   type IpcResponse,
   type PersistedEvent,
   type StreamEvent,
+  type TerminalChunk,
 } from "@octus/shared";
 import { ElectronSecretStore } from "./secret-store.js";
 import { MainSkillsService } from "./skills-service.js"; // Todo 24 (montaje aditivo): servicio de Skills en main
+import { TerminalService } from "./terminal-service.js"; // Todo 32: PTY persistente en main
 import { checkDirectoryReadable, directoryErrorMessage } from "./validate-directory.js";
 import { resolveDefinitionsDir, resolveWorkerPath } from "./worker-path.js";
 
@@ -138,6 +141,22 @@ const CHANNELS: IpcChannel[] = [
   "memory.resolve",
   "recovery.status",
   "recovery.reconcile",
+  // Todo 33 (montaje aditivo): explorador, diffs, pruebas y diagnósticos (sin terminal.* del Todo 32).
+  "files.list",
+  "files.read",
+  "repos.diff",
+  "repos.modified",
+  "tests.run",
+  "diagnostics.list",
+  // Todo 32: terminal persistente con PTY (streaming por TERMINAL_DATA_CHANNEL).
+  "terminal.create",
+  "terminal.list",
+  "terminal.write",
+  "terminal.read",
+  "terminal.resize",
+  "terminal.kill",
+  "terminal.close",
+  "terminal.select",
   // Todo 24 (montaje aditivo): superficie IPC de Skills (N-SK-01..05 del Todo 5).
   "skills.catalog",
   "skills.inspect",
@@ -184,6 +203,7 @@ function onStream(event: StreamEvent): void {
 type Handler<C extends IpcChannel> = (payload: IpcRequest<C>) => Promise<IpcResponse<C>>;
 
 let skillsService: MainSkillsService | undefined;
+let terminalService: TerminalService | undefined;
 
 function handlers(): { [C in IpcChannel]: Handler<C> } {
   const need = (): OctusCore => {
@@ -194,6 +214,26 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
   const skills = (): MainSkillsService => {
     if (!skillsService) skillsService = new MainSkillsService(need().db, dataDir());
     return skillsService;
+  };
+  // Todo 32: singleton perezoso de terminales PTY. La raíz se valida aquí
+  // (proyecto existente + carpeta legible) y el CWD queda fijado a ella.
+  const terminals = (): TerminalService => {
+    if (!terminalService) {
+      terminalService = new TerminalService({
+        resolveRoot: async (projectId: string) => {
+          const projects = await need().listProjects();
+          const found = projects.find((p) => p.id === projectId);
+          if (!found) throw new Error(`unknown project ${projectId.slice(0, 64)}`);
+          const check = checkDirectoryReadable(found.rootPath);
+          if (!check.ok) throw new Error(directoryErrorMessage(check));
+          return check.realPath;
+        },
+        onData: (chunk: TerminalChunk) => {
+          mainWindow?.webContents.send(TERMINAL_DATA_CHANNEL, chunk);
+        },
+      });
+    }
+    return terminalService;
   };
   const projectRootOf = async (projectId?: string): Promise<string | undefined> => {
     if (!projectId) return undefined;
@@ -1009,11 +1049,153 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
       if (!isNonEmptyString(payload.runId)) throw new Error("invalid payload");
       return skills().history(payload.runId);
     },
+    // Todo 33: explorador paginado, lectura acotada, diffs, modificados, pruebas y diagnósticos.
+    // Solo lectura salvo tests.run (allowlist explícita del usuario, copia desechable).
+    "files.list": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      try {
+        const page = await need().explorerList(payload.projectId, payload.relDir ?? ".", payload.page ?? 1, payload.pageSize ?? 50);
+        return { ok: true as const, page };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "files.read": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || !isNonEmptyString(payload.relPath)) throw new Error("invalid payload");
+      try {
+        const file = await need().explorerRead(payload.projectId, payload.relPath);
+        return { ok: true as const, file };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "repos.diff": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      try {
+        const out = await need().repoDiff(payload.projectId, { staged: payload.staged, stat: payload.stat, paths: payload.paths });
+        return { ok: true as const, ...out };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "repos.modified": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      try {
+        const out = await need().modifiedFiles(payload.projectId);
+        return { ok: true as const, ...out };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "tests.run": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || !isNonEmptyString(payload.entryId)) throw new Error("invalid payload");
+      try {
+        const out = await need().runProjectTest(payload.projectId, payload.entryId);
+        return { ok: true as const, ...out };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "diagnostics.list": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      try {
+        const out = await need().projectDiagnostics(payload.projectId);
+        return { ok: true as const, problems: out.problems };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
     "skills.resource": async (payload) => {
       if (!isNonEmptyString(payload.name) || !isNonEmptyString(payload.relativePath)) throw new Error("invalid payload");
       try {
         const content = await skills().resource(payload.name, payload.relativePath);
         return { ok: true as const, content };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    // Todo 32: terminal persistente con PTY. El principal es el usuario (su gesto
+    // crea la terminal); los gates deterministas viven en TerminalService (proyecto
+    // existente, CWD fijado a la raíz validada, env depurado, killTree, buffer
+    // truncado). Ninguna herramienta de agente enruta hacia aquí.
+    "terminal.create": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      try {
+        const terminal = await terminals().create({
+          projectId: payload.projectId,
+          name: payload.name,
+          cols: payload.cols,
+          rows: payload.rows,
+        });
+        return { ok: true as const, terminal };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "terminal.list": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      return { terminals: terminals().list(payload.projectId) };
+    },
+    "terminal.write": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.data !== "string" || payload.data.length === 0) {
+        throw new Error("invalid payload");
+      }
+      try {
+        terminals().write(payload.id, payload.data);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "terminal.read": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      if (payload.sinceSeq !== undefined && (typeof payload.sinceSeq !== "number" || !Number.isFinite(payload.sinceSeq))) {
+        throw new Error("invalid payload");
+      }
+      try {
+        const out = terminals().read(payload.id, payload.sinceSeq);
+        return { ok: true as const, ...out };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "terminal.resize": async (payload) => {
+      if (!isNonEmptyString(payload.id) || typeof payload.cols !== "number" || typeof payload.rows !== "number") {
+        throw new Error("invalid payload");
+      }
+      try {
+        terminals().resize(payload.id, payload.cols, payload.rows);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "terminal.kill": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      if (payload.sinceSeq !== undefined && (typeof payload.sinceSeq !== "number" || !Number.isFinite(payload.sinceSeq))) {
+        throw new Error("invalid payload");
+      }
+      try {
+        const { restarted, chunks, nextSeq } = await terminals().kill(payload.id, payload.sinceSeq);
+        return { ok: true as const, restarted, chunks, nextSeq };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "terminal.close": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        terminals().close(payload.id);
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "terminal.select": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        terminals().select(payload.id);
+        return { ok: true as const };
       } catch (error) {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
       }
@@ -1251,6 +1433,12 @@ async function main(): Promise<void> {
     if (process.platform !== "darwin") void app.quit();
   });
   app.on("before-quit", () => {
+    try {
+      terminalService?.disposeAll();
+    } catch {
+      // ignore: el cierre no debe bloquear la salida
+    }
+    terminalService = undefined;
     void core?.close();
   });
 }

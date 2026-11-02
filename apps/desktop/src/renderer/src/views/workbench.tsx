@@ -4,6 +4,8 @@ import type { ActivityId, BottomTab } from "@octus/shared";
 import { SkillsContextPanel } from "./skills.jsx";
 import { layoutStyles, resizeBottomBy, resizeInspectorBy, resizeSidebarBy } from "@octus/shared";
 import { invoke } from "../api.js";
+import { FilesExplorerPanel, ProblemsListPanel, TestResultsPanel } from "./files.jsx";
+import { TerminalPanel } from "./terminal-panel.jsx";
 import {
   closeSession,
   createProject,
@@ -238,6 +240,7 @@ export function Sidebar() {
       </div>
       <Show when={state.layout.activity === "explorer"}>
         <ExplorerPanel />
+        <FilesExplorerPanel />
       </Show>
       <Show when={state.layout.activity === "chat"}>
         <ThreadsPanel />
@@ -357,7 +360,7 @@ export function BottomPanel() {
       </div>
       <div class="bottom-body">
         <Show when={state.layout.bottomTab === "terminal"}>
-          <p class="muted">La terminal persistente llega en el Todo 32. Directorio del proyecto: <code>{projectRoot()}</code></p>
+          <TerminalPanel projectId={state.activeProjectId} projectRoot={projectRoot()} />
         </Show>
         <Show when={state.layout.bottomTab === "problems"}>
           <Show when={problems().length > 0} fallback={<p class="muted">Sin problemas.</p>}>
@@ -365,6 +368,7 @@ export function BottomPanel() {
               <For each={problems()}>{(problem) => <li>{problem}</li>}</For>
             </ul>
           </Show>
+          <ProblemsListPanel />
         </Show>
         <Show when={state.layout.bottomTab === "output"}>
           <Show when={state.usage.length > 0} fallback={<p class="muted">Sin salidas todavía.</p>}>
@@ -380,17 +384,7 @@ export function BottomPanel() {
           </Show>
         </Show>
         <Show when={state.layout.bottomTab === "tests"}>
-          <Show when={state.testAllowlist.length > 0} fallback={<p class="muted">Sin allowlist de pruebas en este proyecto.</p>}>
-            <ul>
-              <For each={state.testAllowlist}>
-                {(entry) => (
-                  <li>
-                    <code>{entry.id}</code> {entry.name} — <code>{entry.argv.join(" ")}</code>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
+          <TestResultsPanel />
         </Show>
       </div>
     </section>
