@@ -44,6 +44,7 @@ import { PermissionManager, type PermissionLayers } from "../permissions/permiss
 import { SkillActivationStore } from "../skills/skill-activation.js";
 import { SkillManager, type SkillDiscoveryOptions } from "../skills/skill-manager.js";
 import { SkillRuntime } from "../skills/skill-runtime.js";
+import { listDirPage, projectRootReal, readFileCapped } from "../explorer/file-explorer.js";
 import { PlanManager } from "../plans/plan-manager.js";
 import { PLAN_TOOLS } from "../plans/plan-tools.js";
 import { TaskManager } from "../tasks/task-manager.js";
@@ -982,6 +983,93 @@ export class OctusCore {
 
   async setWorktreesRoot(projectId: string, path: string) {
     return this.worktrees.setWorktreesRoot(projectId, path);
+  }
+
+  // ------------------------------------------------- Todo 33: explorador, diffs, pruebas y diagnósticos
+  private async explorerRoot(projectId: string): Promise<string> {
+    const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]);
+    if (!project) throw new OctusError("not_found", `Project not found: ${projectId}`);
+    return projectRootReal(String(project.root_path));
+  }
+
+  /** Listado paginado de solo lectura; nunca carga el proyecto entero. */
+  async explorerList(projectId: string, relDir: string, page: number, pageSize: number) {
+    const root = await this.explorerRoot(projectId);
+    return listDirPage(root, relDir || ".", page, pageSize);
+  }
+
+  /** Lectura acotada de un archivo de texto (binarios se rechazan). */
+  async explorerRead(projectId: string, relPath: string) {
+    const root = await this.explorerRoot(projectId);
+    return readFileCapped(root, relPath);
+  }
+
+  /** Diff acotado del repo del proyecto (solo lectura, vía RepositoryManager). */
+  async repoDiff(projectId: string, opts?: { staged?: boolean; stat?: boolean; paths?: string[] }) {
+    const root = await this.explorerRoot(projectId);
+    const paths = Array.isArray(opts?.paths) ? opts!.paths.slice(0, 20).filter((p) => typeof p === "string" && p.length > 0 && p.length <= 500) : undefined;
+    const diff = await this.repositories.getDiff(root, { staged: opts?.staged, stat: opts?.stat, paths });
+    return { rootPath: root, diff, truncated: diff.length >= 60000 };
+  }
+
+  /** Archivos modificados a partir del porcelain de `git status`. */
+  async modifiedFiles(projectId: string) {
+    const root = await this.explorerRoot(projectId);
+    let porcelain = "";
+    try {
+      porcelain = (await this.repositories.getStatus(root)).porcelain;
+    } catch {
+      return { rootPath: root, isGit: false, files: [] as Array<{ path: string; x: string; y: string }> };
+    }
+    const files: Array<{ path: string; x: string; y: string }> = [];
+    for (const line of porcelain.split("\n")) {
+      if (!line || line.length < 4) continue;
+      if (line.startsWith("??")) {
+        files.push({ path: line.slice(3).trim(), x: "?", y: "?" });
+        continue;
+      }
+      files.push({ path: line.slice(3).trim(), x: line[0] ?? " ", y: line[1] ?? " " });
+      if (files.length >= 500) break;
+    }
+    return { rootPath: root, isGit: true, files };
+  }
+
+  /** Ejecuta una entrada de la allowlist de pruebas en copia desechable (TestRunner). */
+  async runProjectTest(projectId: string, entryId: string, signal?: AbortSignal) {
+    const root = await this.explorerRoot(projectId);
+    const entries = await this.tests.listAllowlist(projectId);
+    if (!entries.some((e) => e.id === entryId)) {
+      throw new OctusError("tool_denied", `Test entry '${entryId.slice(0, 64)}' is not in the project allowlist`);
+    }
+    return this.tests.run(projectId, entryId, root, signal ?? AbortSignal.timeout(600000));
+  }
+
+  /** Problemas agregados: repo bloqueado, tareas/integraciones fallidas, presupuestos. */
+  async projectDiagnostics(projectId: string) {
+    const problems: Array<{ id: string; severity: "error" | "warning"; source: string; message: string }> = [];
+    const summary = await this.repositories.inspectRepository(projectId).catch(() => undefined);
+    if (summary?.status === "blocked") {
+      problems.push({
+        id: "repo-blocked",
+        severity: "error",
+        source: "repo",
+        message: `Repository blocked: ${summary.incompleteOperation ?? "unknown"} (${summary.incompleteDetail ?? "sin detalle"})`,
+      });
+    }
+    const failedTasks = await this.db
+      .query<{ id: string; title: string; error: string | null }>(
+        "SELECT t.id AS id, t.title AS title, t.error AS error FROM tasks t JOIN runs r ON r.id = t.run_id JOIN sessions s ON s.id = r.session_id WHERE s.project_id = ? AND t.status = 'failed' ORDER BY t.updated_at DESC LIMIT 20",
+        [projectId],
+      )
+      .catch(() => [] as Array<{ id: string; title: string; error: string | null }>);
+    for (const t of failedTasks) {
+      problems.push({ id: `task-${t.id}`, severity: "error", source: "tasks", message: `Tarea fallida ${t.title}: ${t.error ?? "sin detalle"}` });
+    }
+    const budgets = await this.budgetsStatus().catch(() => undefined);
+    if (budgets && !budgets.configured) {
+      problems.push({ id: "budgets-unconfigured", severity: "warning", source: "budgets", message: "Presupuestos sin configurar: las llamadas de pago están bloqueadas." });
+    }
+    return { projectId, problems };
   }
 
   // ------------------------------------------------- integraciones (Etapa 5)

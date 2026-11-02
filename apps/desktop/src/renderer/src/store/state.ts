@@ -1,7 +1,7 @@
 /** Renderer/store — estado raíz, tipos de UI y banderas globales. */
 import { DEFAULT_LAYOUT, DEFAULT_UI_PREFS } from "@octus/shared";
 import { createStore } from "solid-js/store";
-import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, SkillCatalogError, SkillCatalogItem, SkillDetail, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
+import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, Budget, BudgetUsage, DiagnosticProblem, ExplorerFile, ExplorerPage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, SkillCatalogError, SkillCatalogItem, SkillDetail, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
 import type { ChatAttachment, LiveFrame } from "../timeline.js";
 
 /** Marco de streaming visible (Todo 13, N-C-12a/12b): forma pura en timeline.ts. */
@@ -83,6 +83,20 @@ interface UIState {
   skillsHistoryBypass: Array<{ skill: string; action: string; at: number }>;
   skillsNotice?: string;
   recoveryStatus?: { pendingOps: number; startedPromotions: number; livePreviews: number; staleMemories: number; pendingContradictions: number };
+  // Todo 33: explorador paginado, diff, modificados, pruebas y diagnósticos.
+  explorerRelDir: string;
+  explorerPage: ExplorerPage | undefined;
+  explorerFile?: ExplorerFile;
+  explorerError?: string;
+  repoDiff?: string;
+  repoDiffTruncated: boolean;
+  repoDiffError?: string;
+  modifiedFiles: Array<{ path: string; x: string; y: string }>;
+  modifiedIsGit: boolean;
+  testRunResult?: { entryId: string; exitCode: number; output: string; truncated: boolean; durationMs: number };
+  testRunError?: string;
+  testRunning: boolean;
+  diagnostics: DiagnosticProblem[];
 }
 
 const [state, setState] = createStore<UIState>({
@@ -149,6 +163,19 @@ const [state, setState] = createStore<UIState>({
   skillsHistoryBypass: [],
   skillsNotice: undefined,
   recoveryStatus: undefined,
+  explorerRelDir: ".",
+  explorerPage: undefined,
+  explorerFile: undefined,
+  explorerError: undefined,
+  repoDiff: undefined,
+  repoDiffTruncated: false,
+  repoDiffError: undefined,
+  modifiedFiles: [],
+  modifiedIsGit: false,
+  testRunResult: undefined,
+  testRunError: undefined,
+  testRunning: false,
+  diagnostics: [],
 });
 
 export { state, setState };

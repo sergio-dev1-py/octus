@@ -1,0 +1,65 @@
+Todo 31 — Sonda de politicas de ejecucion para la terminal (SOLO LECTURA)
+Fecha: 2026-11-02 | Worktree: octus-wt-octus-ux-skills-mcp-w14 | Rama: feat/ux-skills-mcp-w14-terminal | Base: 8a49d25
+Commit del informe: N (docs, sin codigo). Politica de shell NO relajada.
+
+1. FUENTES LEIDAS (verificacion previa del Todo 32)
+- packages/core/src/permissions/permission-manager.ts (261 lineas): deny-by-default, ultima regla gana (ADR-008);
+  DEFAULT_POLICY shell=ask; preview() filtra guardados para shell (nunca elevan a allow); decide() rechaza
+  "always" en shell con permission_denied "Shell commands can never be always-allowed (ADR-018)"; techo duro
+  del perfil: fuera de definitionTools => deny sin excepcion; deniedTools del perfil ganan sobre todo.
+- packages/core/src/tools/tool-definitions.ts — shellTool (permiso "shell", ADR-018): assertShellGitAllowed
+  antes de ejecutar; timeout min(args.timeoutMs ?? ctx.shellTimeoutMs, 600_000); spawn con shell:true,
+  cwd=workspace, env=scubbedEnv() (allowlist, sin secretos), windowsHide:true; killTree al timeout/abort;
+  salida truncada a ctx.maxInlineChars; exit!=0 => tool_failed.
+- packages/core/src/tools/shell-guard.ts (ADR-026): deniega subcomandos git branch/checkout/switch/merge/
+  pull/push/worktree/rebase/reset/stash/clean/clone/submodule y flags -c/-C/--git-dir/--work-tree;
+  denegacion, nunca autoaprobacion.
+- packages/core/src/tools/process-tree.ts: CHILD_ENV_ALLOW (PATH, PATHEXT, SYSTEMROOT, SYSTEMDRIVE, TEMP,
+  TMP, HOME, USER, LOGNAME, LANG, LC_ALL, TERM, OS, COMSPEC, NUMBER_OF_PROCESSORS, PROCESSOR_ARCHITECTURE);
+  killTree via taskkill /T /F en win32, SIGKILL al grupo en POSIX.
+- packages/core/src/agents/definitions/coordinator-plan.yaml: plan NO incluye shell (deniedTools: write,
+  edit, shell, git_*, test_run, websearch, webfetch) => terminal prohibida para el coordinador plan.
+  coordinator-build.yaml SI incluye shell (con ask por vez).
+- packages/core/src/config/config-store.ts: shellTimeoutMs=120_000 por defecto; maxOutputChars=30_000.
+- .harness/implementation/TARGET_ARCHITECTURE.md: terminal de usuario vive en Main Electron (PTY);
+  el core no importa Electron: el escritorio inyecta servicios de plataforma (terminal incluida) por
+  interfaces; ApprovalService con pin inmutable, re-verificacion en vivo, rechazo terminal.
+
+2. SONDA — tres comandos de ejemplo resueltos contra la politica (bun packages/core/task31-probe*.tmp.ts)
+- Comando 1 "echo hola" + perfil build (shell en definitionTools) => preview = ask (aprobacion por vez).
+- Comando 2 "echo hola" + perfil plan (shell en deniedTools) => preview = deny (techo duro del perfil).
+- Comando 3 "echo hola" + perfil build + regla guardada allow (simula "siempre") => preview = ask
+  (los guardados nunca elevan shell; filtro de preview()).
+- Respuesta "always" a la solicitud de shell => decide() lanza permission_denied
+  "Shell commands can never be always-allowed (ADR-018)". Respuesta "once" => allow via once.
+- shell-guard: "git status" => PASS; "git push origin main" => THROW scope_violation;
+  "echo hola" => PASS (comando fuera de politica git se niega en la guarda; benigno pasa a permiso).
+- Failure QA: comando fuera de politica (plan/shell, push, always) se NIEGA en la sonda. OK.
+
+3. MODELO EXACTO QUE CONSUMIRA EL TODO 32 (terminal PTY persistente en main + streaming IPC)
+- PTY en proceso main (node-pty o equivalente), N terminales por id; canales IPC nuevos en
+  packages/shared/src/ipc.ts + apps/desktop/src/main/index.ts + preload minimo; streaming de salida
+  por eventos; crear/ejecutar/consultar-salida/cancelar/cerrar/elegir-entre-varias.
+- Cada ejecucion en terminal de usuario pasa por PermissionManager.preview(shell, comando, capas, project):
+  build => ask por vez (nunca always, ADR-018); plan => deny siempre; reglas guardadas jamas elevan shell.
+- Guarda shell-guard (ADR-026) aplicada a cada comando antes de spawnear: git de gestion/integracion
+  denegado; resto al permiso. Entorno hijo = scrubbedEnv() allowlist; timeout default 120s, tope 600s;
+  killTree (taskkill /T /F) al timeout/aborto; salida truncada a 30_000 chars inline.
+- CWD = workspace del proyecto; scope/resolveInScope y protectedRoots aplican igual que en shellTool.
+- Decision PTY-directo + nota de peso del Todo 3 la toma el Todo 32; esta sonda solo fija el marco
+  permisivo que debe respetar. Sin relajar nada.
+
+4. VERIFICACION
+- bun run typecheck (shared + core + desktop node/web): exit 0 (verde).
+- Sonda: 8/8 decisiones esperadas (ask, deny, ask-filtrado, always-denegado, once-permitido,
+  guard status PASS, guard push scope_violation, guard echo PASS).
+- Secreto k.txt: ni citado ni abierto (prohibido por restricciones del Todo).
+
+5. ADVERSARIALES
+- Aplicable con resultado: bypass de permiso via "always" => DENEGADO (ADR-018, probado 4);
+  bypass de git via shell (push/worktree) => DENEGADO scope_violation (ADR-026, probado 5);
+  perfil plan ejecuta shell => DENEGADO por techo duro (probado 2).
+- No-aplicable (motivo): inyeccion de secretos por entorno (hijo usa allowlist, sin secretos que
+  inyectar; sin superficie nueva en este Todo de solo-lectura); escape de scope/CWD (sin codigo
+  nuevo que auditar; el Todo 32 debera aplicar resolveInScope a la PTY); DoS por proceso largo
+  (timeouts + killTree ya existen; la PTY persistente del Todo 32 debera heredarlos).

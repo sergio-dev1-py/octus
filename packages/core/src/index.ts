@@ -30,3 +30,5 @@ export * from "./runtime/agent-runtime.js";
 export * from "./costs/budgets.js";
 export * from "./costs/usage.js";
 export * from "./sessions/octus-core.js";
+export * from "./explorer/file-explorer.js"; // Todo 33: explorador paginado de solo lectura
+export * from "./tools/process-tree.js"; // Todo 32: entorno depurado y killTree para la PTY de main
