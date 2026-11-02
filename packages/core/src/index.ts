@@ -17,6 +17,7 @@ export * from "./tools/tool-definitions.js";
 export * from "./tools/path-scope.js";
 export * from "./mcp/mcp-client-manager.js";
 export * from "./mcp/mcp-tool-bridge.js";
+export * from "./mcp/mcp-server-management.js";
 export * from "./agents/agent-registry.js";
 export { promptHashOf, snapshotOf } from "./agents/definition-loader.js";
 export * from "./prompts/prompts.js";

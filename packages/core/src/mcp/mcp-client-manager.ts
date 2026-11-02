@@ -582,6 +582,42 @@ export class McpClientManager {
     }
   }
 
+  /**
+   * Accesor de solo lectura al `Client` conectado (Todo 29, aditivo).
+   * La puerta de confianza NO se relaja: solo devuelve el cliente cuando el
+   * estado es `connected` (handshake + capacidades negociadas). La fachada
+   * de gestión (Todo 29) lo envuelve con `SdkClientBinding`/`SdkContentBinding`
+   * de los puentes 27/28 sin cambiarlos.
+   */
+  connectedClient(serverId: string): Client | undefined {
+    const runtime = this.runtimes.get(serverId);
+    if (!runtime || runtime.status !== "connected" || !runtime.client) return undefined;
+    return runtime.client;
+  }
+
+  /** Disponibilidad = conexión + handshake vigentes (espejo de `status`). */
+  isAvailable(serverId: string): boolean {
+    return this.runtimes.get(serverId)?.status === "connected";
+  }
+
+  /**
+   * Revoca el secreto del almacén del SO, corta la conexión viva y lo audita
+   * (Todo 29). Sin secreto no hay Authorization Bearer en HTTP ni env STDIO:
+   * el siguiente `connect` opera sin credencial hasta que se rote una nueva.
+   */
+  async clearServerSecret(id: string): Promise<void> {
+    const current = await this.getServer(id);
+    if (!current) throw new OctusError("not_found", `Unknown MCP server '${id}'`);
+    // Cortar primero: ningún transporte vivo conserva la credencial en memoria.
+    await this.disconnectQuiet(id);
+    try {
+      await this.secrets.delete(mcpSecretRef(id));
+    } catch {
+      // Best-effort: si el almacén ya no lo tiene, el estado es el deseado.
+    }
+    await this.audit("server.secret_revoked", id, null, "secret removed from OS store; live connection cut");
+  }
+
   async close(): Promise<void> {
     for (const serverId of [...this.runtimes.keys()]) {
       await this.disconnectQuiet(serverId);

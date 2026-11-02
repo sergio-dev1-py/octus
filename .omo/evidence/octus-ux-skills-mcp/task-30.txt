@@ -1,0 +1,245 @@
+TODO 30 - MCP MANAGER UI CON ESTADOS DISTINGUIBLES (W-M1..W-M6)
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 13) | Rama: feat/ux-skills-mcp-w13-mcp
+Fecha: 2026-11-02 | Ejecutor: st_01a199b9 | Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w13
+Base: McpClientManager del Todo 26 (commit 5256b70 + cambios del 29 en vuelo, no tocados).
+Alcance: lista de servidores, agregar, importar configuracion, estado de conexion,
+transporte, herramientas, recursos, prompts, credenciales, confianza por workspace,
+permisos, logs y errores. Configurado, conectado y autorizado siempre distintos.
+Configurar un remoto nunca se llama instalar (verificado por grep: cero "instal*").
+Pantallas contra simulados STDIO rotulados SIMULADO fuera de la vista de producto;
+la vista de producto no incluye ningun mock. Sin servidores reales, sin secretos
+reales (tokens de juguete en memoria). No se cito ni se abrio
+C:/Users/UserPy/Desktop/PromtHack/k.txt (grep limpio en entregables).
+Prohibido dry-run: todo lo afirmado se ejecuto de verdad.
+
+============================================================
+0. LECTURAS PREVIAS (contrato y patrones)
+============================================================
+- Spec UX W-M1..W-M6 (.harness/design/ux-conversation-agent-skills-mcp.md): tres
+  estados siempre visibles y distintos; puerta de confianza antes de conectar;
+  herramientas aisladas servidor:herramienta; recursos/prompts con aprobacion;
+  secreto solo en almacen del SO; configurar remoto != instalar; sin SSE legado.
+- Todo 26 (packages/core/src/mcp/mcp-client-manager.ts): addServer nunca conecta
+  ni otorga confianza; setTrust(false) revoca y desconecta en caliente;
+  status()/statuses() con capabilities/tools/hasResources/hasPrompts/lastError;
+  auditLog() con trust.granted/trust.revoked/connect.ok/connect.denied.
+- Todo 7 (components/oc.tsx, oc-components.css, tokens.css): OcButton, OcEmpty,
+  OcErrorState, tabla .oc-table, iconos currentColor; todo color/espaciado por
+  var(--oc-*). La vista nueva solo usa clases existentes (pill ok/warn/err/mode,
+  card, row, muted, banner) + oc-*; cero literales de diseno.
+- Todo 29 en vuelo en la misma rama (mcp-server-management.ts, task-29.txt):
+  NO se toco ninguno de sus archivos. La vista no importa packages/shared (el
+  contrato IPC mcp.* lo provee el main en el 29); el cliente de produccion usa
+  window.octus.invoke dinamico con los mismos nombres de operacion y degrada a
+  aviso visible si el backend aun no los expone. Sin colision de archivos.
+
+============================================================
+1. CAMBIOS (solo contenido Todo 30)
+============================================================
+N apps/desktop/src/renderer/src/store/mcp.ts (~350 lineas)
+  McpClient inyectable (list/add/importJson/update/remove/verify/connect/
+  disconnect/retry/setTrust/setSecret/tools/resources/prompts/audit), resumentes
+  McpServerSummary con los tres ejes separados, cliente IPC dinamico de
+  produccion, store Solid con refresh/select y lastOp para el resultado junto a
+  su formulario. HALLAZGO (bug real, clase stale_state): mcpRefresh limpiaba el
+  error recien fijado y el fallo de conexion quedaba invisible; corregido:
+  refrescar ANTES de fijar el error en connect/retry/disconnect/setTrust/
+  setSecret/remove.
+N apps/desktop/src/renderer/src/views/mcp.tsx (~330 lineas)
+  McpManagerView: lista con tres pildoras por servidor (configurado gris,
+  conectado verde/amarillo/rojo/gris, autorizado azul/amarillo), transporte,
+  capacidades, ultimo error; formularios agregar (stdio comando+args separados
+  sin shell; http url+token al almacen) e importar JSON (nada conecta ni se
+  autoriza al importar); detalle con confianza global/workspace, herramientas
+  aisladas ocultas si no autorizado, recursos/prompts, credencial solo
+  indicador, auditoria y error con reintento. Vacio honesto. Sin "instalar".
+M apps/desktop/src/renderer/src/App.tsx (+2 lineas)
+  El centro muestra McpManagerView con activity skills-mcp.
+M apps/desktop/src/renderer/src/store.ts (+1 linea)
+  Reexporta store/mcp.js (sin ciclos: mcp.ts no importa store.js).
+N scripts/task-30-mcp.entry.tsx (solo QA)
+  Monta la vista REAL con McpClient fetch + badge #mcp-sim-badge SIMULADO.
+N scripts/qa-task-30.mjs (solo QA)
+  Fixture real (SQLite tmp + MemorySecretStore + McpClientManager + mocks
+  mcp-qa-stdio bueno con tools+resources+prompts y mcp-qa-broken que escupe
+  basura y muere), puente HTTP, build vite real, Chromium por CDP (sin paquete
+  playwright), 39 aserciones x 2 pasadas, 2 screenshots a evidencia.
+
+============================================================
+2. COMANDOS EJECUTADOS (todos reales, con exit observado)
+============================================================
+$ bun run typecheck (apps/desktop) -> exit 0 (x3: tras cablear, tras store-fix,
+  final contra el arbol con el 29 en vuelo).
+$ bun test packages/core/test/mcp-trust.test.ts packages/core/test/mcp-tools.test.ts
+  packages/core/test/mcp-resources.test.ts -> 36 pass / 0 fail, exit 0
+  (respaldo del backend, no modificado).
+$ bun scripts/qa-task-30.mjs -> exit 0, 78 PASS / 0 FAIL (39 x 2 pasadas).
+  Historial honesto de la corrida: 3 ejecuciones previas en rojo encontraron y
+  corrigieron (a) bug real error-borrado-por-refresh, (b) 2 trampas de substring
+  en el propio test ("desconectado".includes("conectado"), "no autorizado"
+  .includes("autorizado")), (c) aviso de import fijado antes del refresh
+  (test esperaba sin asentar), (d) SDK ESM por file:// no resuelve bajo el mock
+  spawneado (se usa el build CJS como los tests del 26), (e) 1 pasada lenta del
+  caso failure por spawning en i3 cargado (deadline 25s->60s con DIAG; el
+  producto ya acota con timeouts de 6-8s). Estabilidad final: 3 verdes
+  consecutivos post-cambios (el ultimo con screenshots reencuadrados).
+$ git grep -i instal / k.txt|PromtHack sobre entregables -> sin coincidencias.
+
+LOG FINAL (bun scripts/qa-task-30.mjs, exit 0):
+## build vite de la vista MCP real
+build OK: assets/task-30-mcp-9m4bP1uo.css, assets/task-30-mcp.entry-Bxso70IM.js
+sirviendo en http://127.0.0.1:55314/index.html?project=prj_qa
+## pasada 1
+PASS [p1] badge SIMULADO visible (pantalla QA, no producto)
+PASS [p1] gestor vacío honesto al inicio
+PASS [p1] sin rastro de la palabra instalar en el gestor
+PASS [p1] agregar informa pendiente de confianza
+[p1] id real del servidor: mcp_b6c8925b3f5d
+PASS [p1] píldora configurado visible y distinta
+PASS [p1] píldora conexión desconectado
+PASS [p1] píldora autorización no autorizado
+PASS [p1] manager: desconectado y sin confianza (anti estado rancio)
+PASS [p1] conectar sin confianza muestra error visible
+PASS [p1] manager sigue desconectado tras denegar
+PASS [p1] detalle con puerta: herramientas ocultas
+PASS [p1] confianza workspace en no
+PASS [p1] otorgar confianza marca autorizado
+PASS [p1] manager: confiable en workspace
+PASS [p1] conectar con confianza: píldora conectado (igualdad exacta)
+PASS [p1] manager: conectado con handshake real — connected/mcp-qa-stdio
+PASS [p1] herramienta aislada servidor:herramienta
+PASS [p1] segunda herramienta anunciada
+PASS [p1] recurso sensible con aprobación
+PASS [p1] prompt con 2 argumentos
+PASS [p1] capacidades negociadas visibles (tools+resources+prompts)
+PASS [p1] configurado≠conectado≠autorizado por color — rgb(110, 103, 91) / rgb(46, 125, 67) / rgb(31, 95, 168)
+screenshot: task-30-surface.png
+PASS [p1] importar JSON informa pendientes
+PASS [p1] importado configurado pero no autorizado
+PASS [p1] contador en 2 servidores
+PASS [p1] credencial guardada (solo indicador)
+PASS [p1] secreto solo en almacén, nunca en SQLite
+PASS [p1] el valor del token nunca aparece en el DOM
+PASS [p1] revocar marca no autorizado
+PASS [p1] revocar desconecta en caliente
+PASS [p1] tras revocar, herramientas ocultas sin recargar
+PASS [p1] auditoría registra revocación y corte real — server.added,connect.denied,trust.granted,connect.ok,server.secret_set,trust.revoked
+PASS [p1] servidor roto agregado y pendiente de confianza
+PASS [p1] protocolo roto: píldora falló
+PASS [p1] error visible con role=alert y reintento
+PASS [p1] manager: failed con lastError real — MCP connect 'mcp_e33637330417' failed: MCP error -32000: Connection closed
+PASS [p1] la lista sigue viva: servidor sano seleccionable
+PASS [p1] reintento no bloquea (vuelve a falló)
+PASS [p1] tras el fallo, el otro servidor sigue operable
+screenshot: task-30-failure.png
+## pasada 2
+PASS [p2] badge SIMULADO visible (pantalla QA, no producto)
+PASS [p2] gestor vacío honesto al inicio
+PASS [p2] sin rastro de la palabra instalar en el gestor
+PASS [p2] agregar informa pendiente de confianza
+[p2] id real del servidor: mcp_1ea8d5cb4950
+PASS [p2] píldora configurado visible y distinta
+PASS [p2] píldora conexión desconectado
+PASS [p2] píldora autorización no autorizado
+PASS [p2] manager: desconectado y sin confianza (anti estado rancio)
+PASS [p2] conectar sin confianza muestra error visible
+PASS [p2] manager sigue desconectado tras denegar
+PASS [p2] detalle con puerta: herramientas ocultas
+PASS [p2] confianza workspace en no
+PASS [p2] otorgar confianza marca autorizado
+PASS [p2] manager: confiable en workspace
+PASS [p2] conectar con confianza: píldora conectado (igualdad exacta)
+PASS [p2] manager: conectado con handshake real — connected/mcp-qa-stdio
+PASS [p2] herramienta aislada servidor:herramienta
+PASS [p2] segunda herramienta anunciada
+PASS [p2] recurso sensible con aprobación
+PASS [p2] prompt con 2 argumentos
+PASS [p2] capacidades negociadas visibles (tools+resources+prompts)
+PASS [p2] configurado≠conectado≠autorizado por color — rgb(110, 103, 91) / rgb(46, 125, 67) / rgb(31, 95, 168)
+PASS [p2] importar JSON informa pendientes
+PASS [p2] importado configurado pero no autorizado
+PASS [p2] contador en 2 servidores
+PASS [p2] credencial guardada (solo indicador)
+PASS [p2] secreto solo en almacén, nunca en SQLite
+PASS [p2] el valor del token nunca aparece en el DOM
+PASS [p2] revocar marca no autorizado
+PASS [p2] revocar desconecta en caliente
+PASS [p2] tras revocar, herramientas ocultas sin recargar
+PASS [p2] auditoría registra revocación y corte real — server.added,connect.denied,trust.granted,connect.ok,server.secret_set,trust.revoked
+PASS [p2] servidor roto agregado y pendiente de confianza
+PASS [p2] protocolo roto: píldora falló
+PASS [p2] error visible con role=alert y reintento
+PASS [p2] manager: failed con lastError real — MCP connect 'mcp_3417472a0770' failed: MCP error -32000: Connection closed
+PASS [p2] la lista sigue viva: servidor sano seleccionable
+PASS [p2] reintento no bloquea (vuelve a falló)
+PASS [p2] tras el fallo, el otro servidor sigue operable
+QA Todo 30: 78 PASS / 0 FAIL → PASS
+
+============================================================
+3. MANUAL QA DE SUPERFICIE REAL (mirando los PNG)
+============================================================
+MQ-1 task-30-surface.png (detalle conectado+autorizado): tres pildoras con
+  colores distintos, tabla de herramientas aisladas id:tool, recursos sensibles
+  con pildora de aprobacion, prompt con args, toggles de confianza. PASS.
+MQ-2 task-30-failure.png (servidor roto): pildoras configurado/fallo/autorizado
+  distinguibles, mensaje real de protocolo, botones Ver detalle/Conectar/
+  Reintentar, resto de la lista operable debajo. PASS.
+MQ-3 Sistema de diseno: todo color/espaciado/tipografia por var(--oc-*) y
+  clases oc-*/pill/card/row existentes; cero literales; componentes compuestos
+  desde oc.tsx. PASS.
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+- stale_state: el refresh borraba el error (bug real, corregido y cubierto por
+  "conectar sin confianza muestra error visible"); el test espera a que la lista
+  asiente tras add/import antes de afirmar; tras revocar se afirma ocultacion de
+  herramientas sin recargar. APLICADA.
+- misleading_success_output: igualdad exacta de pildoras (no substring); cada
+  estado DOM se cruza con el manager en proceso (status/isTrusted/auditoria);
+  DIAG registrado en los puntos criticos; screenshots mirados de verdad. APLICADA.
+- dirty_worktree: solo archivos del Todo 30 (ver recibo); barrido de hijos
+  mock-qa por wmic+taskkill en cada teardown; tmpdirs octus-mcp30-* eliminados;
+  sin procesos mock-qa residuales (verificado por wmic tras la corrida).
+  APLICADA.
+- flaky_tests: harness con 2 pasadas internas y fixture reconstruida entre
+  pasadas; 3 verdes consecutivos finales; 2 rojos intermedios documentados
+  arriba con causa y fix (race del test, spawning lento). APLICADA.
+- resto (concurrencia real multiusuario, migracion de datos, rendimiento,
+  accesibilidad profunda, i18n): no-aplicable, un panel local sin usuarios
+  concurrentes ni migraciones; el presupuesto de rendimiento es del Todo 34.
+
+============================================================
+5. LIMPIEZA CON RECIBO
+============================================================
+- Borrados: scripts/dbg-task-30.mjs (sonda temporal), scripts/.task30-run*.log
+  (volcados aqui), scripts/.task30-dist y scripts/.task30-profile (el harness
+  los elimina en finally), tmpdirs octus-mcp30-* (0 restantes en %TEMP%),
+  procesos mock-qa residuales: 0 (wmic vacio tras la corrida).
+- `git status --short` deja solo entregables del Todo 30 mas el trabajo ajeno
+  del Todo 29 (no tocado):
+  M apps/desktop/src/renderer/src/App.tsx
+  M apps/desktop/src/renderer/src/store.ts
+  ?? apps/desktop/src/renderer/src/store/mcp.ts
+  ?? apps/desktop/src/renderer/src/views/mcp.tsx
+  ?? scripts/qa-task-30.mjs
+  ?? scripts/task-30-mcp.entry.tsx
+  ?? .omo/evidence/octus-ux-skills-mcp/task-30.txt
+  ?? .omo/evidence/octus-ux-skills-mcp/task-30-surface.png
+  ?? .omo/evidence/octus-ux-skills-mcp/task-30-failure.png
+  (+ M packages/core/src/index.ts, M packages/core/src/mcp/mcp-client-manager.ts,
+     ?? packages/core/src/mcp/mcp-server-management.ts,
+     ?? packages/core/test/mcp-management.test.ts,
+     ?? .omo/evidence/octus-ux-skills-mcp/task-29.txt — del Todo 29 en vuelo.)
+
+============================================================
+6. RIESGOS
+============================================================
+- El cliente de produccion invoca canales mcp.* que provee el main en el
+  Todo 29; si un canal falta, la vista muestra aviso en vez de inventar datos
+  (degradacion honesta, verificada en codigo por ruta sin backend).
+- Revocar audita trust.revoked pero el corte silencioso no emite entrada
+  "disconnect" propia (comportamiento heredado del Todo 26, no modificado);
+  la UI refleja el estado desconectado real.
+- Spawning en Windows/i3 lento: el harness usa deadlines amplios (60s) en el
+  caso failure; el producto ya acota con timeouts de 6-8s y 2 reintentos.
