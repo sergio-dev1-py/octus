@@ -27,6 +27,14 @@ export interface GatewayOptions {
   protectedRoots?: string[];
   projectIdForSession: (sessionId: string) => Promise<string>;
   layersFor: (definitionId: string, sessionId: string, instanceId: string) => Promise<PermissionLayers>;
+  /**
+   * Todo 23: dice si una skill PIDE una herramienta (`allowed-tools`,
+   * descriptivo). Nunca autoriza: si las capas niegan y la skill lo pedía,
+   * la llamada se niega y se audita como intento de evasión.
+   */
+  skillAllowsTool?: (skillName: string, action: string) => boolean;
+  /** Todo 23: registra el intento de evasión (SkillRuntime.noteBypass). */
+  noteSkillBypass?: (runId: string, skillName: string, action: string) => Promise<void>;
 }
 
 export class ToolGateway {
@@ -80,7 +88,7 @@ export class ToolGateway {
        VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?)`,
       [request.toolCallId, request.sessionId, request.runId, request.instanceId, request.name, JSON.stringify(parsed.data), request.idempotencyKey, JSON.stringify({ decision: "ask" }), started],
     );
-    await this.publishToolEvent("tool_call.requested", request, correlationId, { name: request.name });
+    await this.publishToolEvent("tool_call.requested", request, correlationId, { name: request.name, ...skillPayload(request.skillName) });
 
     const resources = scopeResources(request.name, request.directory, parsed.data);
     try {
@@ -104,7 +112,7 @@ export class ToolGateway {
         JSON.stringify({ decision: "allow", rule: verdict.via }),
         request.toolCallId,
       ]);
-      await this.publishToolEvent("tool_call.started", request, correlationId, { via: verdict.via });
+      await this.publishToolEvent("tool_call.started", request, correlationId, { via: verdict.via, ...skillPayload(request.skillName) });
     } catch (error) {
       if (isOctusError(error, "permission_declined") || isOctusError(error, "aborted") || isOctusError(error, "timeout")) {
         await this.db.exec("UPDATE tool_invocations SET status = 'denied', error = ?, completed_at = ? WHERE id = ?", [
@@ -112,16 +120,28 @@ export class ToolGateway {
           now(),
           request.toolCallId,
         ]);
-        await this.publishToolEvent("tool_call.failed", request, correlationId, { error: error.code });
+        await this.publishToolEvent("tool_call.failed", request, correlationId, { error: error.code, ...skillPayload(request.skillName) });
         throw new OctusError("tool_denied", error.message, { details: { code: error.code } });
       }
       if (isOctusError(error, "permission_denied")) {
+        // Todo 23: una skill nunca autoriza herramienta prohibida. Si la skill
+        // la pedía (`allowed-tools`) y las capas niegan, se niega y se audita.
+        const bypass =
+          request.skillName !== undefined &&
+          (this.options.skillAllowsTool?.(request.skillName, definition.manifest.permissionAction) ?? false);
+        if (bypass) {
+          await this.options.noteSkillBypass?.(request.runId, request.skillName!, definition.manifest.permissionAction);
+        }
         await this.db.exec("UPDATE tool_invocations SET status = 'denied', error = ?, completed_at = ? WHERE id = ?", [
-          error.message,
+          bypass ? `[skill-bypass-denied skill=${request.skillName}] ${error.message}` : error.message,
           now(),
           request.toolCallId,
         ]);
-        await this.publishToolEvent("tool_call.failed", request, correlationId, { error: "permission_denied" });
+        await this.publishToolEvent("tool_call.failed", request, correlationId, {
+          error: "permission_denied",
+          ...skillPayload(request.skillName),
+          ...(bypass ? { skillBypassAttempt: true } : {}),
+        });
         throw error;
       }
       throw error;
@@ -165,7 +185,7 @@ export class ToolGateway {
         now(),
         request.toolCallId,
       ]);
-      await this.publishToolEvent("tool_call.completed", request, correlationId, { artifactId });
+      await this.publishToolEvent("tool_call.completed", request, correlationId, { artifactId, ...skillPayload(request.skillName) });
       return { ok: true, text: outcome.text, fullText: outcome.fullText };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -213,6 +233,11 @@ export class ToolGateway {
     });
     this.bus.publish(event);
   }
+}
+
+/** Todo 23: procedencia de skill en eventos (auditoría, nunca autorización). */
+function skillPayload(skillName: string | undefined): Record<string, unknown> {
+  return skillName === undefined ? {} : { skill: skillName };
 }
 
 function scopeResources(tool: string, directory: string, args: unknown): string[] {

@@ -21,6 +21,8 @@ export interface ToolExecuteRequest {
   directory: string;
   name: string;
   args: unknown;
+  /** Skill que origina la llamada (auditoría; NUNCA autoriza: Todo 23). */
+  skillName?: string;
   signal?: AbortSignal;
   onPermissionRequest?: (resources: string[], detail?: string) => void;
 }

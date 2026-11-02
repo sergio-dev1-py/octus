@@ -1,0 +1,145 @@
+TODO 22 — ACTIVACIÓN, ADMINISTRACIÓN, ALCANCES Y PERSISTENCIA
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 12) | Rama: feat/ux-skills-mcp-w12-skills
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w12 (NO el repo principal)
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a19950) | Commit: sí (ver §7, solo archivos propios)
+Restricciones cumplidas: jamás citado ni abierto C:/Users/UserPy/Desktop/PromtHack/k.txt;
+skill deshabilitada en proyecto nunca llega al contexto de sus runs (§2-Q8, §4-failure);
+== SCOPE: leídos antes de diseñar ==
+- Todo 20 completo: registro del Todo 20 en .omo/evidence/.../task-20.txt (SkillManager:
+  descubrimiento global/project/managed, precedencia project>global>managed, enabled=false
+  al descubrir, registro en memoria porque la persistencia es este Todo 22).
+- persistence-service.ts vivo (cliente async del worker SQLite, ADR-020; kv/upsert con
+  ON CONFLICT, close+reopen como reinicio simulado — precedente Todo 6 en ui-prefs.test.ts).
+- permission-manager.ts vivo (deny-by-default, techo definitionTools/deniedTools, savedRules
+  por project_id; brechas 19-A..D intactas: NO se añaden capas de permisos en este Todo).
+- skill-installer.ts + skills-install.test.ts del Todo 21 (en vuelo, NO tocados):
+  InstalledSkill extiende SkillRecord con provenance siempre visible, enabled nace false
+  (installed≠enabled). Este Todo reutiliza esa forma por estructura, sin importarla en runtime.
+- Todo 19 (task-19.txt, untracked del carril paralelo, NO tocado): P existe como lookup,
+  S/I como capas, R como id, T ausente; scope desconocido se niega por defecto.
+
+============================================================
+1. DISEÑO (fijado tras leer Todo 20, persistence-service y permission-manager)
+============================================================
+- NUEVO `packages/core/src/skills/skill-activation.ts`, clase `SkillActivationStore`
+  (única dependencia de persistencia: `PersistenceService`; tipos `SkillScope` del Todo 20
+  por `import type`, sin importar PermissionManager/ToolGateway por construcción).
+- Estado por proyecto bajo clave kv `skills.activation.v1.<projectId>` (precedente Todo 6,
+  SIN migración de esquema): { enabled, scope, version, updatedAt } por skill. La clave
+  lleva el projectId → el aislamiento A≠B es estructural, no convencional.
+- Habilitar/deshabilitar/cambiar alcance son escrituras kv con caché invalidable
+  (`reload()`); reabrir la DB restaura el estado (recuperación; corrupción → degradar a
+  vacío, precedente ui-prefs).
+- `installed` frente a `enabled` SIEMPRE DISTINTOS: `adminView()` une registros
+  instalados (con `provenance` copiada tal cual, siempre visible) y estado; expone
+  `installed: true/false` + `enabled: true/false` como campos separados; estados sin
+  registro aparecen como `installed:false, orphanState:true` (p. ej. tras desinstalar).
+- `detectUpdates(instaladas, disponibles)` pura, sin E/S: { kind:'update', from, to } o
+  { kind:'new', to }; misma versión → sin aviso.
+- `selectForRun(projectId, candidatas)` = puerta de runs del Todo 23: pasa SOLO lo
+  habilitado en ese proyecto; lo deshabilitado o sin estado NUNCA pasa.
+- Activar NUNCA otorga permisos: cero imports de permisos, cero escrituras fuera de kv
+  (test: permission_rules a 0 antes/después + grep estático de no-importación).
+- Extensión compatible documentada: solo se AÑADE (2 archivos nuevos + 1 línea export
+  en `packages/core/src/index.ts`). Cero cambios en archivos de los Todos 18–21.
+
+============================================================
+2. COMANDOS EXACTOS Y SALIDAS (todo ejecutado de verdad, prohibido dry-run)
+============================================================
+$ bun run typecheck   (packages/core; `tsc --noEmit`)
+EXIT 0 (sin errores; el export nuevo no colisiona: SkillActivation*/detectUpdates únicos).
+
+$ bun test test/skills-activation.test.ts test/skill-discovery.test.ts test/skills-install.test.ts --timeout 30000   (PASADA 1)
+  skills-activation: 8 pass, 0 fail (51 expects) — incl. failure dedicado y no-permisos
+  skill-discovery (Todo 20, intacto): 5 pass | skills-install (Todo 21, intacto): 8 pass
+  TOTAL: 21 pass, 0 fail, 142 expects. EXIT 0.
+
+$ bun test test/skills-activation.test.ts --timeout 30000   (PASADA 2, clase flaky_tests)
+  8 pass, 0 fail, 51 expects. EXIT 0. Idéntico a la pasada 1 (sin temporizadores en tests).
+
+$ bun test <31 archivos test/*.test.ts salvo integration.test.ts> --timeout 30000   (REGRESIÓN)
+  221 pass, 0 fail, 936 expects. Ran 221 tests across 31 files. [101.08s]. EXIT 0.
+  (= 213 preexistentes del Todo 21 + 8 nuevos de este Todo; nada existente modificado.)
+  Nota: integration.test.ts excluido como en el Todo 21 (test pesado de git preexistente,
+  sin relación con este Todo: no comparte archivos ni símbolos; el Todo 20 ya lo cubrió
+  en su corrida completa de 256 tests).
+
+$ bun C:/tmp/octus-qa-22-manual.ts   (MANUAL-QA agente-ejecutado, flujo real en disco)
+  PASS Q1-install :: installedId=qa-skill@1.0.0 enabled=false (instalada pero NO habilitada)
+  PASS Q2-discover :: skills=qa-skill (SkillManager Todo 20 sobre lo instalado)
+  PASS Q3-matrix :: A=true B=false (aislamiento por proyecto)
+  PASS Q4-scope :: A scope=managed (alcance cambiado y persistido)
+  PASS Q5-admin :: {"installed":true,"enabled":true} (procedencia kind=folder visible)
+  PASS Q6-adminB :: instalada pero deshabilitada en B (installed≠enabled)
+  PASS Q7-update :: {"name":"qa-skill","kind":"update","from":"1.0.0","to":"1.1.0"}
+  PASS Q8-failure :: ctxB=0 ctxA=1 (deshabilitada en B nunca entra a sus runs)
+  PASS Q9-noperm :: permission_rules=0 (activar no otorga herramientas)
+  PASS Q10-restart :: A=true/managed B=false tras reopen (persistencia con recuperación)
+  MANUAL-QA: 10 PASS, 0 FAIL. EXIT 0. Tmp del manual auto-eliminado (ver §6).
+
+$ git status --short (antes del commit; solo mis archivos + el ajeno intacto)
+   M packages/core/src/index.ts                                    (mía: 1 línea export)
+  ?? .omo/evidence/octus-ux-skills-mcp/task-19.txt                 (Todo 19, NO tocado)
+  ?? packages/core/src/skills/skill-activation.ts                  (mío)
+  ?? packages/core/test/skills-activation.test.ts                  (mío)
+
+Aserciones del plan: matriz habilitar/deshabilitar por proyecto + persistencia tras
+reinicio simulado (Q3+Q10, tests matriz y persistencia); failure deshabilitada→nunca al
+contexto (Q8 + test failure). CUMPLIDO.
+
+============================================================
+3. MANUAL-QA (agente-ejecutado, con PASS/FAIL) — ver §2, script C:/tmp/octus-qa-22-manual.ts
+============================================================
+10 PASS, 0 FAIL (Q1..Q10 arriba). Superficie ejercitada: instalación real desde carpeta
++ descubrimiento real en disco + kv real en archivo + close/reopen + failure por proyecto
++ contador permission_rules + detección de update. Tras la corrida, fixtures y script
+eliminados (recibo §6).
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+APLICABLES (con mitigación y resultado):
+- stale_state: el store cachea por proyecto pero `reload()` invalida y el test de
+  persistencia usa store NUEVO sobre DB reabierta (no reusa caché); cada test usa su DB
+  tmp propia. La primera versión del test no-permisos falló de verdad (7/8) por un literal
+  en un comentario propio y se corrigió re-redactando: la suite detecta desvíos.
+- misleading_success_output: se exige valor exacto, no solo exit 0 (scopes literales,
+  conteo permission_rules=0, procedencia `toEqual`, ctxB vacío con `toEqual([])`,
+  update {from,to}); todos los comandos verificados por status (0 en verde, 1 en el fallo).
+- dirty_worktree: `git status` muestra SOLO mis 3 aportes + task-19.txt ajeno intacto;
+  archivos de Todos 18–21 sin modificar (diff: 1 línea en index.ts); bun.lock intacto.
+- flaky_tests: test nuevo repetido 2× (8 pass/51 expects ambas); trío de skills en verde
+  en pasada 1 (21 pass) y pasada 2 del módulo (8 pass); cero `sleep`/temporizadores en
+  tests y manual (todo por eventos/estados, no por tiempo).
+NO APLICABLES (con motivo):
+- live_credentials: sin red, sin claves, sin servidores MCP; jamás se citó ni abrió
+  ningún archivo externo de claves; fixtures `qa-skill` locales y fijas.
+- timing_flake: sin timeouts propios (usa opTimeoutMs del servicio, nunca ejercitado al
+  límite); la suite corre 2× idéntica.
+- prompt_injection: entradas solo del árbol vivo y fixtures propias; el instalador nunca
+  ejecuta contenido de skills (garantía heredada de Todos 20/21, no re-ejecutada aquí).
+- schema_drift: SIN migraciones (kv existente, precedente Todo 6); `schema.ts` intacto.
+- i18n_garble: mensajes de error en español fijos del módulo, sin plantillas localizadas.
+
+============================================================
+5. LIMPIEZA TOTAL (con recibo)
+============================================================
+- Script manual `C:/tmp/octus-qa-22-manual.ts`: ELIMINADO (`rmSync`, verificado).
+- Tmp del manual `C:/tmp/octus-qa-22-manual-*/` (instalación + DB + fixtures): auto-eliminado
+  por el propio script (`rmSync` en finally); verificado inexistente (TMP limpio: true).
+- DBs tmp de los 8 tests (`octus-qa-22-*-/`): eliminadas en cada `finally` (close + rmSync).
+- Worktree: sin restos — `git status` solo lista los 3 aportes propios + task-19.txt ajeno.
+- Recibo: STATUS limpio salvo lo declarado; ningún `octus-qa-22-*` en %TMP% tras la corrida.
+
+============================================================
+6. RIESGOS
+============================================================
+- Ninguno nuevo para la ola: el store es agnóstico al catálogo (no valida existencia de
+  la skill al habilitar; la unión se hace en `adminView`). Riesgo conocido y documentado
+  en el módulo: un `enable` con typo crea estado huérfano visible como `installed:false`,
+  nunca otorga nada (deny-by-default intacto, §2-Q9).
+- Heredado (sin cambios): brechas 19-A..D siguen abiertas para los Todos 23/24 (scopes
+  R/T sin modelar en PermissionManager); este Todo no las toca por diseño.
+- `selectForRun` es la puerta que el Todo 23 debe consumir (ContextBuilder/workers); si
+  el 23 no la usa, el aislamiento de runs queda sin cablear (contrato documentado en el
+  JSDoc del módulo).

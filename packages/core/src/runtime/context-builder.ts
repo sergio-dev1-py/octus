@@ -33,6 +33,10 @@ export interface InstructionExtras {
   instanceId?: string;
   /** Instrucciones de la tarea delegada (brief) si aplica. */
   taskBrief?: string;
+  /** Metadatos de skills habilitadas (`<available-skills>`, Todo 23). */
+  skillMetadata?: string;
+  /** Instrucciones completas de la skill relevante (Todo 23). */
+  skillInstructions?: string;
   /** Estado autoritativo de planes de la sesión (inyectado desde SQLite). */
   planState?: string;
   /** Entregas de subagentes pendientes de consumir. */
@@ -61,6 +65,14 @@ export class ContextBuilder {
     }
     if (extras.deliveries) {
       parts.push(`<subagent-deliveries>\n${extras.deliveries}\n</subagent-deliveries>`);
+    }
+    // Todo 23: carga progresiva de skills. Metadatos de las habilitadas +
+    // instrucciones completas SOLO de la relevante (nunca todas completas).
+    if (extras.skillMetadata) {
+      parts.push(`<available-skills>\n${extras.skillMetadata}\n</available-skills>`);
+    }
+    if (extras.skillInstructions) {
+      parts.push(extras.skillInstructions);
     }
     if (tools.length > 0) {
       const catalog = tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");

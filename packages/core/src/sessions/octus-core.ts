@@ -41,6 +41,9 @@ import { AGENT_TOOLS } from "../orchestration/agent-tools.js";
 import { DirectoryRegistry, type IsolatedDirectory } from "../orchestration/directory-registry.js";
 import { PersistenceService } from "../persistence/persistence-service.js";
 import { PermissionManager, type PermissionLayers } from "../permissions/permission-manager.js";
+import { SkillActivationStore } from "../skills/skill-activation.js";
+import { SkillManager, type SkillDiscoveryOptions } from "../skills/skill-manager.js";
+import { SkillRuntime } from "../skills/skill-runtime.js";
 import { PlanManager } from "../plans/plan-manager.js";
 import { PLAN_TOOLS } from "../plans/plan-tools.js";
 import { TaskManager } from "../tasks/task-manager.js";
@@ -84,6 +87,11 @@ export interface OctusCoreOptions {
   /** Proveedores exactos a registrar (tests con fakes). Por defecto: Meta + Go reales. */
   providers?: ModelProvider[];
   allowContributorModels?: boolean;
+  /**
+   * Todo 23: ámbitos de descubrimiento de skills. Ausente = skills
+   * desactivadas (cero cambios de comportamiento respecto a Etapas 1–6).
+   */
+  skillsDirs?: SkillDiscoveryOptions;
   runtimeOptions?: RuntimeOptions;
   onStream?: (event: StreamEvent) => void;
   onEvent?: (event: PersistedEvent) => void;
@@ -125,6 +133,8 @@ export class OctusCore {
   readonly conflicts: ConflictManager;
   readonly memory: MemoryService;
   readonly memoryWriter: MemoryWriter;
+  /** Todo 23: runtime de skills (ausente si no se pasan `skillsDirs`). */
+  readonly skills?: SkillRuntime;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -151,6 +161,11 @@ export class OctusCore {
     this.router = new ModelRouter(db, this.events, this.bus);
     this.context = new ContextBuilder(db);
     this.registry = new AgentRegistry(db, options.definitionsDir ? { definitionsDir: options.definitionsDir } : {});
+    // Todo 23: runtime de skills (carga progresiva + registro por run). Solo
+    // existe si se configuran ámbitos; sin ellos, cero cambios de comportamiento.
+    if (options.skillsDirs) {
+      this.skills = new SkillRuntime(db, new SkillManager(options.skillsDirs), new SkillActivationStore(db));
+    }
     const cfg = config.get();
     const toolServices: ToolServices = {};
     this.gateway = new ToolGateway(
@@ -174,6 +189,9 @@ export class OctusCore {
         shellTimeoutMs: cfg.shellTimeoutMs,
         maxInlineChars: cfg.maxOutputChars,
         protectedRoots: [options.dataDir],
+        // Todo 23: veto a evasión por skill (la skill nunca autoriza; se audita).
+        skillAllowsTool: this.skills ? (name, action) => this.skills!.skillAllows(name, action) : undefined,
+        noteSkillBypass: this.skills ? (runId, name, action) => this.skills!.noteBypass(runId, name, action) : undefined,
         projectIdForSession: async (sessionId: string) => (await this.requireSession(sessionId)).projectId,
         layersFor: async (definitionId: string, _sessionId: string, instanceId: string): Promise<PermissionLayers> => {
           // Foto de la instancia (ADR-028); legacy sin snapshot: definición viva.
@@ -210,6 +228,8 @@ export class OctusCore {
         planState: async (sessionId: string) => this.sessionPlanState(sessionId),
         deliveries: async (sessionId: string) => this.sessionDeliveries(sessionId),
         projectIdOf: async (sessionId: string) => (await this.requireSession(sessionId)).projectId,
+        // Todo 23: secciones progresivas de skills (coordinador y workers).
+        skillSections: this.skills ? (input) => this.skills!.sectionsFor(input) : undefined,
       },
     });
     this.agents = new AgentManager(
@@ -225,6 +245,8 @@ export class OctusCore {
       () => this.worktrees,
       () => this.conflicts,
       () => this.integrations,
+      // Todo 23: workers solo con skills autorizadas en el proyecto.
+      this.skills ?? undefined,
     );
     this.memory = new MemoryService(db, this.events, this.bus);
     this.memoryWriter = new MemoryWriter(this.memory, this.questions);

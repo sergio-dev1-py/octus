@@ -191,6 +191,55 @@ export interface OctusIPC {
   "memory.resolve": { request: { winnerId: string; note?: string }; response: { ok: boolean; status?: string; error?: string } };
   "recovery.status": { request: Record<string, never>; response: { pendingOps: number; startedPromotions: number; livePreviews: number; staleMemories: number; pendingContradictions: number } };
   "recovery.reconcile": { request: Record<string, never>; response: { ok: boolean; summary?: { tasks: { interrupted: number; released: number }; worktrees: { suspended: number; orphaned: number; resumed: number }; integrations: { resolved: number; interrupted: number; stale: number }; previews: { orphaned: number }; promotions: { resolved: number; diverged: number }; orphanedPlans: number; memory: { checked: number; markedStale: string[] } }; error?: string } };
+  "skills.catalog": { request: { projectId?: string }; response: { skills: SkillCatalogItem[]; errors: SkillCatalogError[] } };
+  "skills.inspect": { request: { name: string; projectId?: string }; response: { detail: SkillDetail } };
+  "skills.importFolder": { request: { path: string; scope?: SkillScopeName }; response: { ok: boolean; skill?: SkillCatalogItem; error?: string } };
+  "skills.importZip": { request: { path: string; scope?: SkillScopeName }; response: { ok: boolean; skill?: SkillCatalogItem; error?: string } };
+  "skills.installGit": { request: { repoUrl: string; ref: string; sourceDir?: string; scope?: SkillScopeName }; response: { ok: boolean; skill?: SkillCatalogItem; error?: string } };
+  "skills.uninstall": { request: { name: string }; response: { ok: boolean; error?: string } };
+  "skills.enable": { request: { projectId: string; name: string; scope?: SkillScopeName }; response: { ok: boolean; error?: string } };
+  "skills.disable": { request: { projectId: string; name: string }; response: { ok: boolean; error?: string } };
+  "skills.setScope": { request: { projectId: string; name: string; scope: SkillScopeName }; response: { ok: boolean; error?: string } };
+  "skills.history": { request: { runId: string }; response: { skills: string[]; bypass: Array<{ skill: string; action: string; at: number }> } };
+  "skills.resource": { request: { name: string; relativePath: string }; response: { ok: boolean; content?: string; error?: string } };
+}
+
+/** Todo 24 — tipos de Skills para el IPC (planos y serializables; `installed` y `enabled` siempre distintos). */
+export type SkillScopeName = "global" | "project" | "managed";
+
+export interface SkillCatalogItem {
+  id: string;
+  name: string;
+  description: string;
+  version?: string;
+  origin: SkillScopeName;
+  scope: SkillScopeName;
+  path: string;
+  /** true si está instalada (registro del instalador); installed ≠ enabled siempre. */
+  installed: boolean;
+  /** true si está habilitada en el proyecto pedido (false sin projectId). */
+  enabled: boolean;
+  compatibility?: string;
+  allowedTools?: string;
+  errors: string[];
+  seenIn: Array<{ scope: SkillScopeName; path: string }>;
+  provenance: unknown;
+}
+
+export interface SkillCatalogError {
+  path: string;
+  scope: SkillScopeName;
+  clause: string;
+  message: string;
+}
+
+export interface SkillDetail extends SkillCatalogItem {
+  /** Frontal SKILL.md como texto (sin interpretar). */
+  frontmatterText: string;
+  /** Cuerpo SKILL.md sin frontal, topado (carga progresiva). */
+  body: string;
+  /** Archivos relativos dentro de la skill (recursos). */
+  files: string[];
 }
 
 export type IpcChannel = keyof OctusIPC;

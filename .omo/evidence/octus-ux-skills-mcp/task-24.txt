@@ -1,0 +1,153 @@
+TODO 24 — SKILLS MANAGER UI, CONFIGURACIÓN Y VISTA CONTEXTUAL
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 12, cierra GAP-2) | Rama: feat/ux-skills-mcp-w12-skills
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w12 (NO el repo principal)
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a19966) | Commit: sí (ver §7)
+Restricciones cumplidas: jamás citado ni abierto C:/Users/UserPy/Desktop/PromtHack/k.txt;
+archivos de los Todos 18–23 intactos salvo montaje aditivo documentado (§6);
+evidencia en el WORKTREE; prohibido dry-run (todo ejecutado de verdad).
+
+== SCOPE: leído antes de diseñar ==
+- Todo 4 (task-4.txt + W-S1..S7): catálogo con origen; instaladas/habilitadas
+  como filtros excluyentes con contador; detalle con descripción, versión,
+  alcance, recursos, procedencia y errores; instalar desde carpeta/zip/git con
+  fuente explícita; historial por run; misma vista en configuración y contexto
+  (nada de pantallas gemelas); instalada≠habilitada siempre; error visible que
+  bloquea habilitar.
+- Todo 20 (skill-manager.ts): SkillManager + validateSkillDir (C1..C8) + tipos
+  SkillRecord/SkillScope; enabled nace false; precedencia project>global>managed.
+- Todo 22 (skill-activation.ts): SkillActivationStore + selectForRun + adminView
+  (installed≠enabled siempre distintos) + kv skills.activation.v1.<projectId>.
+- Todo 7 (oc.tsx + oc-components.css + tokens.css): OcButton/OcDialog/OcMenu/
+  OcIcon/OcTable/OcEmpty/OcErrorState sobre var(--oc-*), sin literales.
+
+== ENTREGABLES ==
+Backend (montaje aditivo, cero cambios en servicios 18–23):
+- packages/shared/src/ipc.ts (+12 tipos/cadenas): 11 canales skills.*
+  (catalog, inspect, importFolder, importZip, installGit, uninstall, enable,
+  disable, setScope, history, resource) + SkillCatalogItem/SkillCatalogError/
+  SkillDetail/SkillScopeName. installed y enabled siempre distintos.
+- packages/core/src/index.ts (+1 línea): expone skill-installer (SkillInstaller,
+  InstallProvenance, createZip) para que main lo monte sin duplicar tipos.
+- apps/desktop/src/main/skills-service.ts (NUEVO): MainSkillsService — une
+  SkillManager (global=<dataDir>/skills-global, project=<root>/.octus/skills,
+  managed=<dataDir>/skills-managed) + SkillInstaller (<dataDir>/skills-installed)
+  + SkillActivationStore + SkillRuntime SOBRE EL MISMO manager y store de core.db
+  (sin segundo store: evita cachés rancias). enable revalida SKILL.md en disco
+  (validateSkillDir) + consulta errores de descubrimiento: con error de
+  validación se BLOQUEA con el mensaje C1..C8. resource es inspección (sin exigir
+  habilitación); la puerta de runs sigue intacta en el core.
+- apps/desktop/src/main/index.ts (aditivo): 11 canales en CHANNELS + handlers
+  (dominio → {ok:false,error}; payload malformado → throw). Sin tocar handlers
+  existentes.
+Frontend (componentes del Todo 7, tokens, sin literales de diseño):
+- apps/desktop/src/renderer/src/store/state.ts (aditivo): slice skills
+  (catalog, errors, filter, search, selected, detail, history, notice).
+- apps/desktop/src/renderer/src/store/skills.ts (NUEVO): refreshSkillsCatalog/
+  Detail, selectSkill, enable/disable/setScope, uninstall, import×3, history.
+- apps/desktop/src/renderer/src/views/skills.tsx (NUEVO): SkillsManagerView
+  (W-S1..S6: #skills-manager, filtros #skills-filter-*, #skills-search,
+  #skills-list[data-skill-name + data-installed + data-enabled], pastillas
+  instalada≠habilitada, badges origen/alcance, #skills-detail con nombre@versión,
+  origen, alcance, procedencia, compatibilidad, allowed-tools, errores, botones
+  #skills-enable/#skills-disable/#skills-scope/#skills-uninstall, lector de
+  recursos, #skills-import con pick nativo + zip + git, #skills-history con
+  run_qa01→qa-skill, #skills-errors con [data-skill-error-blocked] disabled) +
+  SkillsContextPanel (#skills-context, #skills-open-settings).
+- views/workbench.tsx: SkillsMcpPanel pasa a montar SkillsContextPanel real
+  (el placeholder de la ola 11 desaparece; MCP llega en la ola 13).
+- views/settings.tsx: SettingsView incluye la MISMA SkillsManagerView
+  (W-S7, sin pantallas gemelas).
+- store.ts / bootstrap.ts / projects.ts (aditivo): export skills, refresh en
+  reloadStage2 y al cambiar de proyecto (aislamiento por proyecto).
+QA (scripts, se quedan como en olas anteriores):
+- scripts/verify-task-24-skills.mjs: stack real (manager, installer, activation
+  con PersistenceService en tmp, runtime) con qa-skill@1.0.0 + broken-skill.
+- scripts/task-24-skills.entry.tsx: entrada solo-QA (vite la compila; nadie la
+  importa en producto).
+- scripts/qa-task-24.mjs: build vite real + Chromium headless por CDP (patrón
+  del Todo 7, sin Playwright paquete) + 27 aserciones ×2 pasadas + screenshot.
+
+== COMANDOS EJECUTADOS (todos reales, con exit code observado) ==
+1) `bun run typecheck` (raíz: shared + core + desktop, en el WORKTREE)
+   → EXIT 0 (×2: tras el frontend y tras los fixes de QA).
+   Nota: la primera invocación corrió en cwd equivocado (sin workdir); se
+   repitió con cd al worktree → EXIT 0. Sin cambios de código por ello.
+2) `bun test ./test/skills-activation.test.ts ./test/skills-install.test.ts
+   ./test/skills-runtime.test.ts ./test/skill-discovery.test.ts` (packages/core)
+   → 30 pass, 0 fail, 200 expect() calls, 4 archivos. (El filtro sin `./`
+   no casa en este bun 1.4.2 Windows; con `./` va en verde.)
+3) `bun scripts/verify-task-24-skills.mjs` → TOTAL: 72 PASS, 0 FAIL (2 pasadas
+   p1+p2). Cubre: catálogo con qa-skill (origen project, alcance project,
+   versión 1.0.0, enabled=false), old-helper global, errores C3+C1 visibles sin
+   ser skills, idempotencia; importar carpeta qa-skill@1.0.0 (nace
+   deshabilitada, procedencia carpeta); duplicado → already_exists; zip válido
+   con recursos; zip con `../evil.md` rechazado SIN escribir; git con fuente
+   explícita; inspect frontal+archivos; desinstalar limpio; habilitar en A sin
+   afectar a B; setScope; persistencia tras reinicio simulado; adminView con
+   installed≠enabled; puerta de runs (solo habilitadas; deshabilitada NUNCA
+   llega); historial run_qa01→qa-skill; carga progresiva (metadatos+relevante);
+   failure broken-skill C3 bloquea habilitar y no queda habilitada; recurso con
+   `..` → scope_violation. Limpieza verificada por pasada (tmp inexistente).
+4) `node scripts/qa-task-24.mjs` → QA Todo 24: 54 PASS / 0 FAIL (27×2 pasadas).
+   Intermedio: 24/54 por (a) la entrada QA no disparaba el refresh inicial
+   (en producto lo hace initStore; fix: la entrada llama al mismo
+   refreshSkillsCatalog del store) y (b) el preload dinámico de chunks de vite
+   se colgaba en headless (fix: imports estáticos en entrada y vista; también
+   beneficia al bundle de producto). Tras los fixes: 54/54 en verde ×2,
+   screenshot en task-24-surface.png (mirado: import, historial run_qa01 →
+   qa-skill, contexto con old-helper [global], error C3 con habilitar
+   bloqueado, botón Abrir Skills Manager).
+5) `bun run build` (apps/desktop) → EXIT 0 (main 1970.81 kB, renderer
+   JS 436.47 kB + CSS 26.13 kB). Bundle verificado: 4/4 selectores skills
+   (skills-manager, skills.catalog, skills-context, skills-detail) en
+   out/renderer. out/ no se commitea (artefacto de build).
+
+== MANUAL-QA de superficie real (ejecutado, no simulado) ==
+| # | Comprobación | Resultado |
+| --- | --- | --- |
+| 1 | Catálogo con qa-skill instalada+habilitada y old-helper instalada pero deshabilitada (pastillas distintas) | PASS (smoke p1+p2 + screenshot) |
+| 2 | Detalle qa-skill@1.0.0 con origen project, alcance project, procedencia carpeta, recursos docs/uso.md | PASS |
+| 3 | Filtros excluyentes: habilitadas deja 1, instaladas 2, buscar filtra | PASS |
+| 4 | Importar carpeta añade fila + aviso; pick rellena ruta | PASS |
+| 5 | Habilitar/deshabilitar cambian pastillas y contadores con reactividad real | PASS |
+| 6 | Historial run_qa01 → qa-skill; recurso docs/uso.md legible bajo demanda | PASS |
+| 7 | Failure: broken-skill C3 visible y Habilitar bloqueado (disabled + title) | PASS (UI + servicio 72/72) |
+| 8 | Vista contextual con habilitadas + aviso de error + Abrir Skills Manager | PASS |
+| 9 | Tokens: primario usa --oc-accent rgb(31,95,168); tema oscuro responde | PASS |
+| 10 | Build produce bundle con la UI de skills (4/4 selectores) | PASS |
+
+== CLASES ADVERSARIALES ==
+- stale_state: APLICABLE. Riesgo real hallado y corregido: segundo
+  SkillActivationStore dejaría caché rancia (se usa UN store compartido con el
+  runtime); entry QA con estado propio separado del producto (puente con
+  estado, documentado). Re-ejecución ×2 en ambos scripts.
+- misleading_success_output: APLICABLE. Prohibido afirmar por memoria: cada
+  PASS sale de la herramienta (bun/node/Chromium). El cwd equivocado del primer
+  typecheck se detectó y repitió en el worktree (EXIT 0). Los 24 FAIL
+  intermedios del smoke se diagnosticaron (sin refresh inicial; preload
+  colgado), se corrigieron en producto+sonda y dieron 54/54.
+- dirty_worktree: APLICABLE. Solo mis archivos (§7): 9 modificados + 7 nuevos.
+  task-19.txt es del Todo hermano en paralelo (NO se toca, NO se commitea).
+  out/ es artefacto (no se commitea). Procesos: ninguno en pie (chromium con
+  taskkill+reintentos; servidores http cerrados; dist/profile eliminados).
+- flaky_tests: APLICABLE. verify ×2 y smoke ×2 (54/54 en ambas); sin timers,
+  sin red, sin azar (Chromium por CDP con reintentos de limpieza).
+- hung_or_long_commands: NO APLICA. Ningún comando superó el foreground salvo
+  el smoke (~3 min) que se ejecutó en background con recibo y log.
+- cancel_resume: NO APLICA. Sin cancelaciones.
+- malformed_input: APLICABLE como failure ejecutado: zip traversal, duplicado,
+  SKILL.md sin name, recurso con `..`, enable de inexistente — todos
+  rechazados con mensaje (72/72 y smoke).
+- prompt_injection: NO APLICA como trigger. Contenido de skills tratado como
+  dato (solo lectura; el instalador rechaza symlinks y traversal).
+- repeated_interruptions: NO APLICA. Ejecución sin interrupciones.
+
+== RECIBO DE LIMPIEZA ==
+Eliminados: scripts/dbg-task-24.mjs, scripts/.task24-profile-dbg/,
+scripts/.task24-dist/, scripts/.task24-profile/ (verificado ausentes tras el
+commit). /tmp/* del harness (t24-*.log) fuera del repo. Temporales de fixtures
+en OS-tmp eliminados por los propios scripts (check `limpieza pasada p1/p2`).
+`git status --porcelain` tras el commit: solo task-19.txt (hermano) y out/
+(ignorado o sin cambios).
+Ramas y push los gestiona el coordinador (commit previsto:
+feat(frontend): skills manager ui and settings).

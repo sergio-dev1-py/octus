@@ -13,6 +13,7 @@ import type { EventBus, EventStore } from "../events/event-store.js";
 import type { PersistenceService } from "../persistence/persistence-service.js";
 import type { ModelRouter } from "../providers/model-router.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
+import type { SkillSpawnGate } from "../skills/skill-runtime.js";
 import { sameOrInside } from "../tools/path-scope.js";
 import type { AgentDelivery, AgentStatusView, AgentToolService, SpawnMode, SpawnRequest, SpawnResult } from "../tools/tool-services.js";
 import type { WorktreePort } from "../worktrees/worktree-port.js";
@@ -56,6 +57,8 @@ export class AgentManager implements AgentToolService {
     private readonly worktrees?: () => WorktreePort | undefined,
     private readonly resolutions?: () => ResolutionPort | undefined,
     private readonly integrations?: () => IntegrationPort | undefined,
+    /** Todo 23: puerta de skills para `spawn` (ausente = spawn con skills se niega). */
+    private readonly skillGate?: SkillSpawnGate,
   ) {}
 
   // ------------------------------------------------------------------ spawn
@@ -66,6 +69,19 @@ export class AgentManager implements AgentToolService {
     if (!definition) throw new OctusError("not_found", `Agent definition not found: ${request.definitionId}`);
     if (!parentSnapshot.canDelegateTo.includes(definition.kind)) {
       throw new OctusError("delegation_denied", `Profile '${parent.definitionId}' cannot delegate to '${definition.kind}'`);
+    }
+    // Todo 23: workers solo con autorizadas. Sin puerta configurada, el spawn
+    // con skills se niega (deny-by-default); con puerta, cada skill debe estar
+    // habilitada en el proyecto del padre.
+    if (request.skillNames !== undefined && request.skillNames.length > 0) {
+      if (!this.skillGate) {
+        throw new OctusError("invalid_state", "Spawn con skills sin puerta de autorización: se niega");
+      }
+      for (const name of request.skillNames) {
+        if (!(await this.skillGate.isAllowed(parent.projectId, name))) {
+          throw new OctusError("scope_violation", `Skill '${name}' no habilitada en este proyecto`, { details: { area: "skills" } });
+        }
+      }
     }
     const depth = (await this.depthOf(parent.id)) + 1;
     const limits = this.getLimits();

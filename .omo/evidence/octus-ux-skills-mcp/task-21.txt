@@ -1,0 +1,151 @@
+TODO 21 — INSTALACIÓN, IMPORTACIÓN, DESINSTALACIÓN E INSPECCIÓN DE SKILLS
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 12) | Rama: feat/ux-skills-mcp-w12-skills
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a19944) | Commit: sí (ver §7)
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w12 (NO el repo principal)
+
+Archivos aportados (contenido distinto a 18/19/20; no se toca archivo ajeno):
+  NUEVO  packages/core/src/skills/skill-installer.ts  (SkillInstaller + InstalledSkill + InstallProvenance + installedId)
+  NUEVO  packages/core/src/skills/zip-util.ts          (zip stored/deflate sin dependencias, solo node:zlib)
+  NUEVO  packages/core/test/skills-install.test.ts    (8 tests, fixtures efímeros qa-skill@1.0.0)
+  NUEVO  este archivo (.omo/evidence/.../task-21.txt, en el WORKTREE)
+
+ASUNCIONES DOCUMENTADAS
+  A1. El Todo 20 YA aterrizó durante este turno (commit 4edbdab: skill-manager.ts
+      con SkillRecord/SkillScope + test skill-discovery.test.ts). La asunción del
+      goal ("si aún no existe su API, define contra el contrato") quedó obsoleta:
+      se aplicó la directriz de convergencia del coordinador (obligatoria): NO se
+      definen tipos paralelos; el instalador importa y reutiliza SkillRecord y
+      SkillScope del Todo 20 (`InstalledSkill extends SkillRecord`, reexportados
+      para conveniencia) y reutiliza su `validateSkillDir` como única fuente de
+      validación C1..C8. Prueba en §6 (R1: una sola definición exportada).
+  A2. El goal citaba "contrato C-02 del Todo 5", pero C-02 es Bienvenida; los
+      contratos de Skills son C-07 (registro) y C-08 (instalación/importación/
+      administración). Se implementó contra C-07/C-08.
+  A3. `id` conserva la convención del Todo 20 (`id == name`, C4). La versión va en
+      `version` (de `metadata.version`, Todo 18) y `nombre@versión` es presentación
+      vía `installedId()` (p. ej. `qa-skill@1.0.0`). El ámbito `octus` del borrador
+      equivale a `managed` ("gestionado por Octus") del Todo 20: NO se creó un
+      cuarto ámbito; se usa `SkillScope` tal cual. La procedencia explícita de la
+      fuente (carpeta/zip/git+ref, C-08) vive en `provenance`, no en `origin`.
+  A4. Persistencia en tablas `skills`/`skill_states` e IPC (`skills.install`,
+      `skills.uninstall`, `skills.inspect`) quedan para los Todos 20/22; este
+      módulo es registro en memoria + archivos, sin red y sin ejecutar nada.
+  A5. `installFromGit` NUNCA clona por red: exige `sourceDir` (copia obtenida por
+      el operador con autorización explícita); sin ella rechaza con `invalid_state`.
+
+============================================================
+1. COMANDOS EXACTOS Y SALIDAS (ejecutados de verdad, prohibido dry-run)
+============================================================
+
+$ bun run typecheck   (packages/core; tsc --noEmit)
+EXIT 0 (tres archivos convergidos compilan; skill-discovery del Todo 20 intacto)
+
+$ bun test test/skills-install.test.ts test/skill-discovery.test.ts --timeout 30000   (PASADA 1)
+  skill-discovery: 5 pass | skills-install: 8 pass, 0 fail (91 expects) | EXIT 0
+
+$ bun test test/skills-install.test.ts --timeout 30000   (PASADA 2, clase flaky 2×)
+  8 pass, 0 fail (45 expects) | EXIT 0 — idéntico a la pasada 1
+
+$ bun test <30 archivos test/*.test.ts salvo integration.test.ts> --timeout 30000   (regresión)
+  213 pass, 0 fail (885 expects) | EXIT 0 en ~91 s. Incluye skill-discovery (5/5)
+  del Todo 20 y skills-install (8/8) del Todo 21. Nada existente se modificó
+  (solo archivos NUEVOS en src/skills/ y test/), luego la regresión es aditiva.
+
+$ interop SO: zip creado con Compress-Archive (PowerShell, deflate real) →
+  readZipEntries lo lee (["SKILL.md"]) | tmp verificado inexistente tras limpiar
+
+Nota integration.test.ts: en la corrida completa inicial, J4
+("task con dos predecesores") superó 30000 ms en esta máquina (i3 Windows) y el
+harness cortó la corrida a los 300 s. Es un test pesado de git preexistente, sin
+relación con este Todo (no comparte archivos ni imports con skills/*; mis
+archivos son aditivos). La regresión de 30/31 archivos en verde lo deja acotado.
+
+Aserciones del plan cumplidas por `bun test`:
+  - instala qa-skill@1.0.0 desde carpeta (installedId + version + provenance folder)
+  - instala qa-skill@1.0.0 desde zip compatible (provenance zip, bytes idénticos)
+  - rechaza duplicado (already_exists) sin tocar la vigente (1 registro, bytes intactos)
+  - desinstala limpio (list vacío, directorio ausente, inspect posterior not_found)
+  - procedencia visible en list/inspect (folder/zip/git con repo+ref)
+  - failure: zip con ruta fuera de la skill se rechaza SIN ESCRIBIR NADA
+    (fase 1 valida todo antes de tocar disco; staging siempre limpiado)
+
+============================================================
+2. MANUAL-QA (toda interacción la ejecuta el agente; PASS/FAIL por línea)
+============================================================
+  MQ-1 Instalar desde carpeta local con procedencia visible ............ PASS
+  MQ-2 Instalar desde zip compatible ................................... PASS
+  MQ-3 Rechazar duplicado (already_exists), vigente intacta ............ PASS
+  MQ-4 Desinstalar limpio (sin restos en disco ni registro) ............ PASS
+  MQ-5 Inspeccionar: registro + frontal + árbol de archivos, sin ejecutar  PASS
+  MQ-6 Zip malicioso (../evil.txt, qa-skill/../../evil2.txt, /abs.txt):
+       rechazado invalid_definition, cero escrituras, sin escapes ...... PASS
+  MQ-7 Git con fuente explícita (repo+ref visibles); sin copia exige
+       autorización explícita (invalid_state), sin tocar red ............ PASS
+  MQ-8 Interop: zip real del SO (deflate) legible por el lector ........ PASS
+  MQ-9 Convergencia R1: una sola definición SkillRecord/SkillScope
+       (skill-manager.ts:29,38); instalador sin tipos paralelos ........ PASS
+  MQ-10 Archivos de 18/19/20 intactos (git status, §6) ................. PASS
+
+============================================================
+3. CLASES ADVERSARIALES
+============================================================
+APLICABLES (con resultado):
+  - stale_state: registro en memoria por instancia de SkillInstaller (sin estado
+    global); staging con sufijo temporal y limpieza en finally; typecheck y
+    tests releen disco en cada corrida. Resultado: VERDE x2 idéntico.
+  - misleading_success_output: se exige PASS nominal Y exit 0; typecheck exige
+    tsc limpio; el desarrollo mostró 3 failures reales detectados (CRC, tipos
+    pre-convergencia) antes del verde, luego la suite sí detecta regresiones.
+  - dirty_worktree: `git status --short` (§6) muestra solo los 3 archivos NUEVOS
+    de este Todo + este task-21.txt; task-19.txt (Todo 19) intacto sin staged;
+    Todo 18 (scripts/validate-agent-skill.mjs, task-18.txt) y Todo 20
+    (skill-manager.ts, skill-discovery.test.ts) no tocados.
+  - flaky_tests (repetir 2×): skills-install 8/8 en PASADA 1 y PASADA 2 con
+    conteos de expects estables (45 en solitario); sin sleeps ni red en el test.
+  - malformed_input (zip malicioso con path traversal): `../evil.txt`,
+    `qa-skill/../../evil2.txt`, `/abs.txt` → invalid_definition "ruta fuera de
+    la skill"; verificado: registro vacío, raíz instalada vacía, sin staging,
+    sin `evil.txt`/`evil2.txt`/`abs.txt` fuera; más zip sin SKILL.md y
+    frontal C4 rechazados igual sin escribir.
+NO-APLICABLES (con motivo):
+  - live_credentials/red: cero red (prohibido por el goal); installFromGit no
+    clona; sin claves en código, logs ni evidencia; jamás se abrió k.txt.
+  - prompt_injection: entradas solo del árbol vivo y fixtures propios.
+  - schema_drift: sin migraciones (persistencia = Todo 22).
+  - i18n_garble: mensajes en español del plan, sin plantillas localizadas.
+
+============================================================
+4. LIMPIEZA TOTAL (recibo)
+============================================================
+  - Fixtures de test: mkdtemp bajo %TEMP%/octus-qa-21-* con rm en finally.
+  - Interop SO: %TEMP%/octus-qa21-interop-* eliminado (verificado inexistente).
+  - Verificación: dir %TEMP% sin `octus-qa-21-*` ni `octus-qa-probe-19*` → (ninguno).
+  - En el worktree solo quedan los 4 archivos del §1. Nada en C:/tmp.
+
+============================================================
+5. RIESGOS
+============================================================
+  - Ninguno nuevo. Heredado: persistencia (Todo 22) e IPC aún pendientes; el
+    registro del instalador es en memoria y compatible por diseño.
+  - integration.test.ts J4 supera 30 s en esta máquina (preexistente, §1 Nota).
+
+============================================================
+6. ESTADO GIT (coordinación por contenido distinto, misma rama)
+============================================================
+$ git status --short  (antes de commitear este Todo)
+  ?? .omo/evidence/octus-ux-skills-mcp/task-19.txt            (Todo 19, NO tocado)
+  ?? packages/core/src/skills/skill-installer.ts             (Todo 21, NUEVO)
+  ?? packages/core/src/skills/zip-util.ts                    (Todo 21, NUEVO)
+  ?? packages/core/test/skills-install.test.ts               (Todo 21, NUEVO)
+Compromiso R1 verificado por lectura: `export type SkillScope` y
+`export interface SkillRecord` existen UNA vez (skill-manager.ts:29,38);
+skill-installer.ts los importa/reexporta y no define paralelos
+(InstallProvenance + InstalledSkill extends SkillRecord son adición, no duplicado).
+
+============================================================
+7. COMMIT
+============================================================
+$ git add packages/core/src/skills/skill-installer.ts packages/core/src/skills/zip-util.ts packages/core/test/skills-install.test.ts .omo/evidence/octus-ux-skills-mcp/task-21.txt
+$ git commit -m "feat(skills): install, import, uninstall and inspect"
+Formato del plan para el Todo 21. task-19.txt (Todo 19) queda untracked a
+propósito: lo commitea su propio ejecutor.

@@ -18,6 +18,7 @@ import { backoffMs, now } from "../util.js";
 import { COMPACTION_PROMPT } from "../prompts/prompts.js";
 import type { ContextBuilder } from "./context-builder.js";
 import { nextMessageId } from "./context-builder.js";
+import type { SkillPromptSections, SkillSectionsHook } from "../skills/skill-runtime.js";
 import type { EventBus, EventStore } from "../events/event-store.js";
 import type { PersistenceService } from "../persistence/persistence-service.js";
 import type { ModelRouter } from "../providers/model-router.js";
@@ -36,11 +37,13 @@ export interface RuntimeOptions {
   compactionThresholdRatio?: number;
   compactionKeepTokens?: number;
   baseInstructions?: string;
-  /** Proveedores de contexto de sesión (planes, entregas, proyecto). */
+  /** Proveedores de contexto de sesión (planes, entregas, proyecto, skills). */
   sessionProviders?: {
     planState?: (sessionId: string) => Promise<string | undefined>;
     deliveries?: (sessionId: string) => Promise<string | undefined>;
     projectIdOf?: (sessionId: string) => Promise<string | undefined>;
+    /** Todo 23: secciones progresivas de skills (metadatos + relevante). */
+    skillSections?: SkillSectionsHook;
   };
 }
 
@@ -80,6 +83,9 @@ export class AgentRuntime {
     const instance = await this.loadInstance(instanceId);
     const definition = await this.loadDefinition(instance.definitionId);
     const session = await this.loadSession(instance.sessionId);
+    // Todo 23: secciones de skills una vez por run (coordinador y workers).
+    // Si falla, el run sigue sin skills (nunca rompen la generación).
+    const skillSections = await this.resolveSkillSections(instance, session);
     const tools = this.toolsFor(definition);
     const started = now();
     let steps = 0;
@@ -94,7 +100,7 @@ export class AgentRuntime {
         if (now() - started > definition.timeoutMs) {
           return await this.finish(instance, "failed", "", steps, opts.correlationId, `Run exceeded its timeout (${definition.timeoutMs}ms)`, ownsRun);
         }
-        const step = await this.runStep(instance, definition, session, tools, opts);
+        const step = await this.runStep(instance, definition, session, tools, opts, skillSections);
         steps++;
         if (step.fatal) {
           return await this.finish(instance, "failed", step.finalText, steps, opts.correlationId, step.fatal, ownsRun);
@@ -103,7 +109,7 @@ export class AgentRuntime {
           return await this.finish(instance, "completed", step.finalText, steps, opts.correlationId, undefined, ownsRun);
         }
       }
-      const closing = await this.closingStep(instance, definition, session, tools, opts);
+      const closing = await this.closingStep(instance, definition, session, tools, opts, skillSections);
       return await this.finish(instance, "completed", closing, steps + 1, opts.correlationId, undefined, ownsRun);
     } catch (error) {
       if (isOctusError(error, "aborted") || opts.signal.aborted) {
@@ -120,9 +126,16 @@ export class AgentRuntime {
     session: Session,
     tools: NormalizedTool[],
     opts: RunInstanceOptions,
+    skill?: SkillPromptSections,
   ): Promise<{ done: boolean; finalText: string; fatal?: string }> {
     const isCoordinator = definition.kind === "coordinator";
     const providers = this.options.sessionProviders;
+    // Todo 23: carga progresiva para coordinador y workers (metadatos +
+    // relevante completa; ausente = prompt sin cambios).
+    const skillExtras = {
+      skillMetadata: skill?.metadata || undefined,
+      skillInstructions: skill?.full || undefined,
+    };
     const extras = isCoordinator
       ? {
           projectId: providers?.projectIdOf ? await providers.projectIdOf(session.id) : undefined,
@@ -132,6 +145,7 @@ export class AgentRuntime {
           instanceId: instance.id,
           planState: providers?.planState ? await providers.planState(session.id) : undefined,
           deliveries: providers?.deliveries ? await providers.deliveries(session.id) : undefined,
+          ...skillExtras,
         }
       : {
           projectId: providers?.projectIdOf ? await providers.projectIdOf(session.id) : undefined,
@@ -139,6 +153,7 @@ export class AgentRuntime {
           runId: instance.runId,
           taskId: instance.taskId,
           instanceId: instance.id,
+          ...skillExtras,
         };
     const instructions = await this.context.buildInstructions(definition, instance.directory, tools, extras);
     const built = isCoordinator ? await this.context.buildSessionMessages(session.id) : await this.context.buildMessages(instance.id);
@@ -441,9 +456,17 @@ export class AgentRuntime {
     session: Session,
     _tools: NormalizedTool[],
     opts: RunInstanceOptions,
+    skill?: SkillPromptSections,
   ): Promise<string> {
     void _tools;
-    const instructions = `${await this.context.buildInstructions(definition, instance.directory, [])}\n\nMaximum steps reached for this run. Do not call tools. Reply with text only: what was accomplished, what remains, and recommended next steps.`;
+    const instructions = `${await this.context.buildInstructions(definition, instance.directory, [], {
+      projectId: undefined,
+      sessionId: session.id,
+      runId: instance.runId,
+      instanceId: instance.id,
+      skillMetadata: skill?.metadata || undefined,
+      skillInstructions: skill?.full || undefined,
+    })}\n\nMaximum steps reached for this run. Do not call tools. Reply with text only: what was accomplished, what remains, and recommended next steps.`;
     const built =
       definition.kind === "coordinator" ? await this.context.buildSessionMessages(session.id) : await this.context.buildMessages(instance.id);
     const resolution = this.router.resolve({
@@ -483,6 +506,32 @@ export class AgentRuntime {
       await this.appendMessageWithId(instance, messageId, "assistant", [{ type: "text", text }], "tool", undefined, opts.correlationId, this.messageMode(definition, session));
     }
     return text;
+  }
+
+  /**
+   * Todo 23: resuelve las secciones de skills una vez por run (coordinador y
+   * workers). Sin gancho, sin proyecto o ante cualquier fallo, devuelve
+   * undefined: las skills nunca rompen la generación.
+   */
+  private async resolveSkillSections(instance: AgentInstance, session: Session): Promise<SkillPromptSections | undefined> {
+    const hook = this.options.sessionProviders?.skillSections;
+    if (!hook) return undefined;
+    try {
+      const projectId = await this.options.sessionProviders?.projectIdOf?.(session.id);
+      if (!projectId) return undefined;
+      let taskBrief: string | undefined;
+      try {
+        const row = await this.db.queryOne<{ prompt: string }>("SELECT prompt FROM runs WHERE id = ?", [instance.runId]);
+        taskBrief = row?.prompt ?? undefined;
+      } catch {
+        taskBrief = undefined;
+      }
+      const sections = await hook({ projectId, taskBrief, taskId: instance.taskId ?? undefined, runId: instance.runId, instanceId: instance.id });
+      if (!sections || (!sections.metadata && !sections.full)) return undefined;
+      return sections;
+    } catch {
+      return undefined;
+    }
   }
 
   private toolsFor(definition: AgentDefinition): NormalizedTool[] {
@@ -562,6 +611,8 @@ export class AgentRuntime {
       id: String(row.id),
       sessionId: String(row.session_id),
       runId: String(row.run_id),
+      // Todo 23: la selección de skills por tarea lo consume (columna Etapa 3).
+      taskId: row.task_id ? String(row.task_id) : undefined,
       definitionId: String(row.definition_id),
       parentInstanceId: row.parent_instance_id ? String(row.parent_instance_id) : undefined,
       status: row.status as AgentInstance["status"],
