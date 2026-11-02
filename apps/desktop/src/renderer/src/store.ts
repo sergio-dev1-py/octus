@@ -14,3 +14,4 @@ export * from "./store/memory.js";
 export * from "./store/prefsLayout.js";
 export * from "./store/events.js";
 export * from "./store/bootstrap.js";
+export * from "./store/mcp.js";

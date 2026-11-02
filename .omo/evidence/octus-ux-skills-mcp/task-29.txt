@@ -1,0 +1,103 @@
+Todo 29 — Gestión de servidores, credenciales y seguridad MCP (contrato C-13)
+Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w13 | Rama: feat/ux-skills-mcp-w13-mcp
+Fecha (UTC): 2026-11-02 | Sin servidores reales, sin secretos reales, sin dry-run.
+
+DECISIÓN (una sola pieza coherente, trazable a la spec 2026-07-28)
+- Fachada nueva `packages/core/src/mcp/mcp-server-management.ts` sobre el
+  McpClientManager (Todo 26) y los puentes 27/28 SIN cambiarlos: el `Client`
+  conectado se obtiene vía el accesor aditivo `connectedClient()` /
+  `isAvailable()` + `clearServerSecret()` del manager (único cambio en 25-28).
+- security_best_practices SSRF: HTTPS exigido salvo loopback de desarrollo;
+  bloqueo de 10/8, 172.16/12, 192.168/16, 127/8 (salvo loopback), 169.254/16
+  (metadata cloud), fc00::/7, fe80::/10, hostnames privados; sin credenciales
+  en URL; revalidación de redirecciones. Patrón compartido con web-tools.ts.
+  URLs: https://modelcontextprotocol.io/specification/2026-07-28/basic/security_best_practices.md
+        https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization.md
+- authorization: STDIO sin token (env del subproceso solo desde el SO); HTTP
+  con `Authorization: Bearer` solo desde el secreto del SO, jamás de URL/JSON/SQLite.
+- Alternativa rechazada: endurecer el manager in-situ — habría tocado archivos
+  de 26-28 bajo paralelo con Todo 30; se dejó su conducta intacta y se añadió
+  solo el accesor + la fachada.
+
+ARCHIVOS (míos; NO tocados: App.tsx, store.ts, views/mcp.tsx, store/mcp.ts,
+scripts/task-30-mcp.entry.tsx — pertenecen al Todo 30 paralelo)
+M packages/core/src/mcp/mcp-client-manager.ts (+36: connectedClient, isAvailable, clearServerSecret)
+M packages/core/src/index.ts (+1: export mcp-server-management.js)
+A packages/core/src/mcp/mcp-server-management.ts (fachada C-13)
+A packages/core/test/mcp-management.test.ts (10 tests)
+
+VERIFICACIÓN (comandos reales, salidas abajo)
+1) `bun test test/mcp-management.test.ts --timeout 30000` (packages/core)
+   RUN 1: 10 pass 0 fail (53 expects) [9.56s]
+   RUN 2: 10 pass 0 fail (53 expects) [11.18s]  <- clase flaky_tests: repetido 2x
+   RUN 3 (tras añadir afterAll de limpieza del mock-dir): 10 pass 0 fail [8.58s]
+   Fijo en el camino: `localhost` caía en rechazo de hostname privado; se
+   reordenó la guarda (loopback primero) y re-verde en 2/2.
+2) Regresión 26-28: `bun test test/mcp-trust.test.ts test/mcp-tools.test.ts
+   test/mcp-resources.test.ts` => 36 pass 0 fail (184 expects) [7.48s]
+3) `bun run typecheck` (packages/core, tsc --noEmit) => exit 0, sin salida.
+4) Aserciones nombradas del Todo: secreto solo en SO (fila SQLite/kv sin token,
+   MemorySecretStore con token); redacción en logs (`[REDACTED]`);
+   rechazo SSRF literal 169.254.169.254 sin DNS + 10/8, 192.168/16, 172.16/12,
+   ULA, .local/.internal/.lan/.localhost; DNS a privada rechazada (resolver
+   inyectado); HTTPS exigido salvo loopback; cancelación por timeout (400ms)
+   contra simulado con resources/list colgado 60s + abort explícito;
+   token revocado corta (disconnected, secreto borrado, `server.secret_revoked`
+   auditado); editar corta estado rancio; JSON con `token/apiKey/PASSWORD`
+   rechazado sin persistir; redirect a 169.254.169.254 bloqueado; snapshot con
+   maxChars=10 trunca con marca; inyección envuelta e inerte (sin PWNED).
+   Salida RUN 1 (índice de pruebas):
+   (pass) secreto solo en el almacen del SO, nunca en SQLite ni kv, con redaccion
+   (pass) SSRF: literales privados y metadata cloud rechazados sin DNS; loopback y publica literal OK
+   (pass) SSRF: resolucion DNS a privada rechazada (resolver inyectado, determinista)
+   (pass) formulario e import JSON: sin shell, sin credenciales en URL, sin secretos en JSON
+   (pass) cancelacion por timeout contra simulado lento; el manager sigue operativo
+   (pass) token revocado corta la conexion viva con auditoria
+   (pass) stale_state: editar corta la conexion viva; bindings exigen verificar primero
+   (pass) consultar herramientas, recursos, prompts y logs con topes de tamano
+   (pass) prompt_injection: el contenido simulado queda envuelto y no se ejecuta
+   (pass) malformed_input: entradas rotas se rechazan sin efecto lateral
+
+MANUAL-QA (smoke independiente bun smoke.ts, simulado local efímero; 9/9 PASS)
+PASS MQA-1 agregar por formulario (stdio sin shell): mcp_d3f560a73463
+PASS MQA-2 importar JSON compatible (http loopback): mcp_7d2bdbedf032
+PASS MQA-3 SSRF 169.254.169.254 rechazada
+PASS MQA-4 http no-loopback exige https
+PASS MQA-5 verificar conecta: mqa tools=qa_echo
+PASS MQA-6 consultar tools/recursos/prompts: tools=1
+PASS MQA-7 logs redactados (4 entradas)
+PASS MQA-8 secreto solo en almacen SO
+PASS MQA-9 revocar corta con auditoria
+MANUAL-QA: 9/9 PASS
+
+CLASES ADVERSARIALES
+- stale_state: PASS (updateServer corta conexión; bindings exigen re-verificar).
+- misleading_success_output: PASS (verify/snapshot fallan con timeout/aborted
+  reales; connects revocados quedan disconnected, no "conectado").
+- dirty_worktree: PASS con nota (App.tsx/store.ts/views-mcp/store-mcp/entry-30
+  son del Todo 30 paralelo; verificados por diff y no tocados).
+- flaky_tests: PASS (suite 10/10 repetida 2x; timeouts con margen 5-15s bajo
+  --timeout 30000; sleeps solo en el simulado servidor, jamás en el test).
+- malformed_input: PASS (169.254.169.254, rangos privados, redirect a privado,
+  JSON con secretos, shell metachars, URL con credenciales, http sin TLS).
+- prompt_injection: PASS (payload simulado envuelto con banner untrusted, sin
+  ejecución, sin fichero PWNED).
+- cancel_resume: PASS (abort corta; el manager re-verifica y opera tras timeout).
+- No-aplicable con motivo: privilege_escalation (sin cambio de permisos de perfil;
+  la puerta PermissionManager del Todo 27 no se toca), dependency_confusion (sin
+  dependencias nuevas; SDK ya fijado en Todo 25), network_partition (STDIO local
+  + validación offline; HTTP solo validado, no conectado), clock_skew (sin
+  lógica dependiente de reloj salvo occurredAt de auditoría), disk_full (SQLite
+  efímero en tmpdir con limpieza), locale_i18n (mensajes técnicos en inglés
+  como el resto del core).
+
+LIMPIEZA (recibo)
+- tmpdirs de tests: autocontenidos con rm+reintento (patrón 26/28) + afterAll
+  para el mock-dir del fichero; verificado MY-LEFTOVERS: NONE tras la 3a
+  corrida. Restos octus-test-* con fecha 2026-11-01 son de sesiones ajenas y
+  se dejan intactos.
+- smoke externo: C:\Users\UserPy\AppData\Local\Temp\octus-mqa29\ eliminado.
+- Worktree: solo mis 4 archivos + este task-29.txt; nada en staging (sin commit:
+  el commit lo hace la ola según el plan).
+- Secretos: solo `tok-juguete-*`/`tok-manual-qa-*` de juguete en memoria de tests;
+  ningún secreto real; jamás se abrió ni citó k.txt.

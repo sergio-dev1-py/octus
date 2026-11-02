@@ -1,0 +1,212 @@
+TODO 26 - MCP CLIENT MANAGER CON CONFIANZA POR WORKSPACE (C-10)
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 13) | Rama: feat/ux-skills-mcp-w13-mcp
+Fecha: 2026-11-02 | Ejecutor: st_01a19996 | Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w13
+Base: SDK fijado del Todo 25 (@modelcontextprotocol/sdk@1.32.2, commit c2d8fbd).
+Alcance: servicio central de configuraciones, servidores, conexiones, handshake,
+capacidades, reconexión controlada, timeouts y cancelación; puerta de confianza
+global o por workspace que precede a cualquier conexión; ningún servidor
+desconocido con confianza automática; proyecto recién abierto nunca ejecuta
+servidores no autorizados. NO se expone Octus como servidor.
+Prohibido dry-run: todo lo afirmado se ejecutó de verdad. Sin servidores reales
+(solo mocks STDIO en tmpdir), sin secretos (tokens de juguete en memoria).
+No se citó ni se abrió C:/Users/UserPy/Desktop/PromtHack/k.txt.
+
+============================================================
+0. LECTURAS PREVIAS (contrato y patrones)
+============================================================
+- Contrato C-10 del Todo 5 (.omo/design/octus-ux-skills-mcp/task-5-contracts.md):
+  tabla NUEVA `mcp_servers` (configuración SIN secretos), secretos solo en el
+  almacén del SO con referencia `octus.mcp.<serverId>`, confianza por workspace
+  en kv `mcp.trust.<projectId>`, canales IPC `mcp.*` (los implementa la Todo 30
+  en main/UI; este Todo entrega el servicio core y no adelanta IPC).
+- secret-store.ts: patrón SO-primero (SecretStore + CompositeSecretStore).
+  Aplicado: el manager recibe un SecretStore inyectado (MemorySecretStore en
+  tests; safeStorage real lo inyecta el main en la Todo 29/30) y NUNCA persiste
+  secretos en SQLite (verificado por test).
+- web-tools.ts: guardas SSRF (assertPublicHttpUrl). Aplicado parcialmente: la
+  Todo 26 valida esquema http(s) + rechaza credenciales embebidas; el
+  endurecimiento SSRF completo (rangos privados, HTTPS-only, allowlist) es de la
+  Todo 29 y reutiliza esta API sin cambios (decisión registrada §6).
+- SDK 1.32.2 instalado: Client.connect(transport, {signal, timeout}),
+  RequestOptions con signal/timeout, StdioClientTransport (spawn sin shell) y
+  StreamableHTTPClientTransport(url: URL, {requestInit}). Sin SSE legado.
+
+============================================================
+1. CAMBIOS (solo contenido Todo 26)
+============================================================
+M packages/core/src/persistence/schema.ts
+  + migración 8 "mcp-servers-trust-ux13": tabla `mcp_servers`
+    (id, name, transport, command, args JSON, cwd, url, enabled, connect_timeout_ms,
+    created_at, updated_at) + tabla `mcp_audit`
+    (id, server_id, project_id, action, reason, occurred_at) + índice.
+  + registro en MIGRATIONS (versión 8).
+  Decisión: auditoría en tabla propia `mcp_audit`, NO en `events`:
+  `PersistedEventType` es un union cerrado de las etapas 1–6 y el plan prohíbe
+  reabrir sus contratos. La Todo 30 puede proyectar `mcp_audit` a la UI sin
+  tocar shared.
+N packages/core/src/mcp/mcp-client-manager.ts (~600 líneas)
+  McpClientManager(db, secrets, opts): configuraciones, confianza, conexiones,
+  handshake, capacidades, reconexión con backoff, timeouts y cancelación.
+  - addServer/updateServer/removeServer/getServer/listServers: validación
+    estricta (transporte stdio|http; stdio exige command SIN metacaracteres de
+    shell `;&|$`+backtick+nulos porque el spawn es directo sin shell — las rutas
+    Windows con `\`, espacios o `(x86)` SÍ se permiten; http exige URL http(s)
+    sin credenciales embebidas). addServer NUNCA conecta ni otorga confianza.
+    updateServer corta la conexión viva (sin estado rancio). removeServer
+    desconecta, borra la fila, borra el secreto del almacén y limpia confianzas.
+  - setTrust/isTrusted(scope global | workspace): kv `mcp.trust.global` y
+    `mcp.trust.<projectId>` (mapas JSON serverId→true). Por defecto: NO
+    confiable. Revocar desconecta en caliente. Dato corrupto en kv → vacío
+    (degrada a negar, nunca a confiar; precede Todo 6).
+  - connect(serverId, {projectId, signal?, timeoutMs?}): 1) señal abortada →
+    aborted; 2) config existente y habilitada; 3) PUERTA DE CONFIANZA (sin ella:
+    audit `connect.denied` + OctusError permission_denied, sin crear transporte
+    ni proceso); 4) handshake (initialize + serverInfo/capabilities +
+    tools/list obligatorio; resources/prompts best-effort → flags, lo no
+    negociado queda en false para la Todo 28); 5) audit `connect.ok`.
+    Fallo de handshake → `failed` + audit `connect.failed`; el transporte se
+    cierra siempre (el hijo STDIO muere, sin zombis).
+  - reconnect(...{maxAttempts=5, baseMs=500}): puerta de confianza de nuevo;
+    reintentos acotados con backoffMs(attempt, baseMs, cap) e inyección de
+    sleep para determinismo; aborta limpio con señal; audit `reconnect.ok/failed`.
+  - openWorkspace(projectId): por cada servidor habilitado: confiable → un
+    intento (connected/failed en el informe); NO confiable → audit
+    `workspace.open.denied` + entrada denied SIN crear transporte (el proyecto
+    recién abierto nunca ejecuta lo no autorizado). Nunca lanza por un servidor
+    (los fallos van al informe), salvo abort externo.
+  - disconnect/close: cierre best-effort, estado a disconnected.
+  - setServerSecret(secret {token?, env?}): solo SecretStore bajo
+    `octus.mcp.<serverId>`; el token viaja como `Authorization: Bearer` en
+    http y `env` se fusiona al spawn en stdio. Secreto corrupto → invalid_state
+    explícito (no conectar a ciegas).
+  - auditLog(serverId?, limit): lectura de `mcp_audit`.
+  - Fuera de alcance a propósito (Todos 27/28/29/30): sin callTool (ToolGateway),
+    sin lectura de recursos/prompts (solo flags de capacidad), sin SSRF
+    estricto (validación de esquema + sin userinfo aquí), sin IPC `mcp.*`
+    (main/UI), sin exponer servidor (solo transportes de CLIENTE).
+M packages/core/src/index.ts
+  + export * from "./mcp/mcp-client-manager.js".
+N packages/core/test/mcp-trust.test.ts (12 tests, §2).
+
+$ git status --short (antes de commit): solo estos 4 paths + este evidence
+  (el propio plan exige .omo/evidence en el worktree).
+
+============================================================
+2. VERIFICACIÓN: `bun test` (clase flaky_tests: 2 pasadas seguidas)
+============================================================
+$ bun test packages/core/test/mcp-trust.test.ts --timeout 30000
+Pasada 1: 12 pass, 0 fail, 79 expect() calls (6.50s)
+Pasada 2: 12 pass, 0 fail, 79 expect() calls (10.25s)
+Tests (nombres exactos):
+ PASS untrusted server refuses to connect and project open denies without executing
+   → connect() directo rechaza /not trusted/; openWorkspace devuelve
+   denied=[qa1], connected=[]; status sigue disconnected; audit contiene
+   connect.denied + workspace.open.denied con projectId y motivo; la fila
+   existe en mcp_audit vía SQL directo (no solo memoria).
+ PASS untrusted server is never executed on workspace open
+   → mock espía que escribe marcador al arrancar; tras openWorkspace el
+   marcador NO existe (ventana 300ms) y status=disconnected. La puerta precede
+   a la creación del transporte: prueba de "nunca ejecuta".
+ PASS explicit workspace trust allows connect with handshake and capabilities
+   → setTrust workspace → connect ok: serverName=mcp-qa-stdio, tools=[qa_echo];
+   la confianza es por workspace (projB sigue negado); connect idempotente;
+   disconnect → disconnected.
+ PASS global trust works across workspaces and revoke denies again
+   → trust global conecta en projB vía openWorkspace; revoke corta la viva y
+   vuelve a negar; audit trust.granted/trust.revoked presentes.
+ PASS reconnect after disconnect succeeds; retry loop is bounded with backoff
+   → reconnect tras disconnect conecta al intento 1 sin esperas; contra
+   ejecutable inexistente: 3 intentos, 2 esperas no-decrecientes (backoff),
+   status=failed, audit reconnect.failed. sleep inyectado (determinista).
+ PASS cancelled connect aborts and the manager resumes cleanly (cancel_resume)
+   → señal ya abortada rechaza /abort/; el manager sigue operativo y conecta
+   después (tools=[qa_echo]).
+ PASS slow handshake hits the connect timeout and the child is reaped
+   → mock que nunca responde a initialize + timeoutMs=500 → /timed out/,
+   status=failed con lastError; el hijo se cierra (transporte.dispose).
+ PASS malformed inputs are rejected before any side effect
+   → 16 rechazos: nombre vacío, transporte 'sse', ';' y backtick en command,
+   args no-array, ftp://, userinfo en URL, URL inválida, timeout negativo,
+   duplicado, servidor fantasma (connect/setTrust/remove/setSecret),
+   projectId 'a/b' y '' y '..', secreto vacío; secreto corrupto en store →
+   /corrupt/ al conectar.
+ PASS secrets live only in the secret store, never in sqlite rows
+   → la fila mcp_servers NO contiene el token (JSON sin 'tok-juguete-123');
+   el secreto SÍ está en SecretStore; removeServer borra fila+secreto+confianza.
+ PASS disabled server never connects even when trusted
+   → enabled=false + trust global: connect rechaza /disabled/; openWorkspace no
+   lo lista en connected ni en denied (deshabilitado ≠ no-confiable).
+ PASS production code never exposes Octus as a server
+   → todo `from "@modelcontextprotocol/sdk/…"` en src/mcp/* es del prefijo
+   `client/`; cero ocurrencias de `sdk/server`.
+ PASS migration 8 creates mcp_servers and mcp_audit
+   → ambas tablas existen con todas las columnas migradas a latest.
+$ bun run typecheck (packages/core): EXIT=0 (tsc --noEmit limpio).
+Puerta relacionada: web-tools/permissions/tools/memory/persistence 69/69 (gate rapido).
+Suite completa `bun test` (packages/core, background 524s): 265 pass / 1 fail /
+1137 expects. Unico fallo: etapa 5.2 J4 (workbase multi-predecesor) por timeout
+de 30s bajo carga de suite. Aislado (`bun test test/integration.test.ts -t "J4" --timeout 60000):
+2 pass en 37.14s (el propio J4 tarda 34.2s en esta maquina i3: supera el
+presupuesto de 30s solo cuando la suite completa la carga). Mi diff no toca
+ningun path de integracion (migracion aditiva + ficheros nuevos + 1 export);
+fallo preexistente/ambiental, no regresion.
+
+============================================================
+3. MANUAL-QA (agente, sin UI: capacidad de servicio core)
+============================================================
+- MQ-1 Informe de apertura: openWorkspace('projA') sin confianza devuelve
+  {connected:[], denied:[{serverId, reason:/not trusted/}], failed:[]} y el
+  status permanece disconnected. PASS
+- MQ-2 Transiciones: disconnected→connecting→connected (trust+connect) y
+  →disconnected (disconnect/revoke); failed solo tras intento real con
+  lastError. PASS
+- MQ-3 Auditoría legible por dos vías: auditLog() y SELECT directo a mcp_audit
+  con projectId+motivo en workspace.open.denied. PASS
+- MQ-4 Secreto fuera de SQLite: el JSON de la fila mcp_servers no contiene el
+  token mientras SecretStore sí. PASS
+- MQ-5 Superficie SDK en src/mcp: solo imports `client/`; ningún `Server` del
+  SDK (los mocks con `Server` viven SOLO en el test, no en producción). PASS
+- MQ-6 Negativos a mano: URL ftp:// y con userinfo rechazadas sin red;
+  handshake lento corta a los 500ms exactos del timeout pedido. PASS
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+- stale_state: MITIGADA. Mocks en mkdtempSync por fixture con rm(recursive,
+  force, reintentos EBUSY); updateServer corta la conexión viva; kv corrupta
+  degrada a vacío; trust revocada corta en caliente. Sin estado global entre tests.
+- misleading_success_output: MITIGADA. Aserciones sobre códigos OctusError
+  (permission_denied/timeout/aborted), conteos exactos (attempts=3, 2 esperas,
+  denied=[id]) y fila SQL real en mcp_audit; exit code capturado sin pipe.
+- dirty_worktree: MITIGADA (ver §5).
+- flaky_tests: MITIGADA. Suite 12/12 en DOS pasadas seguidas; backoff con sleep
+  inyectado (sin esperas reales); timeout 500ms con margen 30s del mock lento;
+  ventana de marcador 300ms solo como prueba secundaria (la primaria es que no
+  se crea el transporte: status + audit).
+- malformed_input: MITIGADA. 16 rechazos en un solo test + validación de
+  projectId en cada entrada de scope (§2).
+- cancel_resume: MITIGADA. Abort antes de conectar + reconexión posterior
+  exitosa en el mismo manager (§2).
+- resto NO-APLICABLE con motivo: secretos reales (prohibidos; juguetes en
+  memoria), servidores reales (prohibidos; mocks STDIO locales), live/créditos
+  (sin gate live en este todo), UI/Playwright (servicio core sin pantalla; la UI
+  es Todo 30), rendimiento (sin presupuesto exigible hasta Todo 34), i18n
+  (mensajes internos en inglés como el resto de core).
+
+============================================================
+5. LIMPIEZA (recibo)
+============================================================
+- Mocks STDIO y DBs de test: creados en mkdtempSync(os.tmpdir) por fixture y
+  borrados en cleanup con reintentos (EBUSY/EPERM); manager.close() + db.close()
+  antes del rm.
+- /tmp/t26-full.log y /tmp/t26-placebo.txt: artefactos de sesion, eliminados tras
+  volcar el resultado (fuera del worktree en todo momento).
+- `git status --short` post-test: solo los 4 paths del §1 (sin mocks ni logs).
+- k.txt: jamás citado ni abierto (ningún comando tocó
+  C:/Users/UserPy/Desktop/PromtHack/k.txt).
+
+Commit: feat(mcp): client manager with per-workspace trust
+Riesgos abiertos: la migración 8 crea `mcp_servers`/`mcp_audit`; la ola 12
+(Skills, otra rama) planea `skills`/`skill_states` como migración 8 en su rama:
+al fusionar olas habrá que renumerar una de las dos (una línea en MIGRATIONS).
+El endurecimiento SSRF/HTTPS-only queda para la Todo 29 sin cambiar esta API.

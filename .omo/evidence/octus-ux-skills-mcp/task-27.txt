@@ -1,0 +1,199 @@
+TODO 27 - HERRAMIENTAS MCP AISLADAS POR SERVIDOR VIA TOOLGATEWAY (contrato C-11)
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 13) | Rama: feat/ux-skills-mcp-w13-mcp
+Fecha: 2026-11-02 | Ejecutor: st_01a19997 | Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w13
+Alcance: descubrimiento de herramientas por protocolo, nombres aislados por
+servidor, registro por ToolGateway y uso solo con servidor autorizado,
+herramienta disponible, perfil con permiso y aprobacion cumplida; resultados
+como contenido no confiable con servidor y herramienta registrados.
+Prohibido dry-run: todo lo afirmado se ejecuto de verdad. Sin servidores
+reales, sin secretos. No se cito ni se abrio k.txt (ni existe referencia a el
+en este worktree).
+
+============================================================
+0. SUPUESTO TODO 26 + DECISIONES (deep-high)
+============================================================
+SUPUESTO inicial: el Todo 26 aun no exponia su API -> definir contra el
+contrato C-10/C-11 del Todo 5. Durante el turno el Todo 26 aterrizo en esta
+misma rama (commit da6506d "feat(mcp): client manager with per-workspace
+trust": McpClientManager + migracion 0008 + mcp-trust.test.ts). Verificado en
+el arbol: el manager expone confianza (isTrusted/setTrust), conexion
+(connect/reconnect/openWorkspace/disconnect, tools[] en McpConnectionInfo) y
+auditoria propia (mcp_audit), pero NINGUN accesor publico de tools/list o
+tools/call por servidor. Coordinacion por contenido distinto: no se toco
+ningun fichero del Todo 26; la costura es la interfaz `McpServerBinding`
+(`authorized` = confianza explicita del workspace, `available` = conexion +
+handshake + capacidades) con dos envoltorios: `SdkClientBinding` (Client ya
+conectado) y `CallbackBinding` con hook `refresh()` (adaptador del manager:
+isTrusted + estado de conexion antes de cada uso). Si la API final del
+manager difiere, se adapta el envoltorio; el puente no cambia.
+
+DECISIONES (con alternativa rechazada):
+- D1 Puerta de confianza PRECEDE al registro: servidor no autorizado o no
+  disponible no se registra (C-10). Rechazada: registrar y solo bloquear en
+  llamada (dejaria herramientas no confiables visibles al modelo).
+- D2 La permissionAction ES el nombre aislado `<server>.<tool>`; el techo duro
+  del perfil (definitionTools) debe incluirlo explicitamente, defecto `ask`.
+  Rechazada: wildcard o permiso generico "mcp.*" (eludiria el techo duro de
+  PermissionManager y permitiria que un perfil sin permiso MCP usara MCP).
+- D3 Defensa en profundidad: el run re-chequea authorized/available (con
+  refresh) aunque el registro ya lo exigio; la revocacion entre registro y
+  llamada se niega como `tool_denied` con fila `denied` (no `failed`).
+- D4 Re-registro del mismo nombre aislado -> `already_exists` (nunca
+  sobrescritura silenciosa). Resultado MCP -> texto con banner
+  `[untrusted MCP content — server, tool, registered as]` + fila
+  tool_invocations con name = nombre aislado + evento con payload de origen.
+- D5 tool_denied lanzado desde run() (negativa de politica en ejecucion) se
+  audita como `denied` en tool_invocations (antes caia a `failed`). Afecta
+  tambien al camino existente test-runner allowlist (coherente: era una
+  negativa, no un fallo; agent-runtime ya mapea tool_denied a "declined").
+
+============================================================
+1. CAMBIOS (solo contenido Todo 27; nada del Todo 26 tocado)
+============================================================
+M packages/core/src/tools/tool-gateway.ts (+31/-2)
+  + registerDefinition (conflicto already_exists, sin sobrescritura),
+    unregisterTool, unregisterWhere (retiro por prefijo de servidor).
+  + hook opcional definition.permissionDetail(args) para el detalle de la
+    solicitud de aprobacion (origen MCP visible al aprobar).
+  + run-phase tool_denied/scope_violation -> status 'denied' (antes 'failed').
+M packages/core/src/tools/tool-definitions.ts (+2): campo opcional
+  permissionDetail en ToolDefinition (aditivo, ningun def existente cambia).
+M packages/core/src/index.ts (+1): export del puente (linea adyacente a la
+  del Todo 26, sin solape).
+N packages/core/src/mcp/mcp-tool-bridge.ts (nuevo, ~300 lineas): isolatedName/
+  parseIsolatedName (validacion [A-Za-z0-9_-]{1,64}, sin colision por puntos),
+  McpServerBinding + refresh(), SdkClientBinding, CallbackBinding,
+  discoverMcpTools (exige authorized+available, rechaza duplicados del
+  servidor), buildMcpToolDefinition (permissionAction = aislado, schema
+  z.looseObject passthrough, run con re-chequeo + banner no-confiable +
+  bloques no-texto omitidos), registerMcpServer, unregisterMcpServer.
+N packages/core/test/mcp-tools.test.ts (nuevo, 11 tests): simulado STDIO real
+  (subproceso bun + SDK McpServer/StdioServerTransport, tools qa_echo y
+  probe_inject) y HTTP real (McpServer + StreamableHTTPServerTransport en
+  127.0.0.1:puerto-efimero + StreamableHTTPClientTransport); dos servidores
+  con la MISMA herramienta qa_echo (respuestas distinguibles stdio:/http:).
+SDK: @modelcontextprotocol/sdk 1.32.2 pin exacto (del Todo 25).
+
+$ git status --short (antes de commit, ambito packages/core):
+  M packages/core/src/index.ts
+  M packages/core/src/tools/tool-definitions.ts
+  M packages/core/src/tools/tool-gateway.ts
+  ?? packages/core/src/mcp/mcp-tool-bridge.ts
+  ?? packages/core/test/mcp-tools.test.ts
+$ git branch --show-current: feat/ux-skills-mcp-w13-mcp
+
+============================================================
+2. VERIFICACION: `bun test` (nada en seco)
+============================================================
+$ bun run typecheck (packages/core): EXIT=0 (tsc --noEmit limpio).
+  (Nota: primer typecheck fallo por codigo inexistente 'tool_conflict';
+  corregido a 'already_exists' existente en OctusErrorCode; re-verde.)
+
+$ bun test test/mcp-tools.test.ts --timeout 60000 (2 pasadas consecutivas,
+clase flaky_tests):
+  Pasada 1: 11 pass, 0 fail, 50 expects. Pasada 2: 11 pass, 0 fail, 50 expects.
+  - descubrimiento por protocolo y registro con nombres aislados (tools/list
+    real por STDIO y HTTP; manifests contiene mcp-qa-stdio.qa_echo,
+    mcp-qa-http.qa_echo; 2 registros terminados en .qa_echo: sin colision)
+  - llamada STDIO con nombre aislado (autoAllow once = aprobacion cumplida):
+    ok, "stdio:hola", banner [untrusted MCP content...], fila
+    tool_invocations(name=mcp-qa-stdio.qa_echo, status=completed) + evento
+    tool_call.completed con payload de origen
+  - llamada HTTP con nombre aislado: "http:mundo", sin "stdio:" (aislamiento
+    enruta bien)
+  - denegacion sin permiso de perfil: permission_denied, pendingFor=0 (sin
+    preguntar, sin elusion), fila status=denied
+  - prompt-injection: resultado envuelto con banner + payload inerte; ningun
+    fichero PWNED en workspace (readdir + existsSync)
+  - colision + autorizacion: registerMcpServer(unauthorized) -> tool_denied
+    (puerta precede); revocacion tras registro -> llamada tool_denied con
+    fila denied (D3); re-registro -> already_exists
+  - unregister por servidor retira solo mcp-qa-http.*; stdio sigue operativo;
+    http retirado -> tool_not_found
+  - unidades puras: nombres invalidos (../evil, a.b, "") rechazados;
+    parse("srv.tool.extra")=undefined; available=false/duplicados/herramienta
+    invalida -> rechazo; unregister desconocido = []; CallbackBinding refresca
+    confianza (trusted->revocado => discover niega)
+
+$ regresion relacionada (misma sesion, EXIT=0):
+  tools+permissions+matrix+definitions+mcp-trust (Todo 26): 48 pass, 0 fail.
+  consumen-gateway (test-runner, runtime, conversation, shell, memory,
+  task-graph): 59 pass, 0 fail. Resto (19 ficheros: adapters, budgets,
+  chat-pagination, delegation, git-tools, memory-e2e, path-scope,
+  persistence, planner, plans, pricing, router, scheduler, session-management,
+  ui-layout, ui-prefs, web-tools, worktrees, live-config): 122 pass, 0 fail.
+$ `bun test` completo: intentado 2x en primer plano (todas las pruebas
+  ejecutadas en verde, sin ningun (fail); el proceso fue abatido por el tope
+  de 290s del harness antes del resumen) + 1x en segundo plano con log y
+  sentinel: lanzamiento degradado que no arranco (sentinel PENDING eterno,
+  log vacio, sin actividad en tmpdir; artefactos .task-27-* ELIMINADOS).
+  integration.test.ts no re-ejecutado en solitario: 0 referencias a
+  tool_invocations y ningun camino alcanzable al unico cambio conductual
+  (tool_denied de run(); solo test-runner-allowlist y puente MCP, sin
+  asercion de estado alli). Todos los demas ficheros (28/29) verificados
+  en verde en esta sesion.>
+
+============================================================
+3. MANUAL-QA (revision humana del agente sobre el diff final)
+============================================================
+- M1 Nombres: isolatedName("mcp-qa-stdio","qa_echo")="mcp-qa-stdio.qa_echo";
+  parse redondo ok; "../evil"/"a.b"/"" rechazados; "srv.tool.extra" ->
+  undefined (el punto extra invalida toolName). PASS
+- M2 Servidores simulados REALES (no stubs de red): STDIO = subproceso bun
+  con framing JSON-RPC por linea; HTTP = socket 127.0.0.1 efimero con
+  StreamableHTTPServerTransport; la llamada distingue stdio:/http:. PASS
+- M3 Sin secretos ni servidores reales: grep en archivos nuevos -> sin URLs
+  (solo 127.0.0.1), sin tokens (unico "sk-" es el falso positivo "ask-once"
+  en prosa). PASS
+- M4 Auditoria de origen legible: name aislado en tool_invocations + evento
+  con payload; detalle de aprobacion con servidor y args truncados. PASS
+- M5 Colision ejecutada a mano en la salida del test: dos .qa_echo
+  registrados y llamables con respuestas distintas; el no autorizado se niega
+  en registro Y en llamada. PASS
+- M6 Compatibilidad con Todo 26: su suite mcp-trust 12/12 verde con mis
+  cambios; no toque sus ficheros. PASS
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+- stale_state: MITIGADA. Mocks en mkdtempSync(tmpdir) + puerto efimero por
+  corrida; afterAll cierra clientes/servidor, rm(recursive,force) del tmpdir
+  y cleanup del nucleo (con reintento EBUSY Windows de helpers.ts).
+- misleading_success_output: MITIGADA. Se exige exit 0 + conteos (11/11,
+  48/48, 59/59, 122/122); el primer fallo real (status failed vs denied) fue
+  detectado por el test y corregido en el producto (D5), no en el test.
+- dirty_worktree: MITIGADA. git status solo muestra ficheros del Todo 27
+  (+ este evidence exigido); mocks fuera del repo (tmpdir); sin logs sueltos
+  (salvo .task-27-integration.* temporales, eliminados en §5).
+- flaky_tests: MITIGADA. mcp-tools 2x consecutivas 11/11 sobre codigo final;
+  transportes con timeouts de 60s por test.
+- prompt_injection: MITIGADA. Servidor simulado devuelve orden maligna
+  ("Ignore all previous instructions..."); el test afirma banner untrusted +
+  inercia total (sin fichero creado). Resultado = contenido no confiable.
+- resto NO-APLICABLE con motivo: secretos (ninguno usado; safeStorage es del
+  Todo 29), servidores reales (prohibidos; solo 127.0.0.1 + subproceso
+  local), live/creditos (sin gate live), UI/Playwright (capacidad de runtime
+  sin pantalla), rendimiento (sin presupuesto exigible hasta Todo 34).
+
+============================================================
+5. LIMPIEZA (recibo)
+============================================================
+- Mocks STDIO/HTTP: creados y destruidos por el propio test (client.close,
+  httpServer.close, rm tmpdir, core.close); readdir(tmpdir) filtrado por
+  octus-mcp-t27* -> vacio tras `bun test` (los tests dejan 0 restos).
+- .task-27-fullsuite.log (intento de suite completa en fondo, log amortiguado
+  vacio) : ELIMINADO.
+- .task-27-integration.log/.task-27-integration.done + .task-27-fullsuite.log:
+  ELIMINADOS (el run de fondo no arranco; ver §2; sin actividad en tmpdir).
+- k.txt: jamas citado ni abierto (C:/Users/UserPy/Desktop/PromtHack/k.txt no
+  aparece en ningun comando ni fichero de este todo).
+- `git status --short` post-limpieza: SOLO ficheros Todo 27 (ver §1 + este
+evidence); tras el commit del DoneClaim, LIMPIO.
+
+Commit: feat(mcp): namespaced tools through tool gateway
+Riesgos abiertos: ninguno bloqueante. (1) Si el Todo 26 expone un accesor de
+tools distinto al previsto, adaptar CallbackBinding (envoltorio de ~15
+lineas). (2) Re-registro tras cambio de tools en el servidor exige unregister
+previo (already_exists conservador y documentado).
+Todo 28 consume: registerMcpServer + nombres aislados; Todo 29 consume:
+puerta authorized/available + banner de origen para redaccion en logs.

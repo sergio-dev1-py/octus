@@ -1,0 +1,134 @@
+Todo 28 — Recursos y prompts MCP con aprobación (contrato C-12)
+Rama: feat/ux-skills-mcp-w13-mcp | Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w13
+Fecha: 2026-11-02 | Ejecutor: senpi-task st_01a199b2 (sin delegación)
+Veredicto: PASS (13/13 nuevo + trío MCP 36/36 + typecheck en verde)
+
+1. Referencias leídas antes de implementar
+- Plan .omo/plans/octus-ux-skills-mcp.md, Todo 28 completo (qué hacer / must
+  NOT / aceptación / QA / commit / categoría).
+- Spec MCP 2026-07-28, sección de primitivas (learn/architecture.md):
+  resources (list/read/subscribe), prompts (list/get) como primitivas
+  negociadas por capabilities; nada no negociado se usa.
+- Todo 26 (packages/core/src/mcp/mcp-client-manager.ts): puerta de confianza
+  por workspace, handshake con hasResources/hasPrompts best-effort, Client
+  privado sin accesor público → este Todo define su propia costura de
+  binding (igual que el Todo 27 con McpServerBinding) sin tocar ese archivo.
+- Punto de inyección: packages/core/src/runtime/context-builder.ts,
+  `buildInstructions(definition, directory, tools, extras)` — no se modificó
+  (aditivo prohibido por etapas 1–6); los bloques `formatMcp*ForContext` se
+  concatenan solo tras la puerta de aprobación (probado con ContextBuilder
+  real en el test FAILURE).
+- SDK @modelcontextprotocol/sdk 1.32.2 (fijado Todo 25): firmas reales
+  `listResources/listResourceTemplates/readResource/subscribeResource/
+  unsubscribeResource/listPrompts/getPrompt`, `getServerCapabilities()`,
+  `setNotificationHandler` (enruta por literal `method` + valida; acepta
+  esquemas zod v4 del usuario por duck-typing `_zod`).
+
+2. Implementación (solo archivos nuevos; 25–27 intactos)
+- packages/core/src/mcp/mcp-resources.ts (nuevo):
+  - `McpContentBinding` + `SdkContentBinding` (puerta authorized/available
+    con `refresh()` opcional; SUPUESTO documentado igual que Todo 27).
+  - `describeMcpPrimitives(caps)` → {resources, resourceTemplates, prompts,
+    subscriptions}; subscriptions = resources.subscribe === true.
+  - Puertas: no autorizado/disponible → `tool_denied`; primitiva no
+    negociada → `invalid_state` (incl. subscribe sin `subscribe:true`);
+    sensible sin aprobación o rechazada → `permission_denied` ANTES de leer.
+  - `isSensitiveResourceUri` / `isSensitivePromptName` (secret, credential,
+    passwd, private, token, .env, vault, auth, key).
+  - `list/read/templates/prompts/get/watch/unwatch` con timeouts y señal de
+    cancelación pasantes; `watchMcpResource` devuelve `unsubscribe`
+    idempotente; observadores rotos no rompen la conexión.
+  - `formatMcpResourceForContext` / `formatMcpPromptForContext` con banner
+    `[untrusted MCP content — …]` + `untrusted="true"`; blobs binarios se
+    omiten (nunca base64 al contexto); tope 8000 chars/bloque con marca.
+  - Esquema LOCAL zod de `notifications/resources/updated`: la puerta del
+    Todo 26 ("solo superficie SDK client/ en src/mcp") prohíbe importar de
+    `sdk/types.js`; el enrutado del SDK lo acepta (verificado §1).
+- packages/core/test/mcp-resources.test.ts (nuevo, 13 tests, 49 expects).
+
+3. Comandos y resultados (prohibido dry-run: todo ejecutado de verdad)
+- `bun test test/mcp-resources.test.ts --timeout 30000` (packages/core):
+  pasada 1: 12 pass / 1 fail (bug propio en fan-out de watchers, corregido);
+  pasada 2: 13 pass / 0 fail; pasada 3 (trío): 13 pass / 0 fail.
+- `bun test test/mcp-resources.test.ts test/mcp-trust.test.ts
+  test/mcp-tools.test.ts --timeout 30000`: 36 pass / 0 fail, 181 expects.
+- `bun run typecheck` (tsc --noEmit): OK (tras un fix: registry.get puede
+  devolver undefined; ahora con guarda explícita).
+- Simulado STDIO: `Server` bajo nivel, caps {resources:{subscribe:true,
+  listChanged:true}, prompts:{listChanged:true}}, 3 recursos
+  (doc://notes/qa público, secret://vault/qa-token sensible con dummy
+  `qa-dummy-token-0000`, doc://assets/logo blob), plantilla doc://notes/{id},
+  prompts qa_review + qa_vault_secret (sensible), subscribe que notifica a
+  80ms. Simulado HTTP: `McpServer` alto nivel SIN subscribe (puerta).
+  Ningún servidor real, ningún secreto (dummy fijo no confidencial).
+
+4. Aserciones nombradas (test → afirma)
+- negotiated-no-over-announce: STDIO todo true; HTTP subscriptions false;
+  undefined/{} todo false.
+- list-resources-templates: URIs y uriTemplate exactos por protocolo.
+- read-public-and-template: `public notes v1`, expansión `note 42 contents`.
+- sensitive-classifier: sensibles true, públicos false (recursos y prompts).
+- sensitive-approval-gate: sin approve → /approval/; approve false →
+  /not approved/; approve true → contenido + petición registrada.
+- FAILURE-sensitive-never-reaches-context: sin aprobación no hay bloque y
+  `buildInstructions` real no contiene el dummy; con aprobación el bloque
+  con banner sí se compone.
+- subscription-when-supported: update `doc://notes/qa` < 5s; unsubscribe ×2
+  idempotente.
+- subscription-refused-http: /did not negotiate 'subscriptions'/.
+- unnegotiated-never-used: binding vacío niega las 6 operaciones sin llamar
+  al transporte.
+- gate-before-protocol: authorized false → /not trusted/; available false →
+  /not connected/.
+- prompt-list-get-sensitive: args `topic=budgets` → `review topic: budgets`;
+  `qa_vault_secret` sin approve negado, con approve permitido; bloque prompt
+  con banner.
+- blob-omitted: base64 `aGVsbG8=` presente en lectura, ausente en bloque.
+- http-happy-path: list/read/prompt contra HTTP.
+
+5. MANUAL-QA — PASS
+- M1: corrí el trío MCP y leí cada línea: 36 pass / 0 fail, sin skips.
+- M2: inspeccioné `git status --short`: solo mis 2 archivos nuevos
+  (+ esta evidencia); `git diff --stat HEAD` vacío (25–27 intactos).
+- M3: verifiqué limpieza: sin `octus-mcp-t28-*` en %TEMP%; afterAll cierra
+  stdioClient, httpClient, httpMcp, httpTransport, httpServer, test-core y
+  rm del workdir con reintento EBUSY/EPERM.
+- M4: `typecheck` en verde tras el fix; la puerta "never exposes as server"
+  del Todo 26 vuelve a pasar con el esquema local.
+Resultado: PASS (sin reservas).
+
+6. Clases adversariales
+- stale_state: MITIGADA. Cada fixture usa tmpdir + DB efímera propios;
+  `unregister`/disconnect por servidor; `disconnectQuiet` + `updateServer`
+  cortan conexiones vivas; el test crea bindings frescos por suite.
+- misleading_success_output: MITIGADA. Los expects afirman contenido exacto
+  (`public notes v1`, `review topic: budgets`), códigos OctusError por nombre
+  y ausencia del dummy en contexto; la pasada 1 mostró el único fail real y
+  se corrigió (no se maquilló).
+- dirty_worktree: MITIGADA. `git status` limpio salvo archivos del Todo;
+  no se tocó ningún archivo de 25–27 ni de etapas 1–6; evidencia en
+  `.omo/evidence` del WORKTREE.
+- flaky_tests: MITIGADA. `mcp-resources.test.ts` repetido 3× en verde
+  (incl. suscripción con timeout 5s y notify a 80ms, sin carreras:
+  la suscripción se confirma antes del notify); trío completo 1× en verde.
+- dependency_drift: NO APLICABLE. SDK fijado en 1.32.2 por el Todo 25; sin
+  cambios de dependencias en este Todo.
+- live_leak / secret_exposure: NO APLICABLE. Cero servidores reales, cero
+  secretos (dummy `qa-dummy-token-0000` no confidencial); la puerta del
+  Todo 26 de no-exposición como servidor pasa.
+- network_partition / clock_skew / concurrent_writes: NO APLICABLE. Pruebas
+  locales single-process sobre 127.0.0.1/stdio efímeros; sin reloj distribuido
+  ni escrituras concurrentes (un watch, un subscriber).
+- permission_escalation: CUBIERTA como aserción (no como clase externa):
+  sensible sin aprobación → `permission_denied` antes de leer/inyectar;
+  no autorizado/disponible → `tool_denied`; no negociado → `invalid_state`.
+
+7. Limpieza total — recibo
+- `git status --short` (pre-commit): solo
+  `?? packages/core/src/mcp/mcp-resources.ts`,
+  `?? packages/core/test/mcp-resources.test.ts` (+ este task-28.txt).
+- Sin procesos servidores vivos: clientes y transportes cerrados en
+  `afterAll`; puertos efímeros liberados; `%TEMP%/octus-mcp-t28-*`: (none).
+- Commit: `feat(mcp): resources and prompts with approval` con los 3
+  archivos (código + test + evidencia). Sin push (lo prohíbe el plan).
+- Jamás se abrió ni citó C:/Users/UserPy/Desktop/PromtHack/k.txt.

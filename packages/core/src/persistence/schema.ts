@@ -810,6 +810,34 @@ BEGIN
 END;
 `;
 
+const MIGRATION_0008 = `
+-- Todo 26 (ola 13): configuracion de servidores MCP SIN secretos + auditoria.
+-- Secretos solo en el almacen del SO bajo octus.mcp.<serverId> (C-10).
+-- Confianza global/por workspace en kv: mcp.trust.global y mcp.trust.<projectId>.
+CREATE TABLE mcp_servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  transport TEXT NOT NULL,
+  command TEXT,
+  args TEXT NOT NULL DEFAULT '[]',
+  cwd TEXT,
+  url TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  connect_timeout_ms INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE mcp_audit (
+  id TEXT PRIMARY KEY,
+  server_id TEXT NOT NULL,
+  project_id TEXT,
+  action TEXT NOT NULL,
+  reason TEXT,
+  occurred_at INTEGER NOT NULL
+);
+CREATE INDEX idx_mcp_audit_server ON mcp_audit(server_id, occurred_at);
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "core-etapa1", sql: MIGRATION_0001 },
   { version: 2, name: "agents-plans-etapa2", sql: MIGRATION_0002 },
@@ -818,4 +846,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 5, name: "integration-promotion-etapa5", sql: MIGRATION_0005 },
   { version: 6, name: "conflict-resolution-etapa5", sql: MIGRATION_0006 },
   { version: 7, name: "memory-etapa6", sql: MIGRATION_0007 },
+  { version: 8, name: "mcp-servers-trust-ux13", sql: MIGRATION_0008 },
 ];

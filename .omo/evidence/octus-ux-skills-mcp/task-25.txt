@@ -1,0 +1,125 @@
+TODO 25 - SELECCION DE SDK MCP Y MATRIZ DE CONFORMIDAD (spec 2026-07-28)
+Plan: .omo/plans/octus-ux-skills-mcp.md (ola 13, abre) | Rama: feat/ux-skills-mcp-w13-mcp
+Fecha: 2026-11-02 | Ejecutor: st_01a19991 | Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w13
+Alcance: elegir y fijar el SDK con matriz que afirma STDIO y Streamable HTTP
+operativos y SSE legado ausente; compatible con Bun, Electron y Windows.
+Prohibido dry-run: todo lo afirmado se ejecuto de verdad. Sin servidores
+reales, sin secretos. No se cito ni se abrio k.txt.
+
+============================================================
+0. DECISION (SDK fijado)
+============================================================
+SDK: @modelcontextprotocol/sdk@1.32.2 (oficial, TypeScript puro), pin EXACTO
+en packages/core/package.json ("1.32.2", sin caret) + bun.lock.
+Por que este SDK:
+- Trae StdioClientTransport (spawn via cross-spawn: Windows-safe .cmd/.exe)
+  y StreamableHTTPClientTransport (fetch global: Bun>=1.4, Node>=22, Electron main).
+- Puros TS/JS sin binarios nativos: no hay acoplamiento a node-pty ni a
+  arquitectura; vale para Bun, Electron (main Node) y Windows win32/x64.
+- SSE legado (SSEClientTransport/SSEServerTransport) existe en el paquete
+  pero marcado @deprecated ("Prefer StreamableHTTPClientTransport...", ver
+  client/sse.js y server/sse.js del SDK instalado); NO se importa ni se expone.
+Alternativa JSON-RPC propio: NO necesaria (decision nombrada y descartada por
+escrito: el SDK oficial cubre ambos transportes vigentes; reimplementar el
+framing/handshake solo anadiria superficie de incompatibilidad).
+Fuentes spec leidas (fetch real el 2026-11-02):
+- .../specification/2026-07-28/basic/transports.md (solo 2 bindings: stdio y
+  Streamable HTTP; HTTP+SSE queda como revision 2024-11-05 superada)
+- .../2026-07-28/basic/transports/stdio.md (subproceso, 1 JSON-RPC por linea,
+  sin \n embebidos, stdout solo mensajes validos)
+- .../2026-07-28/basic/transports/streamable-http.md (reemplazo de HTTP+SSE
+  desde 2025-03-26; rev 2026-07-28: ELIMINADO endpoint GET stream y sesiones
+  a nivel protocolo; un solo endpoint POST; respuesta JSON o SSE por-request)
+
+============================================================
+1. CAMBIOS (solo contenido Todo 25)
+============================================================
+M packages/core/package.json
+  + "@modelcontextprotocol/sdk": "1.32.2" (pin exacto)
+M bun.lock (+185 lineas, resolucion del SDK y transitivas)
+N packages/core/scripts/mcp-conformance.ts (verificador reutilizable por Todo 26+)
+$ git status --short (antes de commit):
+  M bun.lock
+  M packages/core/package.json
+  ?? packages/core/scripts/mcp-conformance.ts
+$ git branch --show-current: feat/ux-skills-mcp-w13-mcp
+
+============================================================
+2. CONFORMIDAD: script ejecutado de verdad 2x (clase flaky_tests)
+============================================================
+$ bun scripts/mcp-conformance.ts  (mocks en tmpdir, borrados al salir)
+Pasada 1 (EXIT=0):
+PASS [A0-sdk-pin] SDK: package.json pin=1.32.2 installed=1.32.2 (esperado 1.32.2)
+PASS [A0-runtime] Compat: bun=1.4.2 node=26.3.0 platform=win32
+PASS [A0-platform] Compat: platform=win32 (target Windows)
+PASS [A0-fetch] Compat: fetch global disponible (Streamable HTTP; Bun/Node22/Electron-main)
+PASS [A0-spawn] Compat: sdk-declara=^7.0.5 disco=cross-spawn@7.0.6 stdio.js-lo-usa=true (spawn Windows-safe usado por StdioClientTransport)
+PASS [A1-stdio-tools] STDIO: tools=[qa_echo]
+PASS [A1-stdio-call] STDIO: qa_echo("hola") -> "echo:hola"
+PASS [A1-stdio-proto] STDIO: serverVersion={"name":"mcp-qa-stdio","version":"1.0.0"}
+PASS [A2-framing] STDIO: primera linea stdout es 1 mensaje JSON-RPC ({"result":{"protocolVersion":"2025-06-18",...,"serverInfo":{"name":"mcp-qa-std...)
+PASS [A2-init] STDIO: initialize responde serverInfo.name=mcp-qa-stdio id=1
+PASS [A3-http-tools] StreamableHTTP: POST /mcp tools=[qa_echo]
+PASS [A3-http-call] StreamableHTTP: qa_echo("mundo") -> "echo:mundo"
+PASS [A4-no-get-stream] StreamableHTTP: GET /mcp -> 400 content-type=application/json (no stream 200/SSE)
+PASS [A5-no-legacy-endpoint] NoSSE: GET /sse -> 404 (endpoint legado inexistente)
+PASS [A5-no-sse-import] NoSSE: 69 ficheros propios sin referencias SSE legado (verificador excluido)
+MATRIZ: 15/15 PASS
+Pasada 2 (EXIT=0): identica, 15/15 PASS (estable, sin flakiness).
+Que prueba cada grupo:
+- A0: pin exacto + runtime Bun 1.4.2 / win32 + fetch + cross-spawn 7.0.6.
+- A1: STDIO extremo a extremo via SDK (mock mcp-qa-stdio como subproceso bun).
+- A2: STDIO a nivel de cable con cliente raw (sin SDK): 1 linea = 1 mensaje
+  JSON-RPC, initialize responde serverInfo.name=mcp-qa-stdio id=1.
+- A3: Streamable HTTP extremo a extremo via SDK contra mock mcp-qa-http en
+  127.0.0.1:puerto-efimero, unico endpoint POST /mcp.
+- A4: GET /mcp NO abre stream (rev 2026-07-28: GET stream eliminado).
+- A5: GET /sse -> 404 + 0 referencias SSE legado en 69 ficheros propios
+  (src + scripts; node_modules y el propio verificador excluidos).
+$ bun run typecheck (packages/core): EXIT=0 (tsc --noEmit limpio con el script nuevo)
+
+============================================================
+3. MANUAL-QA: revision de la matriz (agente, sin UI: capacidad de runtime)
+============================================================
+- Matriz 15/15 PASS en 2 pasadas consecutivas, salidas idempotentes. PASS
+- Negativos verificados a mano en la salida: GET /mcp 400 (no SSE),
+  GET /sse 404, grep SSE 0 hits. PASS
+- Compat Bun/Electron/Windows: bun 1.4.2 + win32 afirmados en A0; Electron
+  main es Node-compatible (fetch + spawn, sin APIs de renderer). PASS
+- Deriva de spec: transports.md lista exactamente stdio + Streamable HTTP;
+  HTTP+SSE solo aparece como revision superada. PASS
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+- stale_state: MITIGADA. Mocks en mkdtempSync bajo os.tmpdir por ejecucion,
+  puerto HTTP efimero, rm(recursive,force) al cierre; tmpdir verificado sin
+  restos `octus-mcp-conf*`. Estado SDK fijado por pin exacto + bun.lock.
+- misleading_success_output: MITIGADA. El script imprime PASS por asercion y
+  sale 1 si alguna falla (verificado en desarrollo: 13/15 con EXIT=1 antes de
+  corregir los 2 checks auto-infligidos del propio verificador). El exit code
+  se capturo sin pipe (`> log; echo EXIT=$?`), no via tail.
+- dirty_worktree: MITIGADA. `git status --short` final: solo bun.lock,
+  packages/core/package.json y packages/core/scripts/mcp-conformance.ts
+  (+ este evidence, que el propio plan exige). Sin mocks ni logs sueltos.
+- flaky_tests: MITIGADA. Conformidad ejecutada 2x seguidas: 15/15 y 15/15.
+- resto NO-APLICABLE con motivo: secretos (ninguno usado ni guardado),
+  servidores reales (prohibidos por el plan; solo mocks locales), live/creditos
+  (sin gate live en este todo), UI/Playwright (capacidad de runtime, sin pantalla),
+  rendimiento (sin presupuesto exigible hasta el Todo 34).
+
+============================================================
+5. LIMPIEZA (recibo)
+============================================================
+- Mock STDIO (.ts temporal) y servidor HTTP efimero: creados y destruidos por
+  el propio script; `readdirSync(tmpdir).filter(octus-mcp-conf*)` -> vacio.
+- /tmp/conf*.log: fuera del worktree (artefactos de sesion, no commiteados).
+- `git status --short` post-commit: limpio (ver commit abajo).
+- k.txt: jamas citado ni abierto (grep de verificacion: n/a, no se toco
+  C:/Users/UserPy/Desktop/PromtHack/k.txt en ningun comando).
+
+Commit: feat(mcp): pinned sdk with spec conformance matrix
+Riesgos abiertos: ninguno bloqueante. El SDK 1.32.x declara `eventsource`
+como dependencia (solo la usa el transporte SSE obsoleto, que no importamos);
+si un futuro `bun add` la elimina del arbol, nuestra superficie no cambia.
+Todo 26 consume: StdioClientTransport y StreamableHTTPClientTransport fijados aqui.
