@@ -1,0 +1,103 @@
+Todo 19. Sonda del modelo de scopes en PermissionManager
+Rama: feat/ux-skills-mcp-w12-skills | Worktree: octus-wt-octus-ux-skills-mcp-w12
+Fecha: 2026-11-01 | Ejecutor: senpi-task (st_01a19940)
+Alcance: SOLO lectura + sonda minima. Sin cambios de comportamiento (Commit: N).
+No se relaja ningun permiso: scope desconocido se niega por defecto (probado, U1-U3).
+No se tocan archivos del Todo 18 (misma rama): ni task-18.txt ni scripts/validate-agent-skill.mjs.
+
+============================================================
+1. COMANDOS EXACTOS Y SALIDAS
+============================================================
+
+$ bun C:/tmp/octus-qa-probe-19/probe.ts   (sino: stub de PersistenceService que
+  respeta WHERE project_id = ?; EventStore/Bus falsos; sin tocar disco ni red)
+P project-A write = allow (esperado allow)
+P project-B write = ask (esperado ask: la guardada es por proyecto)
+S sin sessionRules write = ask (esperado ask por DEFAULT_POLICY)
+S con sessionRules allow write = allow (esperado allow)
+R con runRules(any) write = ask (esperado ask: capa ignorada = BRECHA R)
+R runRules es clave de PermissionLayers = false (esperado false)
+T taskId en AskContext = false (esperado false = BRECHA T)
+I instance deny-vs-allow = allow (esperado allow por ultima-regla-gana)
+U accion fuera del perfil = deny (esperado deny)
+U deniedTools gana = deny (esperado deny)
+U evaluateRules sin match = undefined->deny (esperado undefined->deny)
+sonda OK (11/11)
+EXIT 0
+Nota: la primera pasada fallo 1/11 (P project-B devolvio allow) por defecto del
+stub, que ignoraba el filtro WHERE project_id = ?. El codigo vivo filtra bien
+(permission-manager.ts: savedRules con "WHERE project_id = ?"); corregido el
+stub, 11/11 en verde. El fallo era del arnes, no del modelo.
+
+$ bun run typecheck
+$ bun run --cwd packages/shared typecheck && bun run --cwd packages/core typecheck && bun run --cwd apps/desktop typecheck
+$ tsc --noEmit (x2 + node/web configs)
+EXIT 0 - en verde, sin errores. (Requirio `bun install --frozen-lockfile` previo:
+no habia node_modules en el worktree; el lockfile bun.lock no se modifico.)
+
+$ git status --short (tras la sonda, antes de escribir este archivo)
+ M .omo/evidence/octus-ux-skills-mcp/task-18.txt   (del Todo 18, NO tocado)
+?? .omo/evidence/octus-ux-skills-mcp/task-19.txt   (este archivo, unico aporte)
+Conclusion: cero archivos rastreados modificados por este Todo; node_modules/
+esta gitignorado y bun.lock intacto (--frozen-lockfile).
+
+Archivos leidos (codigo vivo):
+- packages/core/src/permissions/permission-manager.ts (224 lineas: PermissionLayers 12-20, AskContext 23-36, DEFAULT_POLICY 39-67, evaluateRules 69-77, preview 116-137, decide 140-226)
+- packages/shared/src/permissions.ts (PermissionRule 9-14 sin scope; SavedPermissionRule 17-22 solo projectId; PermissionRequest 24-35 sin projectId ni taskId; QuestionRequest 57-64 igual)
+- packages/core/src/runtime/context-builder.ts (InstructionExtras 28-44 con los 5 ids; buildMemorySection 110-147 consulta los 5 scopes)
+- packages/core/src/sessions/octus-core.ts:178 (layersFor: definitionId, _sessionId, instanceId - sessionId sin usar, sin run/task/project)
+- packages/core/src/tools/tool-gateway.ts:29 (layersFor sin run/task) y :87-104 (decide con AskContext sin taskId)
+- Matriz del Todo 5: .omo/design/octus-ux-skills-mcp/task-5-contracts.md §3 (29 herramientas x 5 scopes P,S,R,T,I; "scope desconocido se niega por defecto")
+
+============================================================
+2. MODELO EXACTO POR SCOPE: EXISTE / FALTA (con ruta y linea)
+============================================================
+
+[P proyecto] PARCIAL. Existe como lookup, no como capa.
+  [EXISTE] savedRules(projectId) con "WHERE project_id = ?" (permission-manager.ts:94-107): la regla "siempre permitir" solo vale para su proyecto (sonda P1/P2).
+  [FALTA] projectRules en PermissionLayers (solo definition/session/instance, lineas 12-20): no hay reglas de proyecto de primera clase componibles con el resto.
+  Linea: packages/core/src/permissions/permission-manager.ts:12-20.
+
+[S sesion] EXISTE como capa.
+  [EXISTE] sessionRules?: PermissionRule[] (linea 19), compuestas en preview (linea 124) entre definition e instance; layersFor las resuelve por definicion/instancia (octus-core.ts:178-197). Sonda S1/S2 en verde.
+  Matiz: layersFor recibe _sessionId sin usarlo - la sesion no aporta reglas propias hoy, solo vehiculiza las de definicion+instancia.
+
+[R run] FALTA como capa; presente solo como identificador.
+  [EXISTE] runId en AskContext (linea 27) y en PermissionRequest (shared/permissions.ts:26); el gateway lo propaga (tool-gateway.ts:87-104) y queda auditado en tool_invocations.
+  [FALTA] runRules en PermissionLayers ("runRules" in layers === false, sonda R2); una clave runRules pasada por fuera se ignora y el veredicto no cambia (sonda R1: ask). Dos runs de la misma instancia comparten veredicto: imposible acotar una regla a un run.
+  Linea: packages/core/src/permissions/permission-manager.ts:12-20 (ausencia).
+
+[T tarea] FALTA por completo en la via de permisos.
+  [EXISTE] taskId en InstructionExtras (context-builder.ts:32) y en buildMemorySection (linea 110): memoria y contexto SI modelan T.
+  [FALTA] taskId en AskContext (lineas 23-36: no existe), en PermissionRequest (shared/permissions.ts:24-35: no existe) y taskRules en PermissionLayers. El scope T de la matriz (§3: p.ej. plan_tasks S,R,T; record_review T,R) no tiene correlato ejecutable en PermissionManager.
+  Linea: ausencia en permission-manager.ts:12-36 y shared/permissions.ts:24-35.
+
+[I instancia] EXISTE como capa con ultima palabra.
+  [EXISTE] instanceRules?: PermissionRule[] (linea 20), compuestas en ultimo lugar (linea 125: ultima-regla-gana); resueltas desde agent_instances.instance_rules con snapshot ADR-028 (octus-core.ts:178-197). Sonda I1: instance allow gana a session deny.
+  Linea: packages/core/src/permissions/permission-manager.ts:20,125.
+
+[Transversal] PermissionRule NO tiene campo scope (shared/permissions.ts:9-14: solo action/resource/effect).
+  [EXISTE] deny-by-default: techo duro definitionTools/deniedTools (preview lineas 117-119) + fallback ?? "deny" (linea 136); sonda U1-U3 en verde. Scope desconocido se niega siempre.
+  [FALTA] allow acotado por scope: imposible expresar "allow X solo en sesion S" como regla; el unico allow con granularidad de ambito es la guardada por proyecto.
+
+Resumen: de los 5 scopes de la matriz, S e I existen como capas, P existe como lookup de guardadas, R existe solo como id de auditoria, T no existe en permisos (si en contexto/memoria).
+
+============================================================
+3. BRECHAS -> SUBTODOS ADITIVOS (misma ola 12, para el Todo 20+)
+============================================================
+- 19-A. Capa projectRules de primera clase en PermissionLayers y preview (hoy P solo vive en savedRules por projectId).
+- 19-B. Capa runRules + propagar runId a layersFor (hoy runId viaja en AskContext/Request pero sin reglas por run; dos runs comparten veredicto).
+- 19-C. taskId en AskContext + PermissionRequest + capa taskRules (scope T de la matriz sin modelar en permisos; ContextBuilder ya lo trae en InstructionExtras:32).
+- 19-D. Campo scope explicito en PermissionRule o validacion de alcance por ambito (hoy sin scope; el deny-by-default cubre pero no hay allow acotado por scope).
+Ninguno relaja permisos: todos estrechan o afinan dentro del techo del perfil.
+
+============================================================
+4. CLASES ADVERSARIALES
+============================================================
+- Aplicable: stale_state. Mitigado: la sonda instancia PermissionManager con stub fresco por corrida; el fallo 1/11 de la primera pasada se investigo y se probo que era del stub (sin filtro project_id), no del codigo; la repeticion con stub corregido dio 11/11.
+- Aplicable: misleading_success_output. Mitigado: se exige "sonda OK (11/11)" Y exit 0; typecheck exige tres tsc en verde (exit 0). El failure intermedio demuestra que la sonda si detecta desviaciones.
+- Aplicable: dirty_worktree. Mitigado: git status confirma unico aporte task-19.txt; task-18.txt (Todo 18, misma rama) intacto; bun.lock intacto (--frozen-lockfile); node_modules gitignorado.
+- No aplicable: live_credentials (sonda en memoria, sin red, sin claves; no se cito ni se abrio ningun archivo de claves externas); timing_flake (sin temporizadores: preview es sincrono en decision, decide con ask no se ejercito porque implicaria espera humana); prompt_injection (entradas solo del arbol vivo y el plan); schema_drift (sin migraciones: solo lectura); i18n_garble (prosa del plan, sin plantillas localizadas).
+
+Limpieza: sonda en C:/tmp/octus-qa-probe-19/probe.ts (fuera del repo), eliminada tras la corrida. Recibo abajo.
+Riesgos: ninguno nuevo; este Todo no cambia codigo. Riesgo heredado para la ola: si el Todo 20 consume scopes R/T antes de 19-B/19-C, los workers recibiran Skills sin filtro por run/tarea (deny-by-default los protege de herramientas, pero no de sobre-exposicion de Skills).
