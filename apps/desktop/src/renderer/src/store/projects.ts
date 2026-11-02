@@ -111,15 +111,20 @@ export async function refreshUsage(): Promise<void> {
 }
 
 export async function selectProject(projectId: string): Promise<void> {
+  // Todo 34 (§7: bienvenida → workbench interactivo, máx. 1,5 s con paneles
+  // diferidos): las recargas por proyecto son independientes entre sí y van
+  // en paralelo. El estado final es el mismo que en secuencia.
   setState("activeProjectId", projectId);
   setState("activeSessionId", undefined);
-  await refreshSessions();
-  await refreshSkillsCatalog();
-  await refreshProjectSettings();
-  await refreshWorktrees();
-  await refreshIntegrations();
-  await refreshMemory();
-  await refreshFilesWorkspace();
+  await Promise.all([
+    refreshSessions(),
+    refreshSkillsCatalog(),
+    refreshProjectSettings(),
+    refreshWorktrees(),
+    refreshIntegrations(),
+    refreshMemory(),
+    refreshFilesWorkspace(),
+  ]);
 }
 
 export function dismissSessionNotice(): void {
@@ -146,7 +151,11 @@ export async function selectSession(sessionId: string): Promise<void> {
   setState("live", reconcile({}));
   setState("cancelReason", undefined);
   setState("attachments", []);
-  await Promise.all([refreshMessages(), refreshPending(), refreshUsage(), refreshRunDetail(), refreshPlans(), refreshApprovals(), refreshAgents(), refreshTasks(), refreshIntegrations(), refreshMemory()]);
+  // Todo 34 (§7: cambio de sesión sin jank): primero lo crítico del chat
+  // (mensajes, pendientes, uso, detalle del run) y después los paneles
+  // diferidos, todo en paralelo. El estado final es el mismo que en secuencia.
+  await Promise.all([refreshMessages(), refreshPending(), refreshUsage(), refreshRunDetail()]);
+  await Promise.all([refreshPlans(), refreshApprovals(), refreshAgents(), refreshTasks(), refreshIntegrations(), refreshMemory()]);
 }
 
 export async function createProject(name: string, rootPath: string): Promise<void> {

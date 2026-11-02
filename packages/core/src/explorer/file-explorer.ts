@@ -3,8 +3,15 @@
  * repositorio o worktree del proyecto (Todo 33). Solo lectura, sin ejecución.
  * La paginación evita bloquear la UI en proyectos grandes: el renderer pide
  * páginas fijas (máx. 200 entradas) y el árbol nunca carga el proyecto entero.
+ *
+ * Todo 34: filesystem asíncrono (`node:fs/promises`). Ninguna lectura
+ * síncrona queda en el camino de una página: el hilo que sirve el IPC nunca
+ * se bloquea en disco, y SQLite sigue viviendo solo en su worker (ADR-020).
+ * (`existsSync` se sigue reexportando por compatibilidad; el módulo ya no lo
+ * usa en ningún camino de lectura.)
  */
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { OctusError } from "../errors.js";
 import { isUncPath, sameOrInside } from "../tools/path-scope.js";
@@ -52,12 +59,12 @@ export function resolveInside(rootReal: string, rel: string): string {
   return abs;
 }
 
-export function listDirPage(rootReal: string, relDir: string, page: number, pageSize: number): FileListPage {
+export async function listDirPage(rootReal: string, relDir: string, page: number, pageSize: number): Promise<FileListPage> {
   const size = Math.min(Math.max(1, Math.floor(pageSize) || 50), EXPLORER_MAX_PAGE_SIZE);
   const dir = resolveInside(rootReal, relDir === "" ? "" : relDir);
   let names: string[];
   try {
-    names = readdirSync(dir);
+    names = await readdir(dir);
   } catch {
     throw new OctusError("not_found", `Directory not found: ${(relDir || ".").slice(0, 200)}`);
   }
@@ -66,32 +73,37 @@ export function listDirPage(rootReal: string, relDir: string, page: number, page
   const pageCount = Math.max(1, Math.ceil(total / size));
   const safePage = Math.min(Math.max(1, Math.floor(page) || 1), pageCount);
   const slice = names.slice((safePage - 1) * size, safePage * size);
-  const entries: FileEntry[] = slice.map((name) => {
-    const abs = path.join(dir, name);
-    let kind: "dir" | "file" = "file";
-    let entrySize: number | undefined;
-    try {
-      const st = statSync(abs);
-      kind = st.isDirectory() ? "dir" : "file";
-      if (st.isFile()) entrySize = st.size;
-    } catch {
-      kind = "file";
-    }
-    return { name, relPath: toRelPosix(abs, rootReal), kind, size: entrySize };
-  });
+  // `stat` en paralelo sobre la página (acotada a 200): ninguna página
+  // bloquea al resto y el árbol nunca carga el proyecto entero.
+  const entries = await Promise.all(
+    slice.map(async (name): Promise<FileEntry> => {
+      const abs = path.join(dir, name);
+      try {
+        const st = await stat(abs);
+        return {
+          name,
+          relPath: toRelPosix(abs, rootReal),
+          kind: st.isDirectory() ? "dir" : "file",
+          size: st.isFile() ? st.size : undefined,
+        };
+      } catch {
+        return { name, relPath: toRelPosix(abs, rootReal), kind: "file" };
+      }
+    }),
+  );
   // Directorios primero dentro de la página (orden estable para la UI).
   entries.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name, "en") : a.kind === "dir" ? -1 : 1));
   return { rootPath: rootReal, relDir: relDir === "" ? "." : relDir, entries, total, page: safePage, pageSize: size, pageCount };
 }
 
-export function readFileCapped(rootReal: string, relPath: string, maxChars = EXPLORER_MAX_READ_CHARS): FileContent {
+export async function readFileCapped(rootReal: string, relPath: string, maxChars = EXPLORER_MAX_READ_CHARS): Promise<FileContent> {
   const cap = Math.min(Math.max(1, Math.floor(maxChars) || EXPLORER_MAX_READ_CHARS), EXPLORER_MAX_READ_CHARS);
   const abs = resolveInside(rootReal, relPath);
   let buf: Buffer;
   try {
-    const st = statSync(abs);
+    const st = await stat(abs);
     if (!st.isFile()) throw new OctusError("invalid_tool_args", "Not a file");
-    buf = readFileSync(abs);
+    buf = await readFile(abs);
   } catch (error) {
     if (error instanceof OctusError) throw error;
     throw new OctusError("not_found", `File not found: ${relPath.slice(0, 200)}`);
@@ -105,13 +117,17 @@ export function readFileCapped(rootReal: string, relPath: string, maxChars = EXP
   return { rootPath: rootReal, relPath, content: truncated ? text.slice(0, cap) : text, truncated, size: buf.length };
 }
 
-export function projectRootReal(rawRoot: string): string {
+export async function projectRootReal(rawRoot: string): Promise<string> {
   if (isUncPath(rawRoot)) throw new OctusError("scope_violation", "UNC paths are not allowed");
   try {
-    // realpathSync resuelve symlinks: el root canónico fija la contención.
-    return realpathSync(rawRoot);
+    // `realpath` resuelve symlinks: el root canónico fija la contención.
+    return await realpath(rawRoot);
   } catch {
-    if (!existsSync(rawRoot)) throw new OctusError("not_found", "Project directory does not exist");
+    try {
+      await stat(rawRoot);
+    } catch {
+      throw new OctusError("not_found", "Project directory does not exist");
+    }
     throw new OctusError("tool_failed", "Project directory is not readable");
   }
 }

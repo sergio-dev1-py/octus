@@ -1629,6 +1629,9 @@ export class OctusCore {
     await this.integrations.reconcile().catch(() => undefined);
     await this.previews.reconcile().catch(() => undefined);
     await this.promotions.reconcile().catch(() => undefined);
+    // Todo 34 (presupuesto §7: events ≤ 2.000 por run típico): poda por
+    // política de agregados terminales; sin efecto en runs típicos.
+    await this.events.pruneTerminalRunEvents().catch(() => ({ pruned: 0, aggregates: 0 }));
     await this.plans.orphanSweep().catch(() => 0);
     await this.memory.startupSweep(200).catch(() => ({ checked: 0, markedStale: [] as string[] }));
   }

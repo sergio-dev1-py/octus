@@ -14,15 +14,19 @@ export async function reloadStage2(): Promise<void> {
 }
 
 export async function initStore(): Promise<void> {
+  // Todo 34 (§7: arranque frío hasta bienvenida visible, máx. 2,5 s): las
+  // lecturas independientes van en paralelo; solo sessions espera a projects
+  // (lo necesita para validar el proyecto activo). El estado final es el mismo.
   const prefs = await loadUiPrefs();
   applyUiPrefs(prefs);
   setState("prefs", prefs);
   await loadLayout();
   onEvent(applyEvent);
-  await refreshProjects();
-  await refreshSessions();
-  await refreshProviders();
-  await refreshBudgets();
-  await refreshPending();
+  await Promise.all([
+    refreshProjects().then(() => refreshSessions()),
+    refreshProviders(),
+    refreshBudgets(),
+    refreshPending(),
+  ]);
   await reloadStage2();
 }

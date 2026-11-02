@@ -2,6 +2,7 @@
 import { For, Show, createSignal } from "solid-js";
 import { invoke } from "../api.js";
 import { renderMarkdown } from "../markdown.js";
+import { INTEGRATION_CARD_WINDOW, capList } from "../perf.js";
 import { orderedApprovals, revisionGate } from "../toolcall-widgets.jsx";
 import {
   abortConflict,
@@ -297,6 +298,8 @@ export function PlansSection() {
 
 export function TasksSection() {
   const active = () => state.tasks.filter((t) => ["ready", "assigned", "running", "blocked"].includes(t.status));
+  // Todo 34 (§7: Agent Manager con 100 tareas en <1 s): diferido por conteo.
+  const capped = () => capList("task-cards", state.tasks);
   return (
     <details class="stage2">
       <summary>
@@ -305,7 +308,12 @@ export function TasksSection() {
       <Show when={state.tasks.length === 0}>
         <p class="muted">No tasks yet. The coordinator decomposes approved revisions into a task DAG.</p>
       </Show>
-      <For each={state.tasks}>
+      <Show when={capped().over}>
+        <p class="muted" data-deferred-panel="task-cards">
+          Ventana del DOM: {capped().visible.length} de {state.tasks.length} ({capped().deferred} diferidos por presupuesto).
+        </p>
+      </Show>
+      <For each={capped().visible}>
         {(task) => (
           <div class="card">
             <div class="row">
@@ -448,6 +456,8 @@ export function IntegrationsSection() {
   const [waiver, setWaiver] = createSignal<Record<string, string>>({});
   const [reviewerInstance, setReviewerInstance] = createSignal<Record<string, string>>({});
   const active = () => state.integrations.filter((i) => ["building", "conflicted", "validating", "preview_ready", "approved", "promoting"].includes(i.status));
+  // Todo 34: las tarjetas de integración son las más pesadas del chat; diferido por conteo.
+  const capped = () => capList("integration-cards", state.integrations, INTEGRATION_CARD_WINDOW);
   return (
     <details class="stage2">
       <summary>
@@ -456,7 +466,12 @@ export function IntegrationsSection() {
       <Show when={state.integrations.length === 0}>
         <p class="muted">No integrations yet. Reviewed writer tasks auto-integrate into an intermediate branch.</p>
       </Show>
-      <For each={state.integrations}>
+      <Show when={capped().over}>
+        <p class="muted" data-deferred-panel="integration-cards">
+          Ventana del DOM: {capped().visible.length} de {state.integrations.length} ({capped().deferred} diferidos por presupuesto).
+        </p>
+      </Show>
+      <For each={capped().visible}>
         {(integration) => (
           <div class="card">
             <div class="row">
@@ -675,9 +690,11 @@ export function IntegrationsSection() {
 
 export function MemorySection() {
   const [form, setForm] = createSignal({ scope: "project", scopeId: "", category: "fact", topic: "", content: "", source: "user" });
+  // Todo 34: diferido por conteo para gobernanza con muchas entradas.
+  const capped = () => capList("memory-cards", state.memories);
   const byScope = () => {
     const groups = new Map<string, typeof state.memories>();
-    for (const m of state.memories) {
+    for (const m of capped().visible) {
       const key = `${m.scope}:${m.scopeId.slice(-6)}`;
       const list = groups.get(key);
       if (list) list.push(m);
@@ -694,6 +711,11 @@ export function MemorySection() {
       </summary>
       <Show when={state.memories.length === 0}>
         <p class="muted">No memory entries yet. Agents propose via memory_propose; governance decides.</p>
+      </Show>
+      <Show when={capped().over}>
+        <p class="muted" data-deferred-panel="memory-cards">
+          Ventana del DOM: {capped().visible.length} de {state.memories.length} ({capped().deferred} diferidos por presupuesto).
+        </p>
       </Show>
       <For each={byScope()}>
         {([scope, entries]) => (
@@ -763,7 +785,10 @@ export function MemorySection() {
   );
 }
 
-export function AgentsSection() {  const active = () => state.agentInstances.filter((i) => ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
+export function AgentsSection() {
+  const active = () => state.agentInstances.filter((i) => ["created", "running", "waiting_permission", "waiting_input"].includes(i.status));
+  // Todo 34: diferido por conteo.
+  const capped = () => capList("agent-cards", state.agentInstances);
   return (
     <details class="stage2" id="agent-activity">
       <summary>
@@ -772,7 +797,12 @@ export function AgentsSection() {  const active = () => state.agentInstances.fil
       <Show when={state.agentInstances.length === 0}>
         <p class="muted">No subagents in this session yet.</p>
       </Show>
-      <For each={state.agentInstances}>
+      <Show when={capped().over}>
+        <p class="muted" data-deferred-panel="agent-cards">
+          Ventana del DOM: {capped().visible.length} de {state.agentInstances.length} ({capped().deferred} diferidos por presupuesto).
+        </p>
+      </Show>
+      <For each={capped().visible}>
         {(instance) => (
           <div class="card" data-agent-instance={instance.id}>
             <div class="row">

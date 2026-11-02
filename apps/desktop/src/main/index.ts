@@ -5,7 +5,7 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 import { OctusCore } from "@octus/core";
 import {
   IPC_EVENT_CHANNEL,
@@ -25,6 +25,7 @@ import {
   type TerminalChunk,
 } from "@octus/shared";
 import { ElectronSecretStore } from "./secret-store.js";
+import { decideExternalLink, isAllowedNavigationUrl } from "./security-policy.js"; // Todo 35: política de navegación/enlaces auditada
 import { MainSkillsService } from "./skills-service.js"; // Todo 24 (montaje aditivo): servicio de Skills en main
 import { TerminalService } from "./terminal-service.js"; // Todo 32: PTY persistente en main
 import { checkDirectoryReadable, directoryErrorMessage } from "./validate-directory.js";
@@ -1246,8 +1247,26 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
       preload: preloadPath(),
     },
+  });
+  // Todo 35 (auditoría): la ventana jamás navega fuera del bundle local ni del
+  // dev server declarado; los window.open/target=_blank no crean ventanas: solo
+  // https: (y http: de loopback para previews) se abre en el navegador del SO.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (decideExternalLink(url) === "open-external") void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (!isAllowedNavigationUrl(url, process.env.ELECTRON_RENDERER_URL)) event.preventDefault();
+  });
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  mainWindow.webContents.on("will-attach-webview", (event) => {
+    event.preventDefault();
   });
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);

@@ -1,0 +1,29 @@
+# Configuración de distribución Windows (Todo 36, inicial).
+# Genera el instalador NSIS + portable cuando el operador lo autoriza (`bun run dist:win`).
+# El paquete portable .zip de `scripts/verify-task-36-dist.mjs --package` no requiere
+# esta herramienta y es la vía inicial ya verificada.
+appId: com.octus.desktop
+productName: Octus
+directories:
+  app: out
+  output: dist
+files:
+  - from: out
+    to: .
+  - from: ../..
+    to: .
+    filter:
+      - package.json
+win:
+  target:
+    - nsis
+    - portable
+  artifactName: octus-desktop-${version}-win64-${name}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+portable:
+  artifactName: octus-desktop-${version}-win64-portable.${ext}

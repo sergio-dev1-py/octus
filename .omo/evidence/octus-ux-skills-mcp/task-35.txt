@@ -1,0 +1,140 @@
+TODO 35 — Auditoría de seguridad de Electron y credenciales
+Rama: feat/ux-skills-mcp-w15-dist | Worktree: C:/Users/UserPy/Documents/octus-wt-octus-ux-skills-mcp-w15
+Fecha (UTC): 2026-11-02 | Executor: senpi-task st_01a19a2e
+Plan: .omo/plans/octus-ux-skills-mcp.md (Todo 35, Ola 15). Cierra GAP-3 y GAP-5 (cierre de seguridad).
+
+== CAMBIOS (solo estos; perf.ts es del Todo 34 en vuelo y NO se tocó) ==
+ M apps/desktop/src/main/index.ts  (4 guardias: setWindowOpenHandler+deny, will-navigate, permisos deny-all, will-attach-webview; webSecurity+allowRunningInsecureContent explícitos; shell.openExternal solo vía decideExternalLink)
+ M apps/desktop/src/main/secret-store.ts  (corrupto: backup .corrupt.<ts>.bak + aviso + vacío fail-closed; forma inesperada rechaza arrancar)
+?? apps/desktop/src/main/security-policy.ts  (NUEVO: isAllowedNavigationUrl, decideExternalLink, scanTextForSecrets, looksLikePlaintextSecretValue)
+?? scripts/verify-task-35-security.ts  (NUEVO: auditoría ejecutable, 68 checks)
+Estado git al verificar:
+M apps/desktop/src/main/index.ts
+ M apps/desktop/src/main/secret-store.ts
+?? apps/desktop/src/main/security-policy.ts
+?? apps/desktop/src/renderer/src/perf.ts
+?? scripts/verify-task-35-security.ts
+6f31c02 Merge ola 14: terminal PTY y archivos (plan octus-ux-skills-mcp)
+54c15c1 feat(terminal): persistent PTY terminal + explorer, diffs and diagnostics
+8a49d25 Merge ola 13: cliente MCP completo y seguro (plan octus-ux-skills-mcp)
+feat/ux-skills-mcp-w15-dist
+
+== HALLAZGOS DE LA AUDITORÍA (revisión manual previa al script) ==
+1. Sin setWindowOpenHandler/will-navigate/permission-handler: el renderer usa <a target=_blank> (views/sections.tsx:569, URLs de preview) → cualquier window.open creaba una ventana Electron con plenos privilegios. CORREGIDO (deny + apertura externa solo https/https-loopback vía shell).
+2. ElectronSecretStore.load() tragaba JSON corrupto y arrancaba vacío silencioso (pérdida silenciosa de secretos). CORREGIDO (backup forense + aviso + fail-closed).
+3. Sin restos que migrar: DB solo guarda secret_ref opaco (schema provider_configs), claves solo en safeStorage vía SecretStore, redacción en logs (redactSecrets), listProviders devuelve solo configured:boolean, MCP rechaza credenciales en URL y claves en JSON importado.
+
+== AUDITORÍA — PASADA 1/2 (bun scripts/verify-task-35-security.ts, exit 0) ==
+PASS A1 contextIsolation:true
+PASS A2 nodeIntegration:false
+PASS A3 sandbox:true
+PASS A4 webSecurity:true explícito
+PASS A5 sin contenido inseguro
+PASS A6 preload fijado
+PASS A7 sin nodeIntegration:true en src
+PASS A8 sin contextIsolation:false en src
+PASS A9 preload expone solo window.octus
+PASS A10 preload usa contextBridge
+PASS A11 preload sin require/process
+PASS A12 preload sin invoke genérico (canal tipado octus:)
+PASS B1 assertSender existe y compara webContents
+PASS B2 registro por canal con prefijo octus:
+PASS B3 assertSender en cada dispatch
+PASS B4 handlers con payload validan entrada — 98 handlers
+PASS B5 sin shell.openExternal fuera del guardia
+PASS B6 listProviders no devuelve claves (solo configured)
+PASS C1 setWindowOpenHandler deniega crear ventanas
+PASS C2 window.open pasa por decideExternalLink
+PASS C3 will-navigate con isAllowedNavigationUrl
+PASS C4 permisos denegados por defecto
+PASS C5 webviews bloqueados
+PASS C6 navegación file:///app/renderer/index.html → allow
+PASS C6 navegación https://evil.example/ → deny
+PASS C6 navegación javascript:alert(1) → deny
+PASS C6 navegación (vacía) → deny
+PASS C6 navegación not a url → deny
+PASS C6 navegación http://localhost:5173/index.html → allow
+PASS C6 navegación http://localhost:9999/x → deny
+PASS C6 navegación https://localhost:5173/x → deny
+PASS C7 enlace https://example.com/docs → open-external
+PASS C7 enlace http://127.0.0.1:4312/preview → open-external
+PASS C7 enlace http://localhost:3000/ → open-external
+PASS C7 enlace http://example.com/x → deny
+PASS C7 enlace file:///etc/passwd → deny
+PASS C7 enlace data:text/html,<h1>x</h1> → deny
+PASS C7 enlace blob:https://example.com/u → deny
+PASS C7 enlace javascript:alert(1) → deny
+PASS C7 enlace myapp://open → deny
+PASS C7 enlace basura → deny
+PASS D1 usa isAsyncEncryptionAvailable
+PASS D2 usa encryptStringAsync/decryptStringAsync
+PASS D3 sin API síncrona (eliminada en Electron 46)
+PASS D4 fail-closed sin cifrado (nunca texto plano)
+PASS D5 corrupto archiva backup + avisa (no vacío silencioso)
+PASS D6 forma inesperada rechaza arrancar
+PASS D7 core secret-store sin fs/SQLite (interfaz + memoria/env)
+PASS D8 provider_configs guarda secret_ref, no la clave
+PASS D9 import MCP rechaza claves (assertNoSecretKeys)
+PASS D10 MCP redacta secretos en logs
+PASS D11 URL MCP sin credenciales embebidas
+PASS D12 plano 'sk-live-...' se detecta
+PASS D13 plano con espacios se detecta
+PASS D14 vacío se detecta
+PASS D15 blob cifrado (base64 aleatorio) pasa
+PASS D16 escáner detecta assigned-api-key — api_key = "sk-abcdefghijklmnopqrst"
+PASS D16 escáner detecta assigned-secret — client_secret: 's3cr3t-value-99'
+PASS D16 escáner detecta bearer-header — Authorization: Bearer eyJhbGciOiJIUzI1Ni
+PASS D16 escáner detecta github-token — token ghp_abcdefghijklmnop1234 en texto
+PASS D16 escáner detecta private-key-block — -----BEGIN RSA PRIVATE KEY-----
+PASS D16 escáner detecta assigned-password — password = "s3cret-value!"
+PASS D16 escáner detecta connection-string — postgres://admin:s3cret@db/x
+PASS D17 escáner sin falsos positivos en identificadores
+PASS E1 cero secretos en plano en el árbol trackeado — 303 ficheros; hallazgos: 
+PASS F1 failure: secreto en JSON plano detectado — 3 hallazgos
+PASS F2 failure: el gate bloquearía el cierre (exit 1)
+PASS F3 limpieza del failure case (recibo) — C:\Users\UserPy\AppData\Local\Temp\octus-t35-poison-SjiHyR
+
+AUDITORÍA TODO 35: todo PASS (68 checks)
+== AUDITORÍA — PASADA 2/2 (clase flaky_tests: repetir 2x) ==
+bun scripts/verify-task-35-security.ts → exit 0, AUDITORÍA TODO 35: todo PASS (68 checks).
+Determinismo: pasada 1 y 2 idénticas salvo tempdir del failure case (diff normalizado igual). 3.ª pasada (para evidencia) también exit 0.
+
+== TYPECHECK / TESTS / BUILD / ELECTRON LIVE ==
+bun run typecheck (shared+core+desktop node+web) → exit 0.
+bun test test/mcp-management.test.ts test/mcp-trust.test.ts test/mcp-tools.test.ts test/mcp-resources.test.ts (packages/core) → 46 pass, 0 fail, 237 expect() calls.
+bun run build (apps/desktop, electron-vite) → exit 0 (out/main/index.js 2.4 MB, preload 1.03 kB, renderer 545 kB).
+Verificado en el bundle: setWindowOpenHandler, will-navigate, setPermissionRequestHandler, will-attach-webview, decideExternalLink, isAllowedNavigationUrl, '.corrupt.' presentes.
+Electron live --octus-smoke (45.2.0): node:sqlite ok; safeStorage async available:true + roundtrip ok; persistence worker ok; budget gate ok; core boot + auth failure limpio ok → [smoke] ALL OK, exit 0.
+Electron live GUI --octus-autoquit=10000: ventana + preload + renderer sin errores de consola ni did-fail-load → [autoquit] quitting with code 0, exit 0.
+  (aviso Chromium GPUPersistentCache/Sandbox ajeno a la app; no afecta al veredicto: failed=false).
+
+== MANUAL QA (PASS/FAIL) ==
+MQ1 build genera out/main+preload+renderer sin errores: PASS (ver arriba).
+MQ2 smoke Electron con safeStorage roundtrip real: PASS (available:true, roundtrip ok).
+MQ3 arranque GUI con autoquit sin errores de consola del renderer: PASS (code 0).
+MQ4 navegación externa: matriz C6/C7 del script (18 casos, file/dev/evil/javascript/file/data/blob/custom): PASS 18/18.
+MQ5 failure case manual: secreto en JSON plano → escáner lo detecta (F1) y el gate bloquearía el cierre (F2): PASS.
+MQ6 secretos.json del perfil real: no inspeccionado a mano (privacidad); el gate repo + D12–D15 cubren el formato. N/A justificado.
+
+== CLASES ADVERSARIALES ==
+stale_state: la 1.ª pasada dio 2 FAIL (B1/B6); no se asumió fallo del producto: se leyó el fuente y eran regex del script (B1 esperaba '?.', el código usa '.'; B6 incluía el método vecino). Corregido y re-verificado 3× en verde.
+misleading_success_output: el veredicto exige exit code 0 además del texto; el failure case (F1/F2) demuestra que el script PUEDE ir a rojo (detecta y bloquearía), así que el verde no es tautológico.
+dirty_worktree: git status muestra solo mis 4 ficheros + evidence; perf.ts (untracked, Todo 34 en vuelo) intacto; node_modules/ generado por bun install está ignorado; sin commits (rama compartida con Todo 34: el commit lo coordina el padre).
+flaky_tests: auditoría ejecutada 3× (2 exigidas + 1 de volcado) con salida idéntica; tests MCP 46/46 sin reintentos ni sleeps propios.
+prompt_injection: el escáner trata todo contenido como dato (solo regex, sin exec/eval/require de lo escaneado); hallazgos truncados a 200 chars; el renderer envuelve contenido MCP como no confiable (tests mcp-tools/mcp-trust en verde). la ruta de claves externa jamás abierta ni citada (restricción cumplida).
+Resto NO-APLICABLE con motivo: red/SSRF externa (sin tráfico de red en la auditoría; SSRF cubierto por tests Todo 29 ya verdes); concurrencia/tiempo (script monohilo determinista); elevación de privilegios (sin sudo/admin en ningún paso); pérdida de datos (failure case en tmpdir efímero, verificado eliminado).
+
+== LIMPIEZA TOTAL CON RECIBO ==
+Poison dirs del failure case (3 pasadas): eliminados y verificado !exists (F3 PASS ×3).
+Capturas de comparación en C:/tmp (t35-run1/2.txt): eliminadas y verificado !exists.
+node_modules/ del worktree: generado por 'bun install' (necesario para typecheck/build); ignorado por git, se deja instalado para el Todo 34/36.
+out/ (build): artefacto ignorado, se deja para re-uso del Todo 36 (distribución).
+Recibo: git status limpio de ajenos salvo perf.ts (Todo 34, intacto); este Todo no deja ficheros temporales fuera de .omo/evidence.
+
+== RIESGOS Y SUPUESTOS ==
+1. main/index.ts también lo referencia el Todo 34 (rendimiento): mis cambios son aditivos de seguridad sobre árbol limpio; posible conflicto de fusión menor si el Todo 34 toca createWindow — coordinar orden de commits.
+2. No se hace commit desde este Todo (rama compartida con Todo 34 en vuelo); changed_files listos para el commit 'feat(desktop): electron security audit and credential migration'.
+3. secrets.json del perfil de usuario real no validado en vivo (privacidad); formato cubierto por D12–D15 + smoke live.
+4. devTools no se desactiva (necesario para diagnóstico); la superficie queda cerrada por aislamiento + IPC validado + navegación denegada.
+
+FIN EVIDENCIA TODO 35 — TODO PASS (68 checks ×3, typecheck, 46 tests, smoke+GUI live).
