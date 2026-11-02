@@ -1,0 +1,68 @@
+# F3 — Real manual QA (ejecución por agente, ninguna interacción del usuario)
+Plan: .omo/plans/octus-ux-skills-mcp.md (olas 7–15) | Rama: main @ 224b77a
+Fecha: 2026-11-02 | Máquina: win32 x64 (i3-2328M) | Ejecutor: st_01a19a6d
+Datos fijos: C:\tmp\octus-qa-proj, servidor mcp-qa-stdio (simulado), skill qa-skill@1.0.0
+Bundle: reconstruido desde fuente (`bun run --cwd apps/desktop build`, EXIT 0) antes de las sondas.
+
+## Matriz de superficies (veredicto por superficie)
+| Superficie | Harness ejecutado (comando) | Resultado |
+|---|---|---|
+| Bienvenida (dropzone, recientes con fecha, crear/continuar, sin auto-selección) | C:\tmp\f3-qa\probe-wlt-f3.cjs (bundle real + stub) + scripts/.qa-task-11-f3.mjs (App real, entry adaptada) | PASS 18/18 + 40/40 |
+| Layout (ocultar/redimensionar/restaurar/persistir/recuperar) | bun verify-task-8-layout.mjs (lógica, 32 gates) + probe-wlt-f3 (bundle real) | PASS (lógica 32/32; superficie real 6/6) |
+| Conversación extensa (600 msgs, virtualización, streaming, cancelación) | C:\tmp\f3-qa\probe-13-f3.cjs (bundle real + stub adaptado) | PASS (exit 0, 0 FAIL) |
+| Tool calls, aprobaciones, preguntas, actividad | C:\tmp\f3-qa\probe-14-f3.cjs (bundle real + stub +onTerminalData) | PASS (exit 0) |
+| Agent Manager (agentes, tareas, DAG, runs, worktrees) | bun verify-task-16-agents.mjs (31/31) + C:\tmp\f3-qa\probe-16-f3.cjs (bundle real) | PASS 10/10 |
+| Skills (descubrimiento, install, scopes, runtime, UI) | bun verify-task-24-skills.mjs (72/72) + node qa-task-24.mjs (Chromium, 54/54) | PASS |
+| MCP (confianza, herramientas aisladas, recursos, UI, seguridad) | bun qa-task-30.mjs + scripts/.qa-task-30-f3.mjs (trust-toggle con reintento) | PASS 80/80 |
+| Terminal (PTY real + panel) | node qa-task-32-f3.mjs adaptado (ROOT=main, 46/46) + surface bajo node (8/8) | PASS |
+| Explorador, diffs, pruebas, diagnósticos | bun verify-task-33-core.mjs (16/16) + node verify-task-33-surface.cjs | PASS |
+| Temas (claro/oscuro/sistema, 12–18px, 3 densidades) | probe-wlt-f3 (bundle real, 7/7) + node qa-task-7.mjs (catálogo Chromium, 56/56) | PASS |
+
+## Salidas por harness (colas representativas)
+### build desktop — EXIT 0
+`bun run --cwd apps/desktop build` → bundle out/renderer/assets/index-BS2K4cH2.js (553090 B). out/ anterior era del 2026-11-01 (obsoleto frente a App.tsx del 2026-11-02); sin rebuild las sondas habrían corrido contra código viejo.
+
+### verify-task-8-layout (bun) — lógica 32 PASS / estáticos 17 FAIL (harness obsoleto, ver §4)
+PASS: ocultar/redimensionar/restaurar sidebar-inspector-bottom, clamp min/max, reset, persistencia tras reinicio simulado, rehidratado válido, corrupto→defecto con repaired, sin pantalla en blanco, IPC layout.get/set en shared+main, kv ui.layout.v1.
+FAIL (17): greps sobre App.tsx/store.ts/styles.css escritos en ola 8, anteriores a la modularización del Todo 9 y a node-pty del Todo 32. Ninguno es fallo funcional (ver §4).
+
+### verify-task-16-agents (bun) — 31/31 PASS
+### verify-task-24-skills (bun) — 72 PASS / 0 FAIL
+### verify-task-33-core (bun) — 16 PASS / 0 FAIL + paginación de proyecto grande sin congelar + escape de root denegado.
+### qa-task-7 (node/Chromium) — 54 PASS / 0 FAIL (×2 pasadas) incl. conmutación claro↔oscuro con estilos computados.
+### qa-task-24 (node/Chromium) — 54 PASS / 0 FAIL (×2) incl. importar/habilitar/bloquear-con-error/historial.
+### probe-13 adaptada — EXIT 0: total 600, ventana 100, DOM acotado, centinela 100→200, botón con cursor beforeId=m400 y DOM capado a 200 (contrato ola 15), streaming/píldoras/tool-call, part.done, append idempotente sin duplicados, adjunto cercado, setModel, cancelación sin fantasma, resume limpio.
+PNG: task-13-timeline-long.png, task-13-streaming.png, task-13-cancel.png (regenerados hoy).
+### probe-14 adaptada — EXIT 0: toolcall visible completed, pregunta con timeout, aprobar/rechazar idempotente, réplica duplicada rechazada, run fallido con error, DAG/previews/diffs de la vista, archivos src/form.ts. PNG task-14-surface.png, task-14-toolcall.png.
+### probe-16 F3 (nueva, bundle real) — 10/10: #agent-dag con nodos tsk_qa02/tsk_qa03 y arista ← tsk_qa02, tarjetas running/bloqueada (needs-approval), worktree wt_qa01, runs executing + cancelled, sin progreso inventado. PNG task-f3-agents.png.
+### probe-wlt F3 (nueva, bundle real) — 18/18: welcome-shell sin auto-selección, dropzone, 2 recientes con fecha, drop vacío→error sin crear proyecto, continuar→timeline 600, sidebar/inspector/bottom ocultar+restaurar, layout.set persistido, settings con data-theme/density/font-size + estilos computados (dark #1b1a17, 18px) y prefs.set. PNG task-f3-workbench.png.
+### qa-task-11 adaptada — 40 PASS / 0 FAIL: bienvenida, recientes, modo sesiones, abrir sin sesión, #project-nav con 3 sesiones y aislamiento (B-uno fuera), cambiar/renombrar/cerrar/recuperar (corrupta→vacía registrada con conteo; sana→sin incidente), guarda foránea rechazada.
+### qa-task-30 endurecida — 80 PASS / 0 FAIL (×2): agregar/importar/conectar, herramientas por servidor, secreto solo en almacén (nunca en SQLite ni DOM), revocar→desconectado+auditoría, roto→píldora falló + alert + reintento sin bloquear, lista viva. PNG task-30-surface.png, task-30-failure.png.
+### qa-task-32 adaptado (node, PTY real ConPTY) — 46 PASS / 0 FAIL (×2): crear/eco/resize/cancelar/cerrar, malformed rechazados, disposeAll limpio.
+### qa-task-32-surface bajo node — 8 PASS / 0 FAIL: panel, crear, eco por streaming, kill con marcador, historial conserva eco, reutilizable tras kill, cerrar. PNG task-32-surface.png.
+(Bajo bun el mismo harness da 5/8: limitación documentada ConPTY-sin-salida en proceso Bun; el runtime productivo es Node/Electron.)
+### verify-task-33-surface (node/Chromium) — PASS: explorar, diff, modificados, resultado de prueba, diagnósticos, failure sin romper la UI.
+
+## §4 Adaptaciones de harnesses (mantenimiento QA, producto intacto; repo sin diffs de producto)
+1. probe-13 fixture (ola 10): el flujo bienvenida→workbench de olas 11–15 invoca canales nuevos (skills.catalog, terminal.list, files.list/read, memory.list, integrations.list, worktrees.list/get, tasks.list, projects.testAllowlist/trustedInstructions/isolatedDirs, repos.inspect/modified/diff, diagnostics.list, recovery.status) y la suscripción onTerminalData (ola 14). Sin ellos, selectProject abortaba en silencio (setState→computación que pedía onTerminalData inexistente) y el timeline quedaba en 0. Diagnóstico con bundle parcheado solo en memoria. Adaptación en C:\tmp\f3-qa (repo intacto).
+2. probe-13 secciones D/G: el driver esperaba DOM 200→300 y +1 nodo tras integrar; la ola 15 sancionó ventana DOM de 200 (CHAT_DOM_WINDOW, commit 4b4fd23, Todo 34). Aserciones actualizadas al contrato vigente (cursor beforeId=m400, nota "200 de 300", live1 visible como newest, sin duplicados). Comportamiento correcto, driver obsoleto.
+3. probe-14: mismo +onTerminalData; resto del stub (109 canales) vigente. Sin cambios de aserciones.
+4. qa-task-11 entry: backend sin canales de olas 12–15 ni onTerminalData → mismo stall. Copia temporal scripts/.task11-f3-entry.tsx + harness .qa-task-11-f3.mjs con los canales añadidos; 40/40. (Ambos eliminados tras la corrida.)
+5. qa-task-32/mjs + surface: hook task32-resolve-hook apuntaba al worktree w14 (obsoleto pero existente en disco). Copia del hook con ROOT=main en /tmp; el servicio bajo node (productivo) en vez de bun.
+6. qa-task-30: race del toggle de confianza en i3 lento (click CDP perdido 1 de cada 2 corridas; el producto denegaba correctamente por falta de confianza). Copia .qa-task-30-f3.mjs con reintento del toggle hasta "autorizado" + check explícito; 80/80. (Eliminada tras la corrida.)
+7. verify-task-8-layout / probe-task-6 / qa-task-6-manual: FAILs por greps pre-Todo-9 (App.tsx monolítico) y pre-ola-14 (sin node-pty). Selectores y conducta verificados en bundle real (probe-wlt). No son regresiones.
+8. probe-task-8-surface (Electron): preload de ola 8 sin proyecto sembrado → boot en bienvenida (correcto IS-1) → su waitFor de #sidebar nunca se cumple. Sonda obsoleta frente a IS-1; layout real cubierto por probe-wlt + 32 gates lógicos.
+
+## Observaciones no bloqueantes
+- styles.css trae anchos estructurales sin tokenizar (.dialog 420/640px, 220px, #welcome 720px). Deriva menor del sistema de diseño; sin efecto funcional.
+- El check "sin dependencias pesadas" (ola 8) rechaza node-pty, sancionado por el Todo 32. playwright/jsdom siguen ausentes del renderer. Sin acción.
+- task-7-catalog.png y task-16-surface.png conservan fecha de su ola (los harnesses de hoy vuelcan en .task7-shot.png y task-f3-*.png). Sin impacto.
+
+## Limpieza (recibo)
+- Procesos: ningún chrome.exe residual (tasklist vacío); harnesses con taskkill/dispose propios; servidores HTTP de sonda cerrados (server.close + exit).
+- Temporales propios eliminados: scripts/.qa-task-11-f3.mjs, scripts/.task11-f3-entry.tsx, scripts/.qa-task-30-f3.mjs, scripts/.qa-task-32-surface-f3.mjs, scripts/.task7-dist/, scripts/.task7-shot.png, C:\tmp\f3-qa\, C:\tmp\f3-logs\, C:\tmp\octus-qa-attach-13\, C:\Windows\Temp\scratch-layout-qa\ (linkedom instalado solo para el gate de layout).
+- Conservados a propósito: C:\tmp\octus-qa-proj (fixture canónico de datos fijos del plan), PNGs de evidencia citados arriba, f3.txt (este archivo).
+- Repo: sin diffs de producto (solo evidencia .omo/ + PNGs refrescados por las corridas).
+
+## Veredicto: APPROVE
+Cada superficie pasa con evidencia ejecutada por el agente: bienvenida, layout, conversación extensa, Agent Manager, Skills, MCP, terminal y temas, todas en verde sobre el bundle reconstruido del main con datos fijos. Los únicos FAILs observados fueron de harnesses obsoletos o races del harness, cada uno diagnosticado hasta causa raíz con reproducción, y re-verificados en verde tras la adaptación. Ningún fallo real de producto.

@@ -1,0 +1,198 @@
+# F4 — Ideal-state fidelity (plan .omo/plans/octus-ux-skills-mcp.md)
+Fecha (UTC): 2026-11-02 · Ejecutor: senpi-task st_01a19a6e · Rama: main · Base: 224b77a
+Método: lectura completa de F4 + tabla ## Success criteria del plan; por cada IS:
+qué entrega el código (rutas en main), qué QA lo prueba (evidencia task-N con
+comando + resultado), veredicto. Prohibido dry-run: todo lo afirmado se leyó o
+se ejecutó de verdad. k.txt jamás abierto ni citado (mención nominal donde el
+plan lo exige). Sin push (lo prohíbe el plan).
+
+## Matriz 1:1 (IS → entrega → QA → veredicto)
+
+### IS-1 — Bienvenida predecible, sin auto-selección
+Entrega (main, olas 9 reubicadas en estructura modular):
+- apps/desktop/src/renderer/src/views/welcome.tsx (portal #welcome-dropzone,
+  pick nativo, recientes con fecha, crear/continuar, settings; sin auto-selección)
+- packages/core/src/sessions/octus-core.ts (recoverSession + settleInterrupted
+  intacto), packages/shared/src/ipc.ts (sessions.recover),
+  apps/desktop/src/main/index.ts (validación app.validateDirectory)
+QA probatorio (matriz: task-10, task-11):
+- task-10.txt: welcome-task10-verify.ts 44 PASS / 0 FAIL (drop válido + 5
+  failures con error, 2 pasadas sin estado heredado, 0 proyectos al arrancar,
+  sin auto-selección) + typecheck exit 0 + build exit 0 + session-management 3/3.
+- task-11.txt: bun session-management 3/3 (crear/cambiar/cerrar/recuperar con
+  aislamiento; corrupto → sesión vacía registrada con error.raised, forense
+  conservado) + sonda runtime 13/13 + QA manual 20/20 ×2 + screenshot.
+Veredicto IS-1: PROBADA.
+
+### IS-2 — Workbench con paneles ocultables, redimensionables y restaurables
+Entrega (main, ola 8):
+- packages/shared/src/layout.ts (WorkbenchLayout, ui.layout.v1, rangos,
+  parseStoredLayout), canales layout.get/set, store.ts (11 acciones + preview/
+  save), App.tsx (activity bar 6 actividades, atajos Ctrl+B/J, Ctrl+Alt+I,
+  Ctrl+0, Alt+1..6), styles.css solo var(--oc-*)
+QA probatorio (matriz: task-8; task-9 paridad del refactor):
+- task-8.txt: verify-task-8-layout 66/66 + sonda Electron real 32/32 (ocultar/
+  redimensionar/restaurar persistidos; layout corrupto → defecto + aviso, sin
+  pantalla en blanco) + manual-QA S1–S10 + F1 + typecheck exit 0.
+- task-9.txt: typecheck + suite raíz en verde con paridad afirmada.
+Veredicto IS-2: PROBADA.
+
+### IS-3 — Conversación completa sin jank
+Entrega (main, ola 10):
+- views/chat.tsx (.message-timeline, ventana virtualizada, centinela,
+  marcos live, cancelación con motivo), timeline.ts (lógica pura),
+  sessionMessagesPage con cursor (paginación), composer con adjuntos + selector
+  de modelos, tool calls expandibles / aprobaciones / preguntas / actividad
+QA probatorio (matriz: task-13, task-14):
+- task-13.txt: timeline bun 41/41 + Playwright 600 mensajes (scroll virtualizado,
+  marcos, cancelación sin fantasma/duplicado) + failure cancelación a mitad de
+  stream afirmado en DOM.
+- task-14.txt: conversation-widgets 14/14 ×2 + sonda servicios 20/20 (tool call
+  emparejada, aprobación idempotente solo-gesto-humano, pregunta/respuesta,
+  run failed real, archivos) + Playwright 33/33 + screenshots.
+Veredicto IS-3: PROBADA.
+
+### IS-4 — Agent Manager real, sin agentes ficticios
+Entrega (main, ola 11):
+- views/agents.tsx (W-A1..W-A5, #agent-dag, dagAdjacency/cycle/layout con
+  semántica idéntica a task-graph, data-run-final="cancelled"), store/runs.ts
+  (ficha vía runs.get existente), views/dag.tsx + dagLogic.ts (#integration-dag,
+  previews, conflictos, worktrees.diff, historial), canPromote espejo de
+  PromotionManager (sin aprobación fijada a SHA no hay promote)
+QA probatorio (matriz: task-16, task-17):
+- task-16.txt: verify 31/31 + sonda Electron 23/23 ×3 (dag 3 nodos, run
+  cancelled = estado final real sin %, worktree con datos de run).
+- task-17.txt: task-graph 5/5 ×2 (semántica del DAG), promotion-gate failure
+  real con manager véritable + superficie 12/12 ×2 (arista, conflicto,
+  preview, diff, historial).
+- Nota honesta: worktrees/integration en rojo pre-existente por timeouts de
+  entorno en i3 (documentado en task-17, sin enmascarar); el Todo 17 no modifica
+  core y su camino (diff/promoción) se prueba en verde. No es faltante de IS-4.
+Veredicto IS-4: PROBADA.
+
+### IS-5 — Skills reales: instalar, administrar, uso con carga progresiva
+Entrega (main, ola 12):
+- packages/core/src/skills/skill-manager.ts (descubrimiento 3 ámbitos,
+  precedencia project>global>managed, registro sin duplicados),
+  skill-installer.ts (carpeta/zip/git explícito, validación C1..C8, sin
+  ejecución), skill-activation.ts (installed≠enabled, kv por proyecto,
+  selectForRun), skill-runtime.ts (3 niveles: metadatos top-1 por solape +
+  instrucciones topadas + recursos bajo demanda; registro por run en kv;
+  skillAllows descriptivo, nunca autoriza; puerta spawn exigida),
+  main/skills-service.ts + 11 canales skills.* + views/skills.tsx
+  (#skills-manager, detalle origen/alcance/procedencia, errores que bloquean
+  habilitar, historial por run) + sección en configuración y panel contextual
+QA probatorio (matriz: task-23, task-24; base 20/21/22):
+- task-23.txt: carga progresiva (prompt solo metadatos + relevante completa),
+  run registra skill usada, intento de evasión → deny + auditoría.
+- task-24.txt: Playwright manager (catálogo, detalle, importar, habilitar,
+  historial run_qa01→qa-skill; error de validación bloquea habilitar).
+- task-20/21/22 en verde (descubrimiento sin duplicados, install/uninstall
+  limpio, matriz habilitar×proyecto + persistencia).
+- Nota honesta: brechas 19-A..D (capas projectRules/runRules/taskRules/scope
+  explícito en PermissionManager) siguen ABIERTAS por decisión explícita del
+  Todo 23 (deep-high): los scopes de IS-5 (global/proyecto/Octus) se respetan
+  por proyecto + reglas de instancia con deny-by-default intacto y sin vía de
+  evasión. Es refinamiento del modelo de permisos (territorio F1/Todo 19), no
+  conducta IS-5 ausente: ningún escenario probatorio de la matriz lo exige.
+  No genera N. en F4.
+Veredicto IS-5: PROBADA.
+
+### IS-6 — Cliente MCP seguro y útil
+Entrega (main, ola 13):
+- @modelcontextprotocol/sdk@1.32.2 pin exacto (STDIO + Streamable HTTP; SSE
+  legado ausente), mcp-client-manager.ts (confianza global/por workspace que
+  precede a conectar, backoff, timeouts, jamás expone como servidor),
+  mcp-tools-bridge (nombres aislados <server>.<tool>, techo duro = permiso
+  explícito, re-chequeo authorized/available, contenido no confiable con
+  banner), mcp-resources.ts (recursos/prompts con aprobación, nada no
+  negociado), mcp-server-management.ts (STDIO sin shell, HTTP Bearer solo
+  desde SO, SSRF/HTTPS/tamaños/timeouts), views/mcp.tsx (configurado≠
+  conectado≠autorizado; configurar remoto nunca se llama instalar)
+QA probatorio (matriz: task-27, task-29; base 25/26/28/30):
+- task-27.txt: descubrimiento + llamada aislada + denegación sin permiso con
+  auditoría de origen; dos servidores misma tool no colisionan.
+- task-29.txt: 10/10 ×3 (secreto solo en SO, redacción, SSRF incl. 169.254.169.254,
+  cancelación por timeout, token revocado corta con auditoría) + regresión
+  26–28: 36/36.
+- task-25 (conformidad STDIO+HTTP, SSE ausente), task-26 (no-confiable se niega
+  al abrir workspace; confianza explícita conecta/reconecta), task-28
+  (recurso sensible sin aprobación → deny antes de inyectar), task-30
+  (Playwright manager + failure protocolo visible y reintentable).
+Veredicto IS-6: PROBADA.
+
+### IS-7 — Terminal persistente + archivos bajo políticas existentes
+Entrega (main, ola 14):
+- main/terminal-service.ts (node-pty en main, crear/listar/escribir/leer/
+  resize/kill/cerrar, streaming IPC, killTree, buffer 256K, CWD fijado a raíz
+  validada, env por allowlist, ninguna herramienta de agente enruta a terminal),
+  views/terminal-panel.tsx, file-explorer.ts (paginado 200/pág, lectura 20k,
+  sin UNC), repos.diff/modified, tests.run (allowlist + copia desechable),
+  diagnostics.list, views/files.tsx (#file-explorer, #repo-diff,
+  #modified-list, #test-results, #problems-list)
+QA probatorio (matriz: task-32, task-33):
+- task-32.txt: ciclo PTY real ×2 pasadas 46/46 (crear+CWD, eco por streaming,
+  resize, 2 terminales, kill de proceso largo, cierre) en Windows.
+- task-33.txt: typecheck exit 0 + regresión shared 31 + core 319/0 (incluye
+  etapas 1–6, Skills, MCP) + backend real 16/16 ×2 (explorar, leer, diff,
+  modificados, test, diagnósticos) + Playwright superficie ×2.
+Veredicto IS-7: PROBADA.
+
+### IS-8 — Temas, tamaños y densidad persistentes
+Entrega (main, ola 8):
+- packages/shared/src/prefs.ts (UiTheme/UiDensity, ui.prefs.v1, corrupción →
+  defecto), canales prefs.get/set, renderer prefs.ts (apply/load/save),
+  AppearanceSettings (#prefs-theme/density/font-size 12–18), styles.css sobre
+  var(--oc-*), catálogo de componentes sobre tokens (oc.tsx)
+QA probatorio (matriz: task-6; catálogo task-7):
+- task-6.txt: prefs 6/6 ×2 + ui-prefs round-trip con close+reopen 2/2 +
+  corrupción → defecto + sonda estilo computado 32/32 + manual-QA 33/33.
+- task-7.txt: Playwright del catálogo en verde; componente fuera de tokens
+  se detecta y rechaza.
+Veredicto IS-8: PROBADA.
+
+### IS-9 — Live con presupuesto anunciado, sin fugas ni gasto sorpresa
+Entrega (main, ola 15):
+- main/security-policy.ts (scanTextForSecrets, decideExternalLink,
+  isAllowedNavigationUrl), secret-store SO-primero (corrupto → backup
+  forense + fail-closed), auditoría 68 checks, electron-builder.yml (NSIS +
+  portable), IMPLEMENTATION_ROADMAP adenda olas 7–15, verify-task-36-dist.mjs
+  (gate: build + escaneo + failure plantado + paquete + sha256)
+QA probatorio (matriz: task-36):
+- task-36.txt: build fresco exit 0 + portable zip + manifiesto; escaneo real
+  319 ficheros 0 hallazgos; failure con secreto plantado → detectado, redactado
+  (asignación completa), bloqueo afirmado, tmpdir eliminado; typecheck +
+  `bun run test` en verde; smoke Electron real ALL OK.
+- Pre-gate live: rotación de las dos claves de k.txt pendiente POR EL USUARIO
+  (mención nominal; fichero jamás abierto, ningún valor en evidencia); live
+  solo con confirmación explícita (intrucción 17). El escenario probatorio de
+  la matriz es build+escaneo, no una corrida live: ejecutado y en verde.
+Veredicto IS-9: PROBADA.
+
+## Faltantes → nuevos N. propuestos
+Ninguno. Las 9 IS quedan probadas 1:1 contra su escenario probatorio con
+evidencia en verde y código fusionado en main (olas 7–15). No se proponen
+nuevos `- [ ] N.`; no hay nota sustitutiva.
+
+## Limpieza total (recibo)
+- Procesos: ninguna sesión bash viva de este turno (solo eval puntuales);
+  sin servidores, sin Chromium, sin puertos; nada que matar.
+- Temporales: este turno no creó archivos fuera del repo (sondas leídas,
+  no ejecutadas; greps read-only). Verificado: git status del principal
+  muestra solo los untracked pre-existentes (.omo/boulder.json, .omo/drafts/,
+  .omo/plans/, .omo/ulw-execute/) ajenos a este turno; ningún octus-qa-* en
+  %TEMP% creado por mí.
+- En el repo solo se añade este archivo:
+  .omo/evidence/octus-ux-skills-mcp/f4.txt
+- Contenido sensible: cero (sin claves, sin tokens, sin red).
+
+## VEREDICTO
+APPROVE — IS-1 a IS-9 probadas contra el comportamiento entregado en main con
+sus escenarios probatorios en verde (task-10/11, 8, 13/14, 16/17, 23/24, 27/29,
+32/33, 6, 36). Sin nuevos N. propuestos.
+
+DoneClaim: veredicto explícito APPROVE. Motivo: las 9 IS quedan probadas 1:1
+(entrega fusionada en main + evidencia verde por IS); no hay faltantes, luego
+no hay nuevos N. numerados. Residuales honestos documentados (rojo ambiental
+worktrees/integration, brechas 19-A..D diferidas por decisión, live pendiente
+de pre-gate del usuario) no invalidan ningún escenario probatorio de la matriz.

@@ -1,0 +1,103 @@
+F2. Code quality review — plan .omo/plans/octus-ux-skills-mcp.md (olas 7-15)
+Fecha: 2026-11-01/02 UTC · Rama: main @ 224b77a · Base del diff: 494fa3d..HEAD
+Alcance: 97 ficheros productivos (apps + packages), +19216 líneas añadidas. Evidencia fuera de alcance.
+
+1. bun run typecheck (raíz)
+Comando: cd C:/Users/UserPy/Documents/octus && bun run typecheck
+Salida:
+  $ bun run --cwd packages/shared typecheck && bun run --cwd packages/core typecheck && bun run --cwd apps/desktop typecheck
+  $ tsc --noEmit            (shared)
+  $ tsc --noEmit            (core)
+  $ tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json   (desktop)
+  EXIT:0 — cero errores en los tres proyectos.
+Resultado: VERDE.
+
+2. bun run test (raíz) con timeout ampliado
+Comando: cd C:/Users/UserPy/Documents/octus && bun run test --timeout 60000
+Nota de alcance y timeout: el script raíz es `bun run --cwd packages/shared test &&
+bun run --cwd packages/core test` (apps/desktop no aporta suite al test raíz; su
+test de timeline se ejecutó aparte, ver abajo). packages/core define por defecto
+`bun test --timeout 30000`; se pasó --timeout 60000 según el plan porque este host
+(i3-2328M) es lento y el timeout corto da rojos ambientales.
+Resultado:
+  shared: 31 pass / 0 fail (4 ficheros, ~29ms).
+  core:   319 pass / 0 fail (38 ficheros, 358.98s). Test individual más largo:
+          6936ms (scheduler multi-predecesor) < 30000ms, luego ninguna prueba
+          estuvo expuesta a flakiness de timeout ni siquiera con el defecto.
+  Encadenado con &&: core solo corre si shared sale 0; el resumen final de core
+  ("319 pass, 0 fail") es autoritativo y el exit global fue 0.
+Muestreos con --timeout 60000 explícito (señal temprana, todos verdes):
+  skill-discovery 5/0 · mcp-trust+mcp-tools 23/0 · skills-runtime+activation 17/0 ·
+  mcp-resources+management 23/0 · session-management+ui-prefs+ui-layout 7/0 ·
+  skills-install 8/0 · chat-pagination 1/0 · apps/desktop chat-timeline 6/0.
+Resultado: VERDE.
+
+3. Revisión de calidad del diff por ola (494fa3d..HEAD, apps + packages)
+S1 Secretos — grep -nEi 'sk-[A-Za-z0-9]{10,}|ghp_|AKIA|BEGIN.*PRIVATE KEY|
+api[_-]?key\s*[:=]\s*["'\''][^"''\'']{8,}|password\s*[:=]' sobre el diff:
+único hit es la deny-list del propio escáner de secretos (línea que detecta
+sk-/ghp-/xox/Bearer/PEM/mongodb) — código defensivo, no secreto. Los dos hits en
+.omo/evidence/.../task-35.txt son fixtures sintéticos del auditor
+("sk-abcdef...", "ghp_abcdef..."), no credenciales reales. → OK.
+S2 Valores de diseño duplicados — grep de '#[0-9a-fA-F]{3,6}' en el diff de
+views/ + components/ fuera de los *.css del sistema: 0 hits. → OK.
+S3 Módulos inexistentes — grep de imports a engine.ts|/mcp.ts|/skills.ts|
+codemode.ts|tools/browser en el diff: 0 hits. `bun scripts/check-doc-refs.ts`:
+OK (6 fantasmas ausentes, 11 anclas presentes, 335 archivos, exit 0).
+typecheck verde lo corrobora. → OK.
+S4 Patrones peligrosos en skills/MCP nuevo — grep eval(|Function(|child_process|
+exec( en packages/core/src/skills + src/mcp: solo db.exec parametrizado
+(SQLite, placeholders ?); sin eval ni spawn de procesos. → OK.
+S5 Restos de depuración — grep TODO|FIXME|console.log|process.env[AWS|GITHUB|
+OPENAI|ANTHROPIC]: solo comentarios de trazabilidad "Todo N" y 1 console.log
+en un script de verificación welcome-task10-verify.ts (no productivo). → OK.
+S6 Electron/seguridad — main/index.ts: contextIsolation true, nodeIntegration
+false, sandbox true. secret-store (main) usa safeStorage (6 referencias);
+web-tools.ts conserva isPrivateIP + bloqueo pre-fetch y revalidación de
+redirects (suite web-tools 5/0 lo prueba). → OK.
+S7 IPC — preload expone TERMINAL_DATA_CHANNEL/onTerminalData; Skills vía
+handlers en main sobre MainSkillsService; shared/ipc.ts como contrato.
+typecheck de los dos tsconfigs de desktop verde. → OK.
+S8 Archivos clave por ola — existen los 16 verificados: skill-manager,
+skill-installer, skill-activation, skill-runtime, mcp-client-manager,
+mcp-tool-bridge, mcp-resources, mcp-server-management, terminal-service,
+secret-store (main), views welcome/skills/mcp/terminal-panel, shared
+prefs/layout. → OK.
+
+4. Veredicto por ola (calidad del diff, sin defectos)
+Ola 7 (diseño + cuarentena): docs + QUARANTINE.md + TREE_AUTHORITY.md;
+  check-doc-refs verde. PASS.
+Ola 8 (tokens, componentes, layout, modularización): tokens.css + styles.css
+  con variables, sin literales fuera del sistema; split App/store con baseline
+  de paridad. PASS.
+Ola 9 (bienvenida + sesiones): welcome.tsx + validate-directory en main;
+  drop solo propone rutas, main valida; tests session-management verdes. PASS.
+Ola 10 (conversación): timeline.ts + chat timeline virtualizado; desktop
+  chat-timeline 6/0 + chat-pagination 1/0. PASS.
+Ola 11 (Agent Manager): agents/dag views + dagLogic; suite worktrees/scheduler
+  verde dentro de los 319. PASS.
+Ola 12 (Skills): manager/installer/activation/runtime + validación fijada;
+  descubrimiento sin duplicados, install 8/0, runtime 17/0, sin eval al
+  descubrir ni permisos otorgados por activar. PASS.
+Ola 13 (MCP): client-manager con confianza por workspace, bridge con nombres
+  aislados, resources/prompts con aprobación, hardening (SSRF, timeouts,
+  safeStorage); mcp-trust+tools 23/0, resources+management 23/0. PASS.
+Ola 14 (terminal + archivos): terminal-service PTY en main con streaming IPC,
+  explorador/diffs acotados; file-explorer + worktrees en los 319. PASS.
+Ola 15 (rendimiento/seguridad/distribución): perf.ts + budgets, security-policy,
+  secret-store, electron-builder.yml; auditoría y presupuestos con sus scripts;
+  sin secretos en disco plano (S1). PASS.
+Hallazgos reales: NINGUNO. Cero rutas con defecto.
+
+5. Limpieza (recibo)
+Tras la suite, `git status --short`: solo `M .omo/evidence/.../task-13-timeline-long.png`
+(binario 67668→65303 bytes, re-captura de captura por la QA manual concurrente F3;
+artefacto de evidencia, no código; no se toca) más untracked preexistentes
+(.omo/boulder.json, .omo/drafts, .omo/plans, .omo/ulw-execute, f1.txt, f4.txt).
+Ningún fichero productivo modificado por la suite. Limpieza total: SÍ (nada que limpiar).
+
+VEREDICTO: APPROVE.
+Motivos: typecheck verde en raíz; suite verde en raíz (shared 31/0 + core 319/0)
+con --timeout 60000 documentado y justificado por host lento; revisión de calidad
+sin defectos (sin secretos, sin valores de diseño duplicados, sin referencias a
+módulos inexistentes, veredicto PASS por ola 7-15).
