@@ -152,7 +152,8 @@ export type OcIconName =
   | "panel-left"
   | "panel-bottom"
   | "panel-right"
-  | "clock";
+  | "clock"
+  | "plug";
 
 const OC_ICON_PATHS: Record<OcIconName, string> = {
   check: "M3 8.5l3.5 3.5L13 4.5",
@@ -172,9 +173,10 @@ const OC_ICON_PATHS: Record<OcIconName, string> = {
   "panel-bottom": "M2.5 3h11v10h-11zM2.5 10h11",
   "panel-right": "M2.5 3h11v10h-11zM10 3v10",
   "clock": "M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM8 5v3.2l2.2 1.3",
+  "plug": "M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 01-7 0V5zM8 11v3",
 };
 
-const OC_ICON_NAMES: OcIconName[] = ["check", "x", "warn", "info", "chevron-down", "chevron-right", "plus", "search", "folder", "folder-open", "trash", "gear", "sort", "panel-left", "panel-bottom", "panel-right", "clock"];
+const OC_ICON_NAMES: OcIconName[] = ["check", "x", "warn", "info", "chevron-down", "chevron-right", "plus", "search", "folder", "folder-open", "trash", "gear", "sort", "panel-left", "panel-bottom", "panel-right", "clock", "plug"];
 
 export function ocIconNames(): OcIconName[] {
   return [...OC_ICON_NAMES];

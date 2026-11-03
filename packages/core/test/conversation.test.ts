@@ -100,7 +100,7 @@ describe("continuous plan/build conversation (scenario C)", () => {
     }
   });
 
-  test("run nuevo hereda la única revisión aprobada (ancla para plan_tasks)", async () => {
+  test("run nuevo se ancla a la última revisión presentada (sin ventana de aprobación)", async () => {
     const t = await makeTestCore({ metaTurns: [{ text: "ok" }] });
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
@@ -115,16 +115,15 @@ describe("continuous plan/build conversation (scenario C)", () => {
       await t.core.waitForIdle(session.id);
       const { run } = await t.core.getRun(runId);
       expect(run.planRevisionId).toBe(v1.id);
-      // Con dos aprobadas no se ancla: el coordinador debe preguntar.
+      // Sin aprobación: el run se ancla a la revisión presentada más reciente.
       const structured2 = { objective: "Y", steps: [{ title: "S2" }], acceptanceCriteria: ["done"] };
       const second = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "Y", structured: structured2, runId: "r2", createdBy: "t" });
       const w1 = (await t.core.plans.listRevisions(second.plan.id))[0]!;
       await t.core.plans.presentRevision(w1.id, "msg_seed");
-      await t.core.plans.approveRevision(second.plan.id, w1.id);
       const next = await t.core.prompt(session.id, "sigue");
       await t.core.waitForIdle(session.id);
       const { run: run2 } = await t.core.getRun(next.runId);
-      expect(run2.planRevisionId ?? null).toBe(null);
+      expect(run2.planRevisionId).toBe(w1.id);
     } finally {
       await t.cleanup();
     }

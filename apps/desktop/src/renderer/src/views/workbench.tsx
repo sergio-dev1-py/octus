@@ -9,6 +9,7 @@ import { SkillsContextPanel } from "./skills.jsx";
 import { layoutStyles, resizeBottomBy, resizeInspectorBy, resizeSidebarBy } from "@octus/shared";
 import { invoke } from "../api.js";
 import { OcIcon } from "../components/oc.jsx";
+import logoUrl from "../assets/octus-logo.png";
 import { TerminalPanel } from "./terminal-panel.jsx";
 import { mcpRefresh, mcpState } from "../store/mcp.js";
 import {
@@ -220,7 +221,10 @@ export function Sidebar() {
   return (
     <aside id="sidebar" style={{ display: styles().display, width: styles().width }} aria-label="Proyectos y sesiones">
       <div class="side-head">
-        <span class="side-title">Octus</span>
+        <span class="side-brand">
+          <img class="side-logo" src={logoUrl} alt="" width={22} height={22} aria-hidden="true" />
+          <span class="side-title">Octus</span>
+        </span>
         <button type="button" id="sidebar-hide" class="icon-button" title="Ocultar panel (Ctrl+B)" aria-label="Ocultar panel (Ctrl+B)" onClick={() => void toggleSidebarPanel()}>
           <OcIcon name="panel-left" />
         </button>
@@ -233,7 +237,7 @@ export function Sidebar() {
         <span class="mcp-button-label">Tareas programadas</span>
       </button>
       <button type="button" id="sidebar-mcp" class="mcp-button" data-mcp-dot={mcpActive() ? "active" : "idle"} title="Abrir Conectores MCP" onClick={() => openSettings("mcp")}>
-        <OcIcon name="gear" />
+        <OcIcon name="plug" />
         <span class="mcp-button-label">MCP</span>
         <span class="spacer" />
         <span aria-hidden="true" style={dot(mcpActive())} />

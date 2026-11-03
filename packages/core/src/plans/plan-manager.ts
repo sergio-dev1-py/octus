@@ -224,7 +224,11 @@ export class PlanManager implements PlanToolService {
     let orphaned = 0;
     for (const row of pending) {
       const message = await this.db.queryOne<{ id: string }>(
-        "SELECT id FROM messages WHERE run_id = ? AND role = 'assistant' AND created_at >= ? ORDER BY created_at ASC, seq ASC LIMIT 1",
+        `SELECT m.id AS id FROM messages m
+         JOIN agent_instances i ON i.id = m.instance_id
+         WHERE m.run_id = ? AND m.role = 'assistant' AND m.created_at >= ?
+           AND i.parent_instance_id IS NULL
+         ORDER BY m.created_at ASC, m.seq ASC LIMIT 1`,
         [runId, Number(row.created_at)],
       );
       if (message) {

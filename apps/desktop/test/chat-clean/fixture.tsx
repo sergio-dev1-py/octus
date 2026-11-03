@@ -22,7 +22,7 @@ if (variant === "working" || variant === "failed") {
       id: "run_t3",
       sessionId: "ses_t3",
       prompt: "implementa el login",
-      status: failed ? "failed" : "running",
+      status: failed ? "failed" : "executing",
       mode: "build",
       error: failed ? "provider timeout tras 30 s" : undefined,
       createdAt: 3,
@@ -77,10 +77,20 @@ if (variant === "working" || variant === "failed") {
       id: "msg_asst",
       sessionId: "ses_t3",
       runId: "run_t3",
+      instanceId: "ins_root",
+      role: "assistant",
+      parts: [{ type: "text", text: "Delego la implementación del login en un implementer." }],
+      trust: "tool",
+      seq: 2,
+      createdAt: 10,
+    },
+    {
+      id: "msg_leaf",
+      sessionId: "ses_t3",
+      runId: "run_t3",
       instanceId: "ins_leaf",
       role: "assistant",
       parts: [
-        { type: "text", text: "Voy a implementar el login con validación." },
         { type: "tool_call", toolCallId: "tc_t3", name: "read", argumentsJson: JSON.stringify({ path: "src/login.ts" }) },
         {
           type: "tool_result",
@@ -91,8 +101,8 @@ if (variant === "working" || variant === "failed") {
         },
       ],
       trust: "tool",
-      seq: 2,
-      createdAt: 10,
+      seq: 1,
+      createdAt: 11,
     },
   ] as never);
 }

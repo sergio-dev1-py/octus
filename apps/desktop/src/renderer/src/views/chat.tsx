@@ -7,15 +7,13 @@ import { renderMarkdown } from "../markdown.js";
 import { CHAT_DOM_WINDOW } from "../perf.js";
 import { windowMessages } from "../timeline.js";
 import {
-  SubagentToolGroup,
-  orderedApprovals,
+  ChildAgents,
   questionTimeoutLabel,
   replyToQuestion,
 } from "../toolcall-widgets.jsx";
 import type { LiveMessage } from "../store.js";
 import {
   addAttachments,
-  decideApproval,
   dismissCancelNotice,
   dismissSessionNotice,
   interrupt,
@@ -31,7 +29,6 @@ import {
   setState,
   state,
 } from "../store.js";
-import { PlansSection } from "./sections.jsx";
 
 export function PartView(props: { part: MessagePart }) {
   const part = () => props.part;
@@ -84,12 +81,25 @@ export function MessageView(props: { message: Message }) {
   // burbujas vacías (un mensaje sin texto ni tool calls no pinta nada).
   // El trabajo del asistente se agrupa colapsable: "Worked for X · Used N tools".
   const isEmpty = () => textParts().length === 0 && toolItems().length === 0;
+  const running = () => {
+    const run = state.runs.find((r) => r.id === message().runId);
+    if (!run) return false;
+    return ["planning", "executing", "integrating", "promoting"].includes(run.status);
+  };
   const workLabel = () => {
     const parts: string[] = [];
     const footerValue = footer();
-    if (footerValue) parts.push(`Worked for ${formatDuration(footerValue.durationMs)}`);
-    if (toolItems().length > 0) parts.push(`Used ${toolItems().length} tool${toolItems().length === 1 ? "" : "s"}`);
+    if (running()) parts.push("Working");
+    else if (footerValue) parts.push(`Worked for ${formatDuration(footerValue.durationMs)}`);
+    else if (toolItems().length > 0) parts.push("Worked");
+    if (toolItems().length > 0) parts.push(`${toolItems().length} tool${toolItems().length === 1 ? "" : "s"}`);
     return parts.join(" · ");
+  };
+  // El árbol de subagentes se cuelga una sola vez por run: bajo su último
+  // mensaje del coordinador (los pasos intermedios comparten instanceId).
+  const isLastAssistantOfRun = () => {
+    const peers = state.messages.filter((m) => m.runId === message().runId && m.instanceId === message().instanceId && m.role === "assistant");
+    return peers.length === 0 || peers[peers.length - 1]!.id === message().id;
   };
   return (
     <Show when={!isEmpty()}>
@@ -97,16 +107,44 @@ export function MessageView(props: { message: Message }) {
         <div class={`message ${message().role}`} data-message-id={message().id}>
           <For each={textParts()}>{(part) => <PartView part={part} />}</For>
           <Show when={toolItems().length > 0}>
-            <SubagentToolGroup instanceId={message().instanceId} runId={message().runId} calls={toolItems()} />
+            <div class="activity-body">
+              <For each={toolItems()}>
+                {(item) => (
+                  <div class="activity-tool" data-tool-status={item.result ? (item.result.ok ? "completed" : "failed") : "running"}>
+                    <span class="activity-dot" aria-hidden="true" />
+                    <span class="activity-tool-name">{item.call.name}</span>
+                    <span class="activity-meta">{item.result ? (item.result.ok ? "ok" : "failed") : "running"}</span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+          {/* Los subagentes solo cuelgan del mensaje del coordinador (no del usuario:
+              ambos comparten instanceId y se duplicaría el árbol). */}
+          <Show when={message().role === "assistant" && isLastAssistantOfRun()}>
+            <ChildAgents parentInstanceId={message().instanceId} />
           </Show>
         </div>
       }>
-        <details class="work" open data-message-id={message().id}>
+        <details class="work" open={running()} data-message-id={message().id}>
           <summary>{workLabel()}</summary>
           <div class={`message ${message().role}`}>
             <For each={textParts()}>{(part) => <PartView part={part} />}</For>
             <Show when={toolItems().length > 0}>
-              <SubagentToolGroup instanceId={message().instanceId} runId={message().runId} calls={toolItems()} />
+              <div class="activity-body">
+                <For each={toolItems()}>
+                  {(item) => (
+                    <div class="activity-tool" data-tool-status={item.result ? (item.result.ok ? "completed" : "failed") : "running"}>
+                      <span class="activity-dot" aria-hidden="true" />
+                      <span class="activity-tool-name">{item.call.name}</span>
+                      <span class="activity-meta">{item.result ? (item.result.ok ? "ok" : "failed") : "running"}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <Show when={isLastAssistantOfRun()}>
+              <ChildAgents parentInstanceId={message().instanceId} />
             </Show>
           </div>
         </details>
@@ -303,29 +341,18 @@ export function ModelPicker() {
         <span aria-hidden="true">▾</span>
       </button>
       <Show when={efforts().length > 0}>
-        <div class="effort-segment" role="group" aria-label="Esfuerzo de razonamiento">
-          <button
-            type="button"
-            class={`effort-chip${!session()?.model?.effort ? " active" : ""}`}
-            title="Usar el ajuste por defecto"
-            disabled={disabled()}
-            onClick={() => chooseEffort(undefined)}
-          >
-            Default
-          </button>
-          <For each={efforts()}>
-            {(effort) => (
-              <button
-                type="button"
-                class={`effort-chip${session()?.model?.effort === effort ? " active" : ""}`}
-                disabled={disabled()}
-                onClick={() => chooseEffort(effort)}
-              >
-                {effort}
-              </button>
-            )}
-          </For>
-        </div>
+        <select
+          id="composer-effort"
+          class="composer-chip"
+          aria-label="Esfuerzo de razonamiento"
+          title="Esfuerzo de razonamiento del modelo"
+          value={session()?.model?.effort ?? ""}
+          disabled={disabled()}
+          onChange={(event) => chooseEffort(event.currentTarget.value || undefined)}
+        >
+          <option value="">Default</option>
+          <For each={efforts()}>{(effort) => <option value={effort}>{effort}</option>}</For>
+        </select>
       </Show>
       <Show when={open()}>
         <div class="model-popover-backdrop" onClick={() => setOpen(false)} />
@@ -731,8 +758,15 @@ export function ChatView() {
   // Todo 34 (§7: scroll de 5.000 mensajes a 60 fps): el historial pagina en el
   // servidor de 100 en 100 y el DOM pinta como máximo CHAT_DOM_WINDOW nodos.
   // Sin esta ventana, paginar hacia atrás haría crecer el DOM con la conversación.
-  const visibleMessages = () => windowMessages(state.messages, CHAT_DOM_WINDOW);
-  const domHidden = () => state.messages.length - visibleMessages().length;
+  // Solo los mensajes del hilo raíz van al timeline: los de subagentes se
+  // pintan dentro del árbol compacto de su mensaje padre (sin cajas sueltas).
+  const childInstanceIds = () => new Set(state.agentInstances.filter((i) => i.parentInstanceId).map((i) => i.id));
+  const threadMessages = () => state.messages.filter((m) => !childInstanceIds().has(m.instanceId));
+  const visibleMessages = () => windowMessages(threadMessages(), CHAT_DOM_WINDOW);
+  const domHidden = () => threadMessages().length - visibleMessages().length;
+  // Los marcos en vivo de subagentes tampoco se pintan sueltos en el timeline:
+  // su actividad se resume en el árbol compacto del mensaje del coordinador.
+  const rootLive = () => Object.values(state.live).filter((live) => !childInstanceIds().has(live.instanceId));
   let timelineEl: HTMLDivElement | undefined;
   let olderObserver: IntersectionObserver | undefined;
   // N-C-06: carga automática de la página anterior al asomar el centinela.
@@ -811,25 +845,6 @@ export function ChatView() {
           </button>
         </div>
       </Show>
-      <Show when={!state.busy && orderedApprovals().length > 0}>
-        <div id="approval-notice" class="banner warn" role="alert" data-approval-pending={orderedApprovals().length}>
-          <span>⚠ Plan esperando tu aprobación ({orderedApprovals().length}): sin aprobar no hay subagentes.</span>
-          <span class="row" style={{ display: "inline-flex", gap: "var(--oc-space-2)" }}>
-            <For each={orderedApprovals().slice(0, 1)}>
-              {(request) => (
-                <>
-                  <button type="button" class="primary" data-approval-approve={request.id} onClick={() => void decideApproval(request.id, "approved")}>
-                    Aprobar {request.revisionId}
-                  </button>
-                  <button type="button" class="danger" data-approval-reject={request.id} onClick={() => void decideApproval(request.id, "rejected")}>
-                    Rechazar
-                  </button>
-                </>
-              )}
-            </For>
-          </span>
-        </div>
-      </Show>
       <div
         class="timeline message-timeline"
         ref={timelineEl}
@@ -850,18 +865,15 @@ export function ChatView() {
             Ventana del DOM: {visibleMessages().length} de {state.messages.length} cargados (los anteriores quedan diferidos fuera del DOM).
           </p>
         </Show>
-        <Show when={visibleMessages().length === 0 && Object.keys(state.live).length === 0}>
+        <Show when={visibleMessages().length === 0 && rootLive().length === 0}>
           <div class="empty-state">
             {session() ? "Sin mensajes todavía. Escribe abajo para empezar." : "Crea o elige una sesión para empezar a conversar."}
           </div>
         </Show>
         <For each={visibleMessages()}>{(message) => <MessageView message={message} />}</For>
-        <For each={Object.values(state.live)}>{(live) => <LiveView live={live} />}</For>
+        <For each={rootLive()}>{(live) => <LiveView live={live} />}</For>
         <div id="timeline-bottom" ref={bottomAnchor} />
       </div>
-      <Show when={!state.busy && state.approvals.length > 0}>
-        <PlansSection />
-      </Show>
       <Composer />
     </main>
   );

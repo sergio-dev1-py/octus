@@ -17,6 +17,8 @@ export interface LiveFrame {
   id: string;
   sessionId: string;
   runId: string;
+  /** Instancia que emite el marco (para no pintar hijos sueltos en el timeline raíz). */
+  instanceId: string;
   text: string;
   textStatus: FrameStatus;
   reasoning: string;
@@ -40,11 +42,12 @@ export interface ChatAttachment {
   text: string;
 }
 
-export function emptyFrame(messageId: string, sessionId: string, runId: string): LiveFrame {
+export function emptyFrame(messageId: string, sessionId: string, runId: string, instanceId = ""): LiveFrame {
   return {
     id: messageId,
     sessionId,
     runId,
+    instanceId,
     text: "",
     textStatus: "streaming",
     reasoning: "",
@@ -53,13 +56,13 @@ export function emptyFrame(messageId: string, sessionId: string, runId: string):
   };
 }
 
-function baseOf(live: LiveMap, messageId: string, sessionId: string, runId: string): LiveFrame {
-  return live[messageId] ?? emptyFrame(messageId, sessionId, runId);
+function baseOf(live: LiveMap, messageId: string, sessionId: string, runId: string, instanceId: string): LiveFrame {
+  return live[messageId] ?? emptyFrame(messageId, sessionId, runId, instanceId);
 }
 
 /** N-C-12a/N-C-12b: acumula deltas y marca cada herramienta en vuelo. */
 export function applyPartDelta(live: LiveMap, event: PartDeltaEvent): LiveMap {
-  const base = baseOf(live, event.messageId, event.sessionId, event.runId);
+  const base = baseOf(live, event.messageId, event.sessionId, event.runId, event.instanceId);
   if (event.part === "text") {
     return { ...live, [event.messageId]: { ...base, text: base.text + event.delta, textStatus: "streaming" } };
   }

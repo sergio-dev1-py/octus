@@ -17,6 +17,7 @@ import {
   formatTimeoutRemainingMs,
   formatToolDurationMs,
   indexToolResults,
+  messageRenderItems,
   questionTimeoutRemainingMs,
   subagentLineage,
   subagentRollup,
@@ -190,6 +191,55 @@ export function ToolCallCard(props: { call: ToolCallPart; result?: ToolResultPar
 }
 
 // ------------------------------------------- grupo colapsable por subagente
+/** Árbol compacto de subagentes: una línea por agente y por herramienta.
+ *  Colapsado muestra "subagente explorer · 3 tools · running"; al desplegar
+ *  aparecen sus herramientas y sus hijos indentados (estilo opencode). */
+export function ChildAgents(props: { parentInstanceId: string; depth?: number }) {
+  const depth = () => props.depth ?? 1;
+  const children = () => state.agentInstances.filter((i) => i.parentInstanceId === props.parentInstanceId);
+  return (
+    <For each={children()}>
+      {(child) => {
+        const messages = () => state.messages.filter((m) => m.instanceId === child.id);
+        const tools = () =>
+          messages().flatMap((m) => messageRenderItems(m.parts).filter((item) => item.kind === "tool"));
+        const def = () => state.definitions.find((d) => d.id === child.definitionId);
+        const task = () => (child.taskId ? state.tasks.find((t) => t.id === child.taskId) : undefined);
+        const label = () => {
+          if (def()?.kind === "coordinator") return "coordinador";
+          return `subagente ${def()?.name ?? child.definitionId}${task() ? ` · ${task()!.title}` : ""}`;
+        };
+        const active = () => ["created", "running", "waiting_permission", "waiting_input"].includes(child.status);
+        const status = () => (active() ? "working" : child.status);
+        return (
+          <details class="activity-node" data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
+            <summary>
+              <span class="activity-caret" aria-hidden="true">›</span>
+              <span class="activity-name">{label()}</span>
+              <span class="activity-meta">
+                {status()}
+                {tools().length > 0 ? ` · ${tools().length} tool${tools().length === 1 ? "" : "s"}` : ""}
+              </span>
+            </summary>
+            <div class="activity-body">
+              <For each={tools()}>
+                {(item) => (
+                  <div class="activity-tool" data-tool-status={item.kind === "tool" && item.result ? (item.result.ok ? "completed" : "failed") : "running"}>
+                    <span class="activity-dot" aria-hidden="true" />
+                    <span class="activity-tool-name">{item.kind === "tool" ? item.call.name : ""}</span>
+                    <span class="activity-meta">{item.kind === "tool" && item.result ? (item.result.ok ? "ok" : "failed") : "running"}</span>
+                  </div>
+                )}
+              </For>
+              <ChildAgents parentInstanceId={child.id} depth={depth() + 1} />
+            </div>
+          </details>
+        );
+      }}
+    </For>
+  );
+}
+
 /** Tool calls de un mensaje agrupados bajo su subagente (todo workbench-chat-terminal/3).
  *  Colapsado por defecto (también `depth>=1` anidado); la pill resume el
  *  grupo (failed > active > done). El cuerpo reutiliza ToolCallCard. */

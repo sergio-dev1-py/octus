@@ -1,33 +1,36 @@
 import { describe, expect, test } from "bun:test";
-import { makeTestCore, workspaceOf, makeRun, expectRejects } from "./helpers.js";
+import { makeTestCore, workspaceOf, makeRun } from "./helpers.js";
 
 const STRUCTURED = { objective: "O", steps: [{ title: "S1" }], acceptanceCriteria: ["done"] };
 
-describe("guarda: plan pide aprobación solo con plan formal", () => {
-  test("question de aprobación sin plan formal se rechaza con instrucciones", async () => {
+describe("plan: question libre, sin puerta de aprobación", () => {
+  test("question sin plan formal se permite (la duda solo perfila el plan)", async () => {
     const t = await makeTestCore();
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
       const session = await t.core.createSession({ projectId: project.id });
       const { runId, instanceId } = await makeRun(t, session.id);
-      // makeRun crea coordinator-build; el guarda aplica al coordinador de PLAN.
-      await expectRejects(
-        t.core.gateway.execute({
-          toolCallId: "tool_q1",
-          idempotencyKey: "idem-q1",
-          sessionId: session.id,
-          runId,
-          instanceId,
-          definitionId: "coordinator-plan",
-          directory: workspaceOf(t),
-          name: "question",
-          args: {
-            questions: [{ question: "¿Apruebas el plan visual NOVA?", header: "Aprobación", options: [{ label: "Sí" }, { label: "No" }] }],
-          },
-          signal: new AbortController().signal,
-        }),
-        /No hay un plan formal/,
-      );
+      // makeRun crea coordinator-build; forzamos definitionId de PLAN: ya no
+      // existe guarda que convierta la duda en una falsa aprobación.
+      const pending = t.core.gateway.execute({
+        toolCallId: "tool_q1",
+        idempotencyKey: "idem-q1",
+        sessionId: session.id,
+        runId,
+        instanceId,
+        definitionId: "coordinator-plan",
+        directory: workspaceOf(t),
+        name: "question",
+        args: {
+          questions: [{ question: "¿Apruebas el plan visual NOVA?", header: "Aprobación", options: [{ label: "Sí" }, { label: "No" }] }],
+        },
+        signal: new AbortController().signal,
+      });
+      await Bun.sleep(100);
+      const questions = t.core.questions.pendingFor(session.id);
+      expect(questions.length).toBe(1);
+      t.core.questions.reply(questions[0]!.id, [{ question: "¿Apruebas el plan visual NOVA?", answers: ["Sí"] }], "cor_test");
+      await pending.catch(() => undefined);
     } finally {
       await t.cleanup();
     }

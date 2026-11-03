@@ -142,10 +142,18 @@ export class TaskManager {
   async createDag(input: CreateDagInput): Promise<{ planningId: string; taskIds: string[]; created: boolean }> {
     const run = await this.db.queryOne<{ id: string; session_id: string; plan_revision_id: string | null }>("SELECT id, session_id, plan_revision_id FROM runs WHERE id = ?", [input.runId]);
     if (!run) throw new OctusError("not_found", `Run not found: ${input.runId}`);
-    const rev = await this.db.queryOne<{ id: string; plan_id: string; approval: string }>("SELECT id, plan_id, approval FROM plan_revisions WHERE id = ?", [input.revisionId]);
+    const rev = await this.db.queryOne<{ id: string; plan_id: string; approval: string; lifecycle: string }>(
+      "SELECT id, plan_id, approval, lifecycle FROM plan_revisions WHERE id = ?",
+      [input.revisionId],
+    );
     if (!rev || rev.plan_id !== input.planId) throw new OctusError("not_found", `Revision ${input.revisionId} not found in plan ${input.planId}`);
-    if (rev.approval !== "approved") {
-      throw new OctusError("invalid_state", "Cannot create executable tasks without an approved revision (needs-approval)");
+    // Sin ventana de aprobación: basta con una revisión viva (presentada o
+    // recién creada en este run). Solo se rechazan las rechazadas o huérfanas.
+    if (rev.approval === "rejected") {
+      throw new OctusError("invalid_state", "This plan revision was rejected: create or present a new revision before executing it");
+    }
+    if (rev.lifecycle === "orphaned") {
+      throw new OctusError("invalid_state", "This plan revision is orphaned: create a new revision before executing it");
     }
     if (run.plan_revision_id && run.plan_revision_id !== input.revisionId) {
       throw new OctusError("plan_conflict", `Run is pinned to revision ${run.plan_revision_id}, not ${input.revisionId}`);

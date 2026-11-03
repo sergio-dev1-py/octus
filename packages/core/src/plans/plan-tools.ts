@@ -63,7 +63,7 @@ export const planCreateTool: ToolDefinition = {
     const parsed = args as { objective: string; structured: unknown };
     const plans = requirePlans(ctx.services);
     const result = await plans.create({ sessionId: ctx.sessionId, objective: parsed.objective, structured: parsed.structured as never, runId: ctx.runId, createdBy: ctx.instanceId });
-    return { text: `Plan created: ${result.planId} revision v${result.version} (${result.revisionId}). Present it conversationally; it becomes approvable once presented.` };
+    return { text: `Plan created: ${result.planId} revision v${result.version} (${result.revisionId}). Answer with the full plan; Build executes this revision when the user asks to proceed.` };
   },
 };
 
@@ -79,14 +79,14 @@ export const planUpdateTool: ToolDefinition = {
     const parsed = args as { planId: string; structured: unknown };
     const plans = requirePlans(ctx.services);
     const result = await plans.update({ planId: parsed.planId, structured: parsed.structured as never, runId: ctx.runId, createdBy: ctx.instanceId });
-    return { text: `Plan ${parsed.planId} revised: v${result.version} (${result.revisionId}). Present the changes conversationally; approval is the user's decision.` };
+    return { text: `Plan ${parsed.planId} revised: v${result.version} (${result.revisionId}). Present the changes; Build executes the latest revision.` };
   },
 };
 
 export const planGetTool: ToolDefinition = {
   manifest: {
     name: "plan.get",
-    description: "Read a plan revision by id, 'vN' or version number (defaults to current). Use the exact approved revision for implementation.",
+    description: "Read a plan revision by id, 'vN' or version number (defaults to current). Use the exact revision for implementation.",
     inputJsonSchema: toJsonSchema(getSchema),
     permissionAction: "plan.get",
   },

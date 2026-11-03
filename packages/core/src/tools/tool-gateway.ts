@@ -106,25 +106,6 @@ export class ToolGateway {
       throw new OctusError("invalid_tool_args", `Invalid arguments for '${request.name}': ${parsed.error.issues.map((i) => i.message).slice(0, 3).join("; ")}`);
     }
 
-    // Guarda del flujo de plan: el coordinador de PLAN no puede pedir aprobación
-    // por chat (`question`) sin un plan formal. Sin esto, el usuario "aprueba"
-    // una pregunta, no existe revisión, y build no puede anclarse ni delegar.
-    if (request.name === "question" && request.definitionId === "coordinator-plan") {
-      const questions = (parsed.data as { questions?: Array<{ question?: string; header?: string }> }).questions ?? [];
-      const text = questions.map((q) => `${q.header ?? ""} ${q.question ?? ""}`).join(" ").toLowerCase();
-      const approvalLike = /aprueb|aprobar|approve|aprobaci[oó]n|procedo|adelante|implemente|implementar/.test(text);
-      if (approvalLike) {
-        const plans = await this.services.toolServices?.plans?.list(request.sessionId).catch(() => "");
-        const hasPlan = typeof plans === "string" && !plans.startsWith("No plans");
-        if (!hasPlan) {
-          throw new OctusError(
-            "invalid_tool_args",
-            "No hay un plan formal que aprobar. Antes de pedir aprobación por chat, crea el plan con plan.create (objective + structured) y solicítala con plan.request_approval; luego espera la decisión del usuario.",
-          );
-        }
-      }
-    }
-
     const layers = await this.options.layersFor(request.definitionId, request.sessionId, request.instanceId);
     const projectId = await this.options.projectIdForSession(request.sessionId);
     const correlationId = createId("cor");

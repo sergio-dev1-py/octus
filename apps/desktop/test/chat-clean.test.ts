@@ -87,18 +87,20 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     expect(await pg().evaluate(() => document.querySelectorAll(".message").length)).toBe(2);
     const userBg = await pg().evaluate(() => getComputedStyle(document.querySelector(".message.user")!).backgroundColor);
     expect(userBg).toBe("rgb(217, 222, 233)");
+    // El asistente del coordinador resume su trabajo en una sola línea.
+    expect(await pg().textContent(".message-timeline details.work > summary")).toContain("Working");
     // El grupo existe, colapsado por defecto (depth>=1 anidado también lo estaría).
     expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group]").length)).toBe(1);
     expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(false);
     expect(await pg().getAttribute("[data-subagent-group]", "data-subagent-depth")).toBe("1");
-    // Breadcrumb raíz › hoja por parentInstanceId.
+    // Línea corta con el rol del subagente.
     const label = await pg().textContent("[data-subagent-group] summary");
-    expect(label).toContain("explorer");
     expect(label).toContain("implementer");
-    // Click real: expande y muestra la ToolCallCard reutilizada.
+    // Click real: expande y muestra la herramienta en línea compacta.
     await pg().click("[data-subagent-group] summary");
     expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(true);
-    expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group] [data-toolcall]").length)).toBe(1);
+    expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group] .activity-tool").length)).toBe(1);
+    expect(await pg().textContent("[data-subagent-group] .activity-tool-name")).toBe("read");
     await pg().screenshot({ path: join(EVIDENCE_DIR, "task-3.png") });
   }, STEP_TIMEOUT_MS);
 

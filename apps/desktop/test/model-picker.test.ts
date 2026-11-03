@@ -85,9 +85,10 @@ describe("Selector unificado de modelo", () => {
     expect(await pg().getAttribute("#model-picker", "aria-label")).toBe("Modelo y esfuerzo");
     expect(await pg().inputValue("#composer-profile")).toBe("plan");
     expect(await pg().textContent("#composer-model-button")).toContain("Modelo con esfuerzo");
-    const chips = await pg().$$eval(".effort-chip", (els) => els.map((el) => el.textContent?.trim()));
+    // Esfuerzo: un solo selector con los niveles reales del modelo.
+    const chips = await pg().$$eval("#composer-effort option", (els) => els.map((el) => el.textContent?.trim()));
     expect(chips).toEqual(["Default", "low", "high"]);
-    console.log("happy: botón + perfil + esfuerzos segmentados ok");
+    console.log("happy: botón + perfil + select único de esfuerzo ok");
   }, STEP_TIMEOUT_MS);
 
   test("happy: popover con buscador, grupos y selección persiste por sesión", async () => {
@@ -107,16 +108,16 @@ describe("Selector unificado de modelo", () => {
       sessionId: "s1",
       model: { providerId: "p1", modelId: "m-plain", effort: undefined },
     });
-    // Sin efforts: el segmentado desaparece.
-    await pg().waitForFunction(() => document.querySelectorAll(".effort-chip").length === 0, undefined, { timeout: 15000 });
+    // Sin efforts: el selector desaparece.
+    await pg().waitForFunction(() => document.querySelectorAll("#composer-effort").length === 0, undefined, { timeout: 15000 });
     console.log("happy: popover, búsqueda y selección con esfuerzo limpio ok");
   }, STEP_TIMEOUT_MS);
 
-  test("happy: esfuerzo segmentado cambia el esfuerzo (Default lo limpia)", async () => {
+  test("happy: el selector de esfuerzo cambia el esfuerzo (Default lo limpia)", async () => {
     await pg().goto(baseUrl, { waitUntil: "load" });
     await pg().waitForSelector("#model-picker", { timeout: 15000 });
     const before = (await calls()).length;
-    await pg().click(".effort-chip:has-text('high')");
+    await pg().selectOption("#composer-effort", "high");
     const after = await waitCalls(before + 2);
     const setModel = after.slice(before).find((c) => c.channel === "sessions.setModel");
     expect(setModel?.payload).toEqual({

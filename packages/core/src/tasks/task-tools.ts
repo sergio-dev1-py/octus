@@ -2,7 +2,7 @@
  * @octus/core — herramientas de tareas para el Coordinator Build (Etapa 3).
  * `plan_tasks` invoca al TaskPlanner interno (misma instancia/modelo/effort,
  * sin crear agentes); `record_review` registra veredictos estructurados.
- * La aprobación de planes sigue siendo exclusiva del usuario (ADR-022).
+ * No hay ventana de aprobación: el plan se ejecuta al pedirlo en build.
  */
 import { z } from "zod";
 import type { ToolDefinition } from "../tools/tool-definitions.js";
@@ -10,10 +10,10 @@ import { requireTasks } from "../tools/tool-services.js";
 
 const planTasksSchema = z.object({
   runId: z.string().min(1).optional().describe("Active run id. Omit it: defaults to the current run."),
-  objective: z.string().min(1).max(2000).optional().describe("Goal to decompose. Omit it: defaults to the approved plan objective."),
+  objective: z.string().min(1).max(2000).optional().describe("Goal to decompose. Omit it: defaults to the plan objective."),
   brief: z.string().max(8000).optional().describe("Extra context for the planner"),
-  planId: z.string().min(1).optional().describe("Approved plan id. Omit it: resolved from the run anchor."),
-  revisionId: z.string().min(1).optional().describe("Exact approved revision. Omit it: resolved from the run anchor."),
+  planId: z.string().min(1).optional().describe("Plan id. Omit it: resolved from the run anchor."),
+  revisionId: z.string().min(1).optional().describe("Exact plan revision (id, 'vN' or number). Omit it: resolved from the run anchor."),
   nonce: z.string().min(1).max(64).optional().describe("Explicit re-plan after a rejected planning"),
 });
 
@@ -32,7 +32,7 @@ function toJsonSchema(schema: z.ZodType<unknown>): Record<string, unknown> {
 export const planTasksTool: ToolDefinition = {
   manifest: {
     name: "plan_tasks",
-    description: "Decompose the approved revision into an executable task DAG (internal planner; deterministic validation, no new agents).",
+    description: "Decompose the plan revision into an executable task DAG (internal planner; deterministic validation, no new agents).",
     inputJsonSchema: toJsonSchema(planTasksSchema),
     permissionAction: "plan_tasks",
   },

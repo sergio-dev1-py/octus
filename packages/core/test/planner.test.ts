@@ -174,7 +174,7 @@ describe("task planning (validation + idempotency + anchoring)", () => {
     }
   });
 
-  test("anclaje: revisión no aprobada y run fijado a otra revisión se rechazan", async () => {
+  test("anclaje: revisión viva sin aprobar se acepta; run fijado a otra revisión se rechaza", async () => {
     const t = await makeTestCore();
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
@@ -182,10 +182,9 @@ describe("task planning (validation + idempotency + anchoring)", () => {
       await t.core.db.exec("INSERT INTO runs (id, session_id, prompt, status, mode, created_at, updated_at) VALUES ('run_anchor', ?, 'x', 'executing', 'build', 1, 1)", [session.id]);
       const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "X", structured: STRUCTURED, runId: "run_anchor", createdBy: "t" });
       const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
-      await expectRejects(
-        t.core.tasks.createDag({ runId: "run_anchor", planId: plan.id, revisionId: rev.id, requestHash: "h-noappr", tasks: GOOD_TASKS }),
-        /needs-approval/,
-      );
+      // Sin ventana de aprobación: la revisión recién creada ya es ejecutable.
+      const dag = await t.core.tasks.createDag({ runId: "run_anchor", planId: plan.id, revisionId: rev.id, requestHash: "h-noappr", tasks: GOOD_TASKS });
+      expect(dag.taskIds).toHaveLength(GOOD_TASKS.length);
       await t.core.plans.presentRevision(rev.id, "msg_anchor");
       await t.core.plans.requestApproval(plan.id, rev.id, session.id, "run_anchor");
       const pending = await t.core.pendingApprovals(session.id);
@@ -262,13 +261,13 @@ describe("task planning (validation + idempotency + anchoring)", () => {
     }
   });
 
-  test("planner exige revisión aprobada explícita sin auto-selección", async () => {
+  test("planner exige selección explícita de revisión sin auto-selección", async () => {
     const t = await makeTestCore();
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
       const session = await t.core.createSession({ projectId: project.id });
       const { instanceId, runId } = await makeRun(t, session.id);
-      await expectRejects(t.core.planner.planTasks(instanceId, { runId, objective: "Build auth" }), /plan_conflict|needs-approval|No approved revision/);
+      await expectRejects(t.core.planner.planTasks(instanceId, { runId, objective: "Build auth" }), /plan_conflict|No plan revision/);
     } finally {
       await t.cleanup();
     }

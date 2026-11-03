@@ -249,6 +249,42 @@ export class AgentManager implements AgentToolService {
     return { cancelled };
   }
 
+  /**
+   * Cierra el turno del coordinador de PLAN: espera a todos sus subagentes del
+   * run para que el resultado llegue antes de entregar el plan. Si alguno
+   * excede el tope, se cancela (nunca quedan corriendo tras el plan).
+   */
+  async settleRunChildren(runId: string, timeoutMs = 180_000): Promise<{ waited: number; cancelled: number }> {
+    const rows = await this.db.query<{ id: string }>(
+      `SELECT i.id AS id FROM agent_instances i
+       WHERE i.run_id = ? AND i.parent_instance_id IS NOT NULL
+         AND i.status IN ('created','running','waiting_permission','waiting_input')`,
+      [runId],
+    );
+    const ids = rows.map((r) => r.id);
+    if (ids.length === 0) return { waited: 0, cancelled: 0 };
+    const waits = ids.map((id) => this.tracked.get(id)?.finished).filter((p): p is Promise<unknown> => Boolean(p));
+    if (waits.length === 0) return { waited: ids.length, cancelled: 0 };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+    const outcome = await Promise.race([Promise.all(waits).then(() => "done" as const), timeout]);
+    if (timer) clearTimeout(timer);
+    if (outcome === "done") return { waited: ids.length, cancelled: 0 };
+    let cancelled = 0;
+    for (const id of ids) {
+      const still = await this.db
+        .queryOne<{ status: string }>("SELECT status FROM agent_instances WHERE id = ?", [id])
+        .catch(() => undefined);
+      if (still && ["created", "running", "waiting_permission", "waiting_input"].includes(String(still.status))) {
+        await this.cancel(id).catch(() => undefined);
+        cancelled++;
+      }
+    }
+    return { waited: ids.length - cancelled, cancelled };
+  }
+
   /** Cancela todo lo activo de una sesión (interrupt del usuario). */
   async cancelSession(sessionId: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(

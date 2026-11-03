@@ -549,10 +549,9 @@ export class OctusCore {
   }
 
   /**
-   * Auto-aprobación al entrar en build: si la sesión tiene exactamente una
-   * revisión presentada y pendiente, se aprueba aquí (acción del usuario al
-   * cambiar de perfil y pedir «procede»). Con varias, no se toca nada.
-   * Queda auditada como plan.approved con actor "user-auto-build".
+   * Auto-aprobación al entrar en build: se conserva por compatibilidad con
+   * sesiones antiguas que guardaron una solicitud pendiente. Ya no es una
+   * puerta: plan_tasks acepta revisiones presentadas sin aprobación.
    */
   private async maybeAutoApprovePendingPlan(session: Session): Promise<void> {
     try {
@@ -564,7 +563,6 @@ export class OctusCore {
       );
       if (rows.length !== 1) return;
       const revisionId = rows[0]!.id;
-      // Si existe solicitud pendiente, se decide; si no, se aprueba directo (app).
       const pending = await this.db.queryOne<{ id: string }>(
         "SELECT id FROM approval_requests WHERE revision_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
         [revisionId],
@@ -575,22 +573,25 @@ export class OctusCore {
         await this.plans.approveRevision(rows[0]!.plan_id, revisionId);
       }
     } catch {
-      // Nunca rompe el envío del mensaje: sin auto-aprobación el usuario decide.
+      // Nunca rompe el envío del mensaje.
     }
   }
 
   /**
-   * Fija el run a la única revisión aprobada de la sesión (si hay justo una).
-   * Con varias aprobadas no se toca nada: el coordinador pregunta cuál usar.
-   * Sin ancla, plan_tasks falla y el coordinador lo hace todo directo.
+   * Ancla el run a la última revisión presentada de la sesión (sin ventana de
+   * aprobación). Al cambiar a build y pedir «procede», el coordinador ejecuta
+   * ese plan. Las revisiones rechazadas se ignoran.
    */
   private async maybeAnchorApprovedRevision(sessionId: string, runId: string): Promise<void> {
     try {
       const rows = await this.db.query<{ plan_id: string; revision_id: string }>(
-        `SELECT pr.plan_id AS plan_id, pr.id AS revision_id FROM plan_revisions pr JOIN plans p ON p.id = pr.plan_id WHERE p.session_id = ? AND pr.approval = 'approved' ORDER BY pr.approved_at ASC`,
+        `SELECT pr.plan_id AS plan_id, pr.id AS revision_id FROM plan_revisions pr
+         JOIN plans p ON p.id = pr.plan_id
+         WHERE p.session_id = ? AND pr.lifecycle = 'presented' AND pr.approval <> 'rejected'
+         ORDER BY pr.created_at DESC, pr.version DESC LIMIT 1`,
         [sessionId],
       );
-      if (rows.length !== 1) return;
+      if (rows.length === 0) return;
       const revisionId = rows[0]!.revision_id;
       await this.db.exec("UPDATE runs SET plan_revision_id = ? WHERE id = ?", [revisionId, runId]);
       await this.db.exec("INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", [
@@ -874,9 +875,9 @@ export class OctusCore {
       timestamp,
       timestamp,
     ]);
-    // Ancla exacta (sin auto-elegir si hay varias): con una sola revisión
-    // aprobada en la sesión, el run queda fijado a ella y plan_tasks puede
-    // delegar a subagentes. Sin esto el coordinador trabaja todo directo.
+    // Ancla a la última revisión presentada: el run queda fijado a ella y
+    // plan_tasks puede delegar a subagentes. Sin ancla, el coordinador no
+    // sabría qué plan ejecutar.
     await this.maybeAnchorApprovedRevision(sessionId, runId);
     const definition = await this.registry.forProfile(session.profile);
     const instanceId = createId("ins");
@@ -927,6 +928,9 @@ export class OctusCore {
       await previous.catch(() => undefined);
       try {
         await this.runtime.runInstance(instanceId, { signal: controller.signal, correlationId, onStream: streamHandler, ownsRun: true });
+        // Plan entrega un resultado consolidado: espera a sus subagentes y
+        // cancela los que excedan el tope (nunca quedan vivos tras el plan).
+        if (session.profile === "plan") await this.agents.settleRunChildren(runId).catch(() => undefined);
       } catch {
         // El resultado final lo fija finish(); aquí solo se libera el turno.
       } finally {
@@ -1159,6 +1163,7 @@ export class OctusCore {
       await previous.catch(() => undefined);
       try {
         await this.runtime.runInstance(instanceId, { signal: controller.signal, correlationId, onStream: streamHandler, ownsRun: true });
+        if (session.profile === "plan") await this.agents.settleRunChildren(runId).catch(() => undefined);
       } catch {
         // El resultado final lo fija finish().
       } finally {

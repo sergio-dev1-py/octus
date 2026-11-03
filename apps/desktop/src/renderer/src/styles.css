@@ -127,6 +127,21 @@ body {
   font-weight: 700;
 }
 
+.side-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--oc-space-2);
+  min-width: 0;
+}
+
+.side-logo {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
 #sidebar h2,
 #inspector h2 {
   font-size: var(--oc-text-xs);
@@ -1307,7 +1322,7 @@ code.muted {
   gap: var(--oc-space-2);
   width: 100%;
   padding: var(--oc-space-2) var(--oc-space-3);
-  border-radius: var(--oc-radius-md);
+  border-radius: 8px;
   background: var(--oc-accent);
   border: 1px solid var(--oc-accent);
   color: var(--oc-accent-ink);
@@ -1347,7 +1362,7 @@ code.muted {
   gap: var(--oc-space-2);
   width: 100%;
   padding: var(--oc-space-2) var(--oc-space-3);
-  border-radius: var(--oc-radius-md);
+  border-radius: 8px;
   border: 1px solid var(--oc-border);
   background: var(--oc-bg-raised);
   color: var(--oc-text);
@@ -1533,7 +1548,9 @@ code.muted {
   border-color: var(--oc-border-strong);
 }
 
-/* Chat todo en uno: sin scroll horizontal nunca; los hijos pueden encoger. */
+/* Chat todo en uno: sin scroll horizontal nunca; los hijos pueden encoger.
+   OJO: no aplicar overflow a .composer-box/.composer-footer: recortaría el
+   popover de modelos que se abre hacia arriba. */
 html,
 body,
 .app,
@@ -1541,15 +1558,17 @@ body,
 #welcome-shell,
 #center,
 .chat,
-.chat > *,
 .timeline,
-.message-timeline,
-.composer-wrap,
-.composer-box,
-.composer-footer,
-.model-picker {
+.message-timeline {
   min-width: 0;
   overflow-x: clip;
+}
+
+/* El composer necesita overflow visible en ambos ejes: su popover de modelos
+   se abre hacia arriba y cualquier clip lo recortaría. */
+.composer-wrap {
+  min-width: 0;
+  overflow: visible;
 }
 
 .composer-footer {
@@ -1563,23 +1582,22 @@ body,
 
 /* Grupo de trabajo colapsable del asistente (estilo opencode). */
 details.work {
-  border: 1px solid var(--oc-border);
-  border-radius: var(--oc-radius-lg);
-  background: var(--oc-panel);
+  border: none;
+  background: transparent;
   padding: 0;
   min-width: 0;
 }
 
 details.work > summary {
   cursor: pointer;
-  padding: var(--oc-space-2) var(--oc-pad);
-  color: var(--oc-text);
+  padding: var(--oc-space-1) 0;
+  color: var(--oc-text-muted);
   font-size: var(--oc-text-sm);
-  font-weight: 600;
+  font-weight: 500;
   list-style: none;
   display: flex;
   align-items: center;
-  gap: var(--oc-gap);
+  gap: var(--oc-space-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1590,19 +1608,111 @@ details.work > summary::-webkit-details-marker {
 }
 
 details.work > summary::before {
-  content: "▾";
+  content: "›";
   color: var(--oc-text-muted);
   flex-shrink: 0;
+  transition: transform 0.15s ease;
 }
 
-details.work:not([open]) > summary::before {
-  content: "▸";
+details.work[open] > summary::before {
+  transform: rotate(90deg);
 }
 
 details.work .message {
   border: none;
   border-radius: 0;
-  border-top: 1px solid var(--oc-border);
+  background: transparent;
+  padding: var(--oc-space-2) 0 0;
+}
+
+/* --- Árbol compacto de actividad (subagentes y herramientas) --- */
+.activity-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--oc-space-1) 0;
+}
+
+.activity-node {
+  border: none;
+  background: transparent;
+}
+
+.activity-node > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: var(--oc-space-2);
+  padding: 2px 0;
+  font-size: var(--oc-text-sm);
+  color: var(--oc-text);
+  min-width: 0;
+}
+
+.activity-node > summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-caret {
+  color: var(--oc-text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.activity-node[open] > .activity-caret,
+.activity-node[open] > summary > .activity-caret {
+  transform: rotate(90deg);
+}
+
+.activity-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-meta {
+  color: var(--oc-text-muted);
+  font-size: var(--oc-text-xs);
+  white-space: nowrap;
+}
+
+.activity-tool {
+  display: flex;
+  align-items: center;
+  gap: var(--oc-space-2);
+  padding: 1px 0 1px var(--oc-space-3);
+  font-size: var(--oc-text-xs);
+  color: var(--oc-text-muted);
+  min-width: 0;
+}
+
+.activity-tool-name {
+  font-family: var(--oc-font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--oc-radius-pill);
+  background: var(--oc-border-strong);
+  flex-shrink: 0;
+}
+
+.activity-tool[data-tool-status="running"] .activity-dot,
+.activity-node[data-subagent-status="working"] .activity-dot {
+  background: var(--oc-accent);
+}
+
+.activity-tool[data-tool-status="completed"] .activity-dot {
+  background: var(--oc-success);
+}
+
+.activity-tool[data-tool-status="failed"] .activity-dot {
+  background: var(--oc-danger);
 }
 
 /* --- Terminal estilo VSCode: una tab + selector + acciones --- */
@@ -1772,30 +1882,6 @@ details.work .message {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.effort-segment {
-  display: inline-flex;
-  gap: var(--oc-space-1);
-  flex-wrap: wrap;
-}
-
-.effort-chip {
-  font-size: var(--oc-text-xs);
-  border: 1px solid var(--oc-border);
-  border-radius: var(--oc-radius-pill);
-  background: var(--oc-bg-raised);
-  color: var(--oc-text-muted);
-  padding: var(--oc-space-1) var(--oc-space-2);
-  cursor: pointer;
-  width: auto;
-}
-
-.effort-chip.active {
-  color: var(--oc-text);
-  border-color: var(--oc-accent-border);
-  background: var(--oc-accent-wash);
-  font-weight: 600;
 }
 
 .model-popover-backdrop {

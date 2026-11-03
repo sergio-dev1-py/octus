@@ -53,7 +53,7 @@ export interface PlanTasksInput {
   nonce?: string;
 }
 
-const PLANNER_SYSTEM = `You decompose the approved implementation plan into concrete executable tasks.
+const PLANNER_SYSTEM = `You decompose an implementation plan into concrete executable tasks.
 Rules:
 - Output ONLY a JSON object: {"tasks":[{tempId,title,description,agentRole,priority,dependencies,acceptanceCriteria,requiredTools,writeScope,validationCommands,needsReview,reviewTargetTempId?,estimatedComplexity?}]}.
 - agentRole is one of explorer|researcher|implementer|reviewer. implementer tasks MUST set needsReview=true; reviewer tasks MUST set reviewTargetTempId to the tempId of the task they review and needsReview=false.
@@ -62,6 +62,7 @@ Rules:
 - writeScope lists workspace-relative directories the task writes; only for implementer tasks.
 - validationCommands must name project test commands (leave empty when unknown).
 - Every task needs concrete acceptance criteria with verifiable evidence.
+- Keep descriptions and acceptance criteria concise (max 2 sentences / 3 criteria per task) so the JSON stays complete.
 - Do not include approvals, merges, branches or worktrees: those do not exist for workers.`;
 
 export class TaskPlanner {
@@ -92,7 +93,7 @@ export class TaskPlanner {
     if (String(coord.session_id) !== run.session_id) {
       throw new OctusError("invalid_state", "Coordinator instance does not belong to the run session");
     }
-    // Anclaje exacto a la revisión aprobada: explícito o el del run; jamás auto-selección.
+    // Anclaje exacto a la revisión elegida: explícito o el del run; jamás auto-selección.
     let planId = input.planId;
     let revisionId = input.revisionId;
     if ((!planId || !revisionId) && run.plan_revision_id) {
@@ -102,12 +103,19 @@ export class TaskPlanner {
       revisionId = rev.id;
     }
     if (!planId || !revisionId) {
-      throw new OctusError("plan_conflict", "No approved revision selected: pass planId+revisionId (user decision required)");
+      throw new OctusError("plan_conflict", "No plan revision selected: pass planId+revisionId (user decision required)");
     }
-    const revision = await this.plans.getRevision(revisionId);
-    if (!revision || revision.planId !== planId) throw new OctusError("not_found", `Revision ${revisionId} not found in plan ${planId}`);
-    if (revision.approval !== "approved") {
-      throw new OctusError("invalid_state", "Cannot create executable tasks without an approved revision (needs-approval)");
+    const revision = await this.plans.resolveRevision(planId, revisionId);
+    if (revision.planId !== planId) throw new OctusError("not_found", `Revision ${revisionId} not found in plan ${planId}`);
+    revisionId = revision.id;
+    // Sin ventana de aprobación: cualquier revisión viva (presentada o recién
+    // creada en este run) puede ejecutarse. Solo se rechazan las rechazadas
+    // o huérfanas.
+    if (revision.approval === "rejected") {
+      throw new OctusError("invalid_state", "This plan revision was rejected: create or present a new revision before executing it");
+    }
+    if (revision.lifecycle === "orphaned") {
+      throw new OctusError("invalid_state", "This plan revision is orphaned: create a new revision before executing it");
     }
     const plan = await this.plans.getPlan(planId);
     if (plan.sessionId !== run.session_id) throw new OctusError("invalid_state", "Plan does not belong to the run session");
@@ -153,31 +161,46 @@ export class TaskPlanner {
     reviewTargetTempId?: string; estimatedComplexity?: string;
   }>> {
     const resolution = this.router.resolve({ instance: { providerId: model.providerId, modelId: model.modelId, effort: model.effort }, globalDefault: { providerId: model.providerId, modelId: model.modelId, effort: model.effort } });
-    const instructions = `${PLANNER_SYSTEM}\n\nApproved plan objective: ${planObjective}\n\nApproved revision (exact scope, do not exceed it):\n${revisionMarkdown.slice(0, 12000)}\n\nRequest objective: ${objective}${brief ? `\nBrief: ${brief.slice(0, 4000)}` : ""}`;
+    const instructions = `${PLANNER_SYSTEM}\n\nPlan objective: ${planObjective}\n\nPlan revision (exact scope, do not exceed it):\n${revisionMarkdown.slice(0, 12000)}\n\nRequest objective: ${objective}${brief ? `\nBrief: ${brief.slice(0, 4000)}` : ""}`;
     const correlationId = createId("cor");
-    let text = "";
-    const stream = this.router.generateStream(
-      resolution,
-      { providerId: model.providerId, modelId: model.modelId, effort: model.effort as never, instructions, messages: [{ role: "user", blocks: [{ type: "text", text: "Propose the task DAG as JSON. Return ONLY the JSON object {\"tasks\": [...]} with the exact keys and roles from the instructions — no markdown, no preamble, no invented keys." }] }], maxOutputTokens: 4000, conversationId },
-      { providerId: model.providerId, modelId: model.modelId, agentDefinitionId: "coordinator-build", agentInstanceId: "planner", runId: "planner", sessionId: "planner", correlationId },
-      new AbortController().signal,
-    );
-    for await (const event of stream) {
-      if (event.type === "text.delta") text += event.delta;
-      if (event.type === "error") throw new OctusError("tool_failed", `TaskPlanner model call failed: ${event.error.message}`);
-      if (event.type === "completed") break;
+    // El modelo a veces corta el JSON (límite de salida) o añade prosa. Un
+    // reintento compacto evita que build se quede sin DAG por una respuesta
+    // truncada; el segundo intento pide menos tareas y texto más corto.
+    let lastFailure = "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const retryNote =
+        attempt === 0
+          ? ""
+          : "\n\nRETRY: your previous answer was incomplete or invalid JSON. Return ONLY complete valid JSON, at most 8 tasks, and keep every description/acceptance criterion short.";
+      let text = "";
+      const stream = this.router.generateStream(
+        resolution,
+        { providerId: model.providerId, modelId: model.modelId, effort: model.effort as never, instructions: instructions + retryNote, messages: [{ role: "user", blocks: [{ type: "text", text: "Propose the task DAG as JSON. Return ONLY the JSON object {\"tasks\": [...]} with the exact keys and roles from the instructions — no markdown, no preamble, no invented keys." }] }], maxOutputTokens: 8000, conversationId },
+        { providerId: model.providerId, modelId: model.modelId, agentDefinitionId: "coordinator-build", agentInstanceId: "planner", runId: "planner", sessionId: "planner", correlationId },
+        new AbortController().signal,
+      );
+      for await (const event of stream) {
+        if (event.type === "text.delta") text += event.delta;
+        if (event.type === "error") throw new OctusError("tool_failed", `TaskPlanner model call failed: ${event.error.message}`);
+        if (event.type === "completed") break;
+      }
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      const jsonText = start >= 0 && end > start ? text.slice(start, end + 1).trim() : text.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(jsonText);
+      } catch {
+        lastFailure = `invalid JSON: ${text.slice(0, 300)}`;
+        continue;
+      }
+      const result = proposalSchema.safeParse(parsed);
+      if (!result.success) {
+        lastFailure = `invalid proposal: ${result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).slice(0, 5).join("; ")} (raw head: ${jsonText.slice(0, 200)})`;
+        continue;
+      }
+      return result.data.tasks.map((t) => ({ ...t, reviewTargetTempId: t.reviewTargetTempId ?? undefined, estimatedComplexity: t.estimatedComplexity ?? undefined }));
     }
-    const jsonText = text.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonText);
-    } catch {
-      throw new OctusError("tool_failed", `TaskPlanner did not return valid JSON: ${text.slice(0, 300)}`);
-    }
-    const result = proposalSchema.safeParse(parsed);
-    if (!result.success) {
-      throw new OctusError("tool_failed", `TaskPlanner returned an invalid proposal: ${result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).slice(0, 5).join("; ")} (raw head: ${jsonText.slice(0, 200)})`);
-    }
-    return result.data.tasks.map((t) => ({ ...t, reviewTargetTempId: t.reviewTargetTempId ?? undefined, estimatedComplexity: t.estimatedComplexity ?? undefined }));
+    throw new OctusError("tool_failed", `TaskPlanner did not return a valid proposal after 2 attempts: ${lastFailure}`);
   }
 }
