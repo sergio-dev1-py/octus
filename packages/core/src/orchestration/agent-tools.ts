@@ -3,6 +3,7 @@
  * `delegate` crea una instancia hija en foreground o background; `agent_*` la supervisan.
  */
 import { z } from "zod";
+import { OctusError } from "../errors.js";
 import type { ToolDefinition } from "../tools/tool-definitions.js";
 import { requireAgents } from "../tools/tool-services.js";
 
@@ -30,6 +31,17 @@ export const delegateTool: ToolDefinition = {
   async run(args, ctx) {
     const parsed = args as { definitionId: string; brief: string; mode?: "foreground" | "background"; directoryId?: string; model?: { providerId: string; modelId: string; effort?: string } };
     const agents = requireAgents(ctx.services);
+    // Implementers/reviewers necesitan una task y el workspace que asigna el
+    // scheduler. Sin eso sus escrituras se deniegan: se canalizan por plan_tasks.
+    if (["implementer", "reviewer"].includes(parsed.definitionId)) {
+      const parent = await agents.status(ctx.instanceId);
+      if (parent.definitionId === "coordinator-build") {
+        throw new OctusError(
+          "invalid_tool_args",
+          "Implementer/reviewer work must run through plan_tasks: it creates the task and assigns its workspace/worktree. Manual delegation has no task assignment and writes are denied.",
+        );
+      }
+    }
     const result = await agents.spawn({
       definitionId: parsed.definitionId,
       brief: parsed.brief,
@@ -47,15 +59,30 @@ export const delegateTool: ToolDefinition = {
 };
 
 const instanceSchema = z.object({
+  instanceId: z.string().min(1).optional().describe("Target subagent instance id. Omit it in agent_status to list this coordinator's workers."),
+});
+
+const targetSchema = z.object({
   instanceId: z.string().min(1).describe("Target subagent instance id"),
 });
 
 export const agentStatusTool: ToolDefinition = {
-  manifest: { name: "agent_status", description: "Inspect a subagent state (status, depth, directory).", inputJsonSchema: toJsonSchema(instanceSchema), permissionAction: "agent_status" },
+  manifest: { name: "agent_status", description: "Inspect a subagent state, or list this coordinator's worker subagents when instanceId is omitted.", inputJsonSchema: toJsonSchema(instanceSchema), permissionAction: "agent_status" },
   schema: instanceSchema,
   async run(args, ctx) {
-    const parsed = args as { instanceId: string };
-    const status = await requireAgents(ctx.services).status(parsed.instanceId);
+    const parsed = args as { instanceId?: string };
+    const agents = requireAgents(ctx.services);
+    if (!parsed.instanceId) {
+      const children = await agents.children(ctx.instanceId);
+      if (children.length === 0) return { text: "No worker subagents yet. The scheduler may still be provisioning them; call agent_status again shortly." };
+      return {
+        text: children
+          .map((child) => `- ${child.instanceId} (${child.definitionId}) ${child.status}${child.taskId ? ` task=${child.taskId}` : ""}${child.reviewTargetTaskId ? ` review-target=${child.reviewTargetTaskId}` : ""}${child.error ? ` error=${child.error}` : ""}`)
+          .join("\n"),
+      };
+    }
+    await agents.assertOwnedBy(parsed.instanceId, ctx.runId);
+    const status = await agents.status(parsed.instanceId);
     return { text: `Agent ${status.instanceId} (${status.definitionId}): ${status.status}, depth ${status.depth}, dir ${status.directory}${status.error ? `, error: ${status.error}` : ""}` };
   },
 };
@@ -70,42 +97,58 @@ export const agentMessageTool: ToolDefinition = {
   schema: messageSchema,
   async run(args, ctx) {
     const parsed = args as { instanceId: string; text: string };
-    await requireAgents(ctx.services).message(parsed.instanceId, parsed.text);
+    const agents = requireAgents(ctx.services);
+    await agents.assertOwnedBy(parsed.instanceId, ctx.runId);
+    await agents.message(parsed.instanceId, parsed.text);
     return { text: `Message delivered to ${parsed.instanceId}` };
   },
 };
 
 const waitSchema = z.object({
-  instanceId: z.string().min(1),
-  timeoutMs: z.number().int().min(1000).max(600_000).optional().describe("Max wait (default 120000)"),
+  instanceId: z.string().min(1).optional().describe("Single subagent to wait for"),
+  all: z.boolean().optional().describe("Wait for every worker of this coordinator, including new waves"),
+  timeoutMs: z.number().int().min(1000).max(600_000).optional().describe("Max wait (default 120s, or 300s for all)"),
 });
 
 export const agentWaitTool: ToolDefinition = {
-  manifest: { name: "agent_wait", description: "Wait for a background subagent and return its structured delivery.", inputJsonSchema: toJsonSchema(waitSchema), permissionAction: "agent_wait" },
+  manifest: { name: "agent_wait", description: "Wait for a background subagent (or all of this coordinator's workers) and return their structured deliveries.", inputJsonSchema: toJsonSchema(waitSchema), permissionAction: "agent_wait" },
   schema: waitSchema,
   async run(args, ctx) {
-    const parsed = args as { instanceId: string; timeoutMs?: number };
-    const delivery = await requireAgents(ctx.services).wait(parsed.instanceId, parsed.timeoutMs ?? 120_000);
-    return { text: `Delivery from ${delivery.definitionId} (${delivery.status}):\n${delivery.summary}${delivery.error ? `\nError: ${delivery.error}` : ""}` };
+    const parsed = args as { instanceId?: string; all?: boolean; timeoutMs?: number };
+    const agents = requireAgents(ctx.services);
+    const format = (delivery: { definitionId: string; status: string; summary: string; error?: string }) =>
+      `Delivery from ${delivery.definitionId} (${delivery.status}):\n${delivery.summary}${delivery.error ? `\nError: ${delivery.error}` : ""}`;
+    if (parsed.all || !parsed.instanceId) {
+      const deliveries = await agents.waitForChildren(ctx.instanceId, parsed.timeoutMs ?? 300_000);
+      if (deliveries.length === 0) return { text: "No worker deliveries yet (the scheduler may still be provisioning tasks)." };
+      return { text: deliveries.map(format).join("\n\n") };
+    }
+    await agents.assertOwnedBy(parsed.instanceId, ctx.runId);
+    const delivery = await agents.wait(parsed.instanceId, parsed.timeoutMs ?? 120_000);
+    return { text: format(delivery) };
   },
 };
 
 export const agentResultTool: ToolDefinition = {
-  manifest: { name: "agent_result", description: "Read a finished subagent delivery (fails while it is still running).", inputJsonSchema: toJsonSchema(instanceSchema), permissionAction: "agent_result" },
-  schema: instanceSchema,
+  manifest: { name: "agent_result", description: "Read a finished subagent delivery (fails while it is still running).", inputJsonSchema: toJsonSchema(targetSchema), permissionAction: "agent_result" },
+  schema: targetSchema,
   async run(args, ctx) {
     const parsed = args as { instanceId: string };
-    const delivery = await requireAgents(ctx.services).result(parsed.instanceId);
+    const agents = requireAgents(ctx.services);
+    await agents.assertOwnedBy(parsed.instanceId, ctx.runId);
+    const delivery = await agents.result(parsed.instanceId);
     return { text: `Delivery from ${delivery.definitionId} (${delivery.status}):\n${delivery.summary}${delivery.error ? `\nError: ${delivery.error}` : ""}` };
   },
 };
 
 export const agentCancelTool: ToolDefinition = {
-  manifest: { name: "agent_cancel", description: "Cancel a subagent and its descendants.", inputJsonSchema: toJsonSchema(instanceSchema), permissionAction: "agent_cancel" },
-  schema: instanceSchema,
+  manifest: { name: "agent_cancel", description: "Cancel a subagent and its descendants.", inputJsonSchema: toJsonSchema(targetSchema), permissionAction: "agent_cancel" },
+  schema: targetSchema,
   async run(args, ctx) {
     const parsed = args as { instanceId: string };
-    const result = await requireAgents(ctx.services).cancel(parsed.instanceId);
+    const agents = requireAgents(ctx.services);
+    await agents.assertOwnedBy(parsed.instanceId, ctx.runId);
+    const result = await agents.cancel(parsed.instanceId);
     return { text: `Cancelled ${result.cancelled.length} instance(s)` };
   },
 };

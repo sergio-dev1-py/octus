@@ -19,6 +19,7 @@ export async function makeTestCore(options?: {
   metaTurns?: FakeTurn[] | ((callIndex: number, input: never) => FakeTurn);
   goTurns?: FakeTurn[] | ((callIndex: number, input: never) => FakeTurn);
   billableFakes?: boolean;
+  autoPlanOnContinue?: boolean;
 }): Promise<TestCore> {
   const dir = mkdtempSync(path.join(tmpdir(), "octus-test-"));
   const workspace = path.join(dir, "workspace");
@@ -36,6 +37,9 @@ export async function makeTestCore(options?: {
     dataDir: path.join(dir, "data"),
     primarySecrets: new MemorySecretStore(),
     providers: [fakeMeta, fakeGo],
+    // Los tests existentes simulan el turno del coordinador; el auto-DAG se
+    // prueba explícitamente con autoPlanOnContinue: true.
+    autoPlanOnContinue: options?.autoPlanOnContinue ?? false,
   });
   return {
     core,

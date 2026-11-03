@@ -19,18 +19,47 @@ import { requestHashOf } from "./task-manager.js";
 
 const WORKER_ROLES = ["explorer", "researcher", "implementer", "reviewer"] as const;
 
+/** Los modelos a veces mandan la prioridad como texto ("5", "high", "alta"). */
+const prioritySchema = z.preprocess((value) => {
+  if (value === undefined || value === null || value === "") return 5;
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) return numeric;
+    const key = trimmed.toLowerCase();
+    if (["high", "alta", "alto", "urgent", "urgente", "critical", "critica", "crítica"].includes(key)) return 8;
+    if (["low", "baja", "bajo"].includes(key)) return 3;
+    if (["medium", "media", "medio", "normal"].includes(key)) return 5;
+  }
+  return value;
+}, z.number().int().min(0).max(100));
+
+const nullableStringArray = (max: number) =>
+  z.preprocess((value) => (value === null || value === undefined ? [] : value), z.array(z.string().min(1).max(max)).max(60));
+
+const needsReviewSchema = z.preprocess((value) => {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") {
+    const key = value.trim().toLowerCase();
+    if (key === "true" || key === "si" || key === "sí") return true;
+    if (key === "false" || key === "no") return false;
+  }
+  return value;
+}, z.boolean());
+
 const proposedTaskSchema = z.object({
   tempId: z.string().min(1).max(64),
   title: z.string().min(1).max(500),
   description: z.string().min(1).max(4000),
   agentRole: z.enum(WORKER_ROLES),
-  priority: z.number().int().min(0).max(100),
-  dependencies: z.array(z.string().min(1).max(64)).max(30).default([]),
-  acceptanceCriteria: z.array(z.string().min(1).max(1000)).min(1).max(30),
-  requiredTools: z.array(z.string().min(1).max(80)).max(40).default([]),
-  writeScope: z.array(z.string().min(1).max(500)).max(40).default([]),
-  validationCommands: z.array(z.string().min(1).max(200)).max(20).default([]),
-  needsReview: z.boolean().default(false),
+  priority: prioritySchema,
+  dependencies: nullableStringArray(64).pipe(z.array(z.string().min(1).max(64)).max(30)),
+  acceptanceCriteria: nullableStringArray(1000).pipe(z.array(z.string().min(1).max(1000)).min(1).max(30)),
+  requiredTools: nullableStringArray(80).pipe(z.array(z.string().min(1).max(80)).max(40)),
+  writeScope: nullableStringArray(500).pipe(z.array(z.string().min(1).max(500)).max(40)),
+  validationCommands: nullableStringArray(200).pipe(z.array(z.string().min(1).max(200)).max(20)),
+  needsReview: needsReviewSchema,
   // Distintos modelos serializan los opcionales ausentes como null explícito
   // (detectado en live con GLM); null se normaliza a ausente, no es error.
   reviewTargetTempId: z.string().min(1).max(64).nullish(),
@@ -93,6 +122,15 @@ export class TaskPlanner {
     if (String(coord.session_id) !== run.session_id) {
       throw new OctusError("invalid_state", "Coordinator instance does not belong to the run session");
     }
+    // Un run tiene un único DAG. Si ya existen tasks (auto-plan o llamada
+    // previa), devolverlas en vez de crear un DAG duplicado con otro brief.
+    const existingTasks = await this.db.query<{ id: string; planning_id: string }>(
+      "SELECT id, planning_id FROM tasks WHERE run_id = ? ORDER BY created_at ASC, id ASC",
+      [input.runId],
+    );
+    if (existingTasks.length > 0) {
+      return { planningId: existingTasks[0]!.planning_id, taskIds: existingTasks.map((task) => task.id), created: false };
+    }
     // Anclaje exacto a la revisión elegida: explícito o el del run; jamás auto-selección.
     let planId = input.planId;
     let revisionId = input.revisionId;
@@ -136,9 +174,23 @@ export class TaskPlanner {
       throw new OctusError("invalid_state", `Planning was rejected: ${existing.reason ?? "no reason recorded"}. Re-plan explicitly with a nonce.`);
     }
 
-    const proposal = await this.generateProposal(model, run.session_id, plan.objective, revision.contentMarkdown, objective, input.brief ?? "");
+    const proposal = await this.generateProposal(model, run.session_id, plan.objective, revision.contentMarkdown, objective, input.brief ?? "", plan.projectId);
+    // El planner propone tools y comandos con conocimiento limitado: no dejamos
+    // que un detalle accesorio tumbe todo el DAG. Se recortan a lo que el
+    // proyecto y cada rol permiten de verdad.
+    const allowlist = new Set((await this.tests.listAllowlist(plan.projectId)).map((entry) => entry.id));
+    const roleTools = new Map<string, string[]>();
+    for (const role of WORKER_ROLES) {
+      const def = await this.registry.get(role);
+      if (def) roleTools.set(role, def.tools.filter((tool) => !def.deniedTools.includes(tool)));
+    }
+    const normalized = proposal.map((task) => ({
+      ...task,
+      requiredTools: task.requiredTools.filter((tool) => roleTools.get(task.agentRole)?.includes(tool) ?? false),
+      validationCommands: task.validationCommands.filter((cmd) => allowlist.has(cmd)),
+    }));
     try {
-      return await this.tasks.createDag({ runId: input.runId, planId, revisionId, requestHash: hash, tasks: proposal });
+      return await this.tasks.createDag({ runId: input.runId, planId, revisionId, requestHash: hash, tasks: normalized });
     } catch (error) {
       if (error instanceof OctusError && (error.code === "invalid_tool_args" || error.code === "invalid_state" || error.code === "plan_conflict")) {
         await this.tasks.recordPlanningRejected({ runId: input.runId, planId, revisionId, requestHash: hash, reason: error.message });
@@ -154,6 +206,7 @@ export class TaskPlanner {
     revisionMarkdown: string,
     objective: string,
     brief: string,
+    projectId: string,
   ): Promise<Array<{
     tempId: string; title: string; description: string; agentRole: AgentKind; priority: number;
     dependencies: string[]; acceptanceCriteria: string[]; requiredTools: string[];
@@ -161,7 +214,16 @@ export class TaskPlanner {
     reviewTargetTempId?: string; estimatedComplexity?: string;
   }>> {
     const resolution = this.router.resolve({ instance: { providerId: model.providerId, modelId: model.modelId, effort: model.effort }, globalDefault: { providerId: model.providerId, modelId: model.modelId, effort: model.effort } });
-    const instructions = `${PLANNER_SYSTEM}\n\nPlan objective: ${planObjective}\n\nPlan revision (exact scope, do not exceed it):\n${revisionMarkdown.slice(0, 12000)}\n\nRequest objective: ${objective}${brief ? `\nBrief: ${brief.slice(0, 4000)}` : ""}`;
+    const allowedCommands = (await this.tests.listAllowlist(projectId)).map((entry) => entry.id);
+    const roleLines: string[] = [];
+    for (const role of WORKER_ROLES) {
+      const def = await this.registry.get(role);
+      if (def) roleLines.push(`- ${role}: ${def.tools.filter((tool) => !def.deniedTools.includes(tool)).join(", ") || "(no tools)"}`);
+    }
+    const commandLine = allowedCommands.length
+      ? `Allowed validationCommands (use ONLY these): ${allowedCommands.join(", ")}`
+      : "No validation commands are configured for this project: leave validationCommands empty. Never invent commands like npm run build.";
+    const instructions = `${PLANNER_SYSTEM}\n\n${commandLine}\nRole tools (requiredTools may only contain these):\n${roleLines.join("\n")}\n\nPlan objective: ${planObjective}\n\nPlan revision (exact scope, do not exceed it):\n${revisionMarkdown.slice(0, 12000)}\n\nRequest objective: ${objective}${brief ? `\nBrief: ${brief.slice(0, 4000)}` : ""}`;
     const correlationId = createId("cor");
     // El modelo a veces corta el JSON (límite de salida) o añade prosa. Un
     // reintento compacto evita que build se quede sin DAG por una respuesta

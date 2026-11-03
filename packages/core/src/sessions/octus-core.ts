@@ -92,6 +92,8 @@ export interface OctusCoreOptions {
   /** Proveedores exactos a registrar (tests con fakes). Por defecto: Meta + Go reales. */
   providers?: ModelProvider[];
   allowContributorModels?: boolean;
+  /** Si el usuario pide continuar en build y hay plan, crea el DAG antes de que el modelo decida. */
+  autoPlanOnContinue?: boolean;
   /**
    * Todo 23: ámbitos de descubrimiento de skills. Ausente = skills
    * desactivadas (cero cambios de comportamiento respecto a Etapas 1–6).
@@ -144,6 +146,8 @@ export class OctusCore {
   private readonly dataDir: string;
   /** Todo 23: runtime de skills (siempre activo: global+managed+proyecto). */
   readonly skills: SkillRuntime;
+  /** Auto-DAG al pedir continuar en build (evita la inercia del chat). */
+  private readonly autoPlanOnContinue: boolean;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -165,6 +169,7 @@ export class OctusCore {
     this.config = config;
     this.secrets = secrets;
     this.db = db;
+    this.autoPlanOnContinue = options.autoPlanOnContinue ?? true;
     this.events = new EventStore(db);
     this.bus = new EventBus();
     this.permissions = new PermissionManager(db, this.events, this.bus);
@@ -284,6 +289,7 @@ export class OctusCore {
       sessionProviders: {
         planState: async (sessionId: string) => this.sessionPlanState(sessionId),
         deliveries: async (sessionId: string) => this.sessionDeliveries(sessionId),
+        runState: async (runId: string, instanceId: string) => this.sessionRunState(runId, instanceId),
         projectIdOf: async (sessionId: string) => (await this.requireSession(sessionId)).projectId,
         // Todo 23: secciones progresivas de skills (coordinador y workers).
         // Las adjuntadas a mano con @ se suman a las auto-relevantes.
@@ -574,6 +580,24 @@ export class OctusCore {
       }
     } catch {
       // Nunca rompe el envío del mensaje.
+    }
+  }
+
+  /**
+   * Crea el DAG automáticamente cuando el usuario pide continuar en build y el
+   * run está anclado a un plan. Evita que el coordinador se limite a recitar el
+   * resumen del run anterior en vez de lanzar a los workers.
+   */
+  private async autoPlanBuildRun(session: Session, runId: string, instanceId: string): Promise<void> {
+    try {
+      const run = await this.db.queryOne<{ plan_revision_id: string | null }>("SELECT plan_revision_id FROM runs WHERE id = ?", [runId]);
+      if (!run?.plan_revision_id) return;
+      const existing = await this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE run_id = ?", [runId]);
+      if (Number(existing?.n ?? 0) > 0) return;
+      const out = await this.planner.planTasks(instanceId, { runId });
+      if (out.created) await this.scheduler.tick({ sessionId: session.id });
+    } catch {
+      // El planner deja el rechazo auditado; el coordinador puede reintentar.
     }
   }
 
@@ -927,6 +951,11 @@ export class OctusCore {
     const finished = (async (): Promise<void> => {
       await previous.catch(() => undefined);
       try {
+        // "continua"/"procede" en build con plan anclado: crea el DAG antes de
+        // que el modelo empiece, para que no se limite a recitar el run previo.
+        if (session.profile === "build" && this.autoPlanOnContinue && isContinuationRequest(text)) {
+          await this.autoPlanBuildRun(session, runId, instanceId);
+        }
         await this.runtime.runInstance(instanceId, { signal: controller.signal, correlationId, onStream: streamHandler, ownsRun: true });
         // Plan entrega un resultado consolidado: espera a sus subagentes y
         // cancela los que excedan el tope (nunca quedan vivos tras el plan).
@@ -1050,6 +1079,28 @@ export class OctusCore {
     return deliveries
       .map((d) => `[delivery ${d.definitionId} ${d.instanceId} ${d.status}]\n${d.summary.slice(0, 20000)}${d.error ? `\nError: ${d.error}` : ""}`)
       .join("\n\n");
+  }
+
+  /**
+   * Estado autoritativo del run actual. Evita que un coordinador nuevo
+   * "continúe" supervisando workers de un run anterior por inercia del chat.
+   */
+  private async sessionRunState(runId: string, instanceId: string): Promise<string | undefined> {
+    const tasks = await this.tasks.listTasks({ runId }).catch(() => []);
+    const children = await this.agents.children(instanceId).catch(() => []);
+    const active = children.filter((child) => ["created", "running", "waiting_permission", "waiting_input"].includes(child.status));
+    const terminal = ["completed", "reviewed", "integrated", "failed", "cancelled", "interrupted"];
+    const lines = [`Run ${runId}: ${tasks.length} task(s), ${children.length} worker(s), ${active.length} active.`];
+    if (tasks.length === 0) {
+      lines.push("This run has NO tasks yet. For implementation work call plan_tasks NOW. Never reuse task/agent ids from previous runs.");
+    } else if (active.length > 0) {
+      lines.push("Workers are active: call agent_wait with {all:true} and wait for their deliveries.");
+    } else if (tasks.some((task) => !terminal.includes(task.status))) {
+      lines.push("No active workers but tasks remain: record pending reviewer verdicts with record_review, then call agent_wait {all:true} to continue.");
+    } else {
+      lines.push("All tasks are terminal: consolidate the deliveries and report. Do not start a second DAG or resume old agents.");
+    }
+    return lines.join("\n");
   }
 
   /** Resume qué definición corre cada perfil (diagnóstico de seed rancia). */
@@ -2003,6 +2054,11 @@ export class OctusCore {
   /** Liquidación tras cierre/caída: nada queda en `running` para siempre. */
   private async settleInterrupted(): Promise<void> {
     const timestamp = now();
+    // Instancias que quedaron vivas en memoria: al reiniciar ya no existen.
+    // Sus entregas no deben inyectarse como si fueran trabajo reciente.
+    const activeAgents = await this.db
+      .query<{ id: string }>("SELECT id FROM agent_instances WHERE status IN ('created','running','waiting_permission','waiting_input')")
+      .catch(() => [] as Array<{ id: string }>);
     // Etapa 5: los runs con integración abierta sobreviven (su reconcile es propio).
     const openInt = await this.db.query<{ run_id: string }>("SELECT DISTINCT run_id FROM integrations WHERE status IN ('building','conflicted','validating','preview_ready','approved')").catch(() => [] as Array<{ run_id: string }>);
     const protectedRuns = new Set((openInt ?? []).map((r) => String(r.run_id)));
@@ -2032,6 +2088,9 @@ export class OctusCore {
       "UPDATE agent_instances SET status = 'cancelled', error = 'Interrupted by shutdown or restart (continuable via message)', updated_at = ?, completed_at = ? WHERE task_id IS NULL AND status IN ('created','running','waiting_permission','waiting_input')",
       [timestamp, timestamp],
     );
+    for (const agent of activeAgents) {
+      await this.db.exec("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, '1', ?)", [`delivery.seen.${agent.id}`, timestamp]).catch(() => undefined);
+    }
     await this.db.exec(
       "UPDATE tool_invocations SET status = 'cancelled', error = 'Interrupted by shutdown or previous crash', completed_at = ? WHERE status IN ('pending', 'running')",
       [timestamp],
@@ -2100,4 +2159,9 @@ function isAffirmative(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 300 || trimmed.includes("?") || trimmed.includes("¿")) return false;
   return AFFIRMATIVE_START.test(trimmed);
+}
+
+/** "continua", "procede", "aplica"... disparan el DAG en build si hay plan. */
+function isContinuationRequest(text: string): boolean {
+  return /\b(procede|contin[uú]a|sigue|sig[uú]e|adelante|aplica|apl[ií]calo|implementa|ejecuta|hazlo|dale)\b/iu.test(text);
 }

@@ -150,7 +150,10 @@ export class AgentManager implements AgentToolService {
 
   // ------------------------------------------------------------- supervisión
   async status(instanceId: string): Promise<AgentStatusView> {
-    const row = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM agent_instances WHERE id = ?", [instanceId]);
+    const row = await this.db.queryOne<Record<string, string | number | null>>(
+      "SELECT i.*, t.review_target_task_id AS review_target_task_id FROM agent_instances i LEFT JOIN tasks t ON t.id = i.task_id WHERE i.id = ?",
+      [instanceId],
+    );
     if (!row) throw new OctusError("not_found", `Agent instance not found: ${instanceId}`);
     return {
       instanceId,
@@ -159,7 +162,93 @@ export class AgentManager implements AgentToolService {
       depth: await this.depthOf(instanceId),
       directory: String(row.directory),
       error: row.error ? String(row.error) : undefined,
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      reviewTargetTaskId: row.review_target_task_id ? String(row.review_target_task_id) : undefined,
     };
+  }
+
+  /** Subagentes directos del coordinador, para supervisarlos sin conocer sus ids. */
+  async children(parentInstanceId: string): Promise<AgentStatusView[]> {
+    const rows = await this.db.query<Record<string, string | number | null>>(
+      "SELECT i.*, t.review_target_task_id AS review_target_task_id FROM agent_instances i LEFT JOIN tasks t ON t.id = i.task_id WHERE i.parent_instance_id = ? ORDER BY i.created_at ASC",
+      [parentInstanceId],
+    );
+    const out: AgentStatusView[] = [];
+    for (const row of rows) {
+      out.push({
+        instanceId: String(row.id),
+        definitionId: String(row.definition_id),
+        status: String(row.status),
+        depth: await this.depthOf(String(row.id)),
+        directory: String(row.directory),
+        error: row.error ? String(row.error) : undefined,
+        taskId: row.task_id ? String(row.task_id) : undefined,
+        reviewTargetTaskId: row.review_target_task_id ? String(row.review_target_task_id) : undefined,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Espera a la oleada actual de workers del coordinador (no a todo el DAG:
+   * los reviewer gates exigen que el coordinador registre veredictos entre
+   * oleadas). Devuelve las entregas disponibles. No cancela nada.
+   */
+  async waitForChildren(parentInstanceId: string, timeoutMs: number): Promise<AgentDelivery[]> {
+    const coord = await this.db.queryOne<{ run_id: string }>("SELECT run_id FROM agent_instances WHERE id = ?", [parentInstanceId]);
+    if (!coord) throw new OctusError("not_found", `Agent instance not found: ${parentInstanceId}`);
+    const deadline = now() + timeoutMs;
+    const started = now();
+    let seen = false;
+    let idleSince = 0;
+    let emptySince = 0;
+    for (;;) {
+      const rows = await this.db.query<{ id: string; status: string }>(
+        "SELECT id, status FROM agent_instances WHERE parent_instance_id = ? ORDER BY created_at ASC",
+        [parentInstanceId],
+      );
+      const active = rows.filter((row) => ["created", "running", "waiting_permission", "waiting_input"].includes(row.status));
+      if (rows.length > 0) seen = true;
+      if (active.length > 0) {
+        idleSince = 0;
+        emptySince = 0;
+      } else if (seen) {
+        // Gracia corta para que el scheduler asigne la siguiente oleada.
+        if (idleSince === 0) idleSince = now();
+        if (now() - idleSince >= 5000) {
+          return Promise.all(rows.map((row) => this.result(row.id).catch(() => undefined))).then((items) =>
+            items.filter((item): item is AgentDelivery => Boolean(item)),
+          );
+        }
+      } else {
+        const actionable = await this.db.queryOne<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM tasks WHERE run_id = ? AND status IN ('ready','assigned','running')",
+          [coord.run_id],
+        );
+        if (Number(actionable?.n ?? 0) === 0) {
+          if (emptySince === 0) emptySince = now();
+          if (now() - emptySince >= 3000) return [];
+        } else {
+          emptySince = 0;
+        }
+      }
+      if (now() >= deadline) {
+        throw new OctusError("timeout", `Timed out waiting for ${active.length} subagent(s) (${Math.round((now() - started) / 1000)}s)`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
+  /** Evita que un coordinador nuevo reviva instancias de runs anteriores. */
+  async assertOwnedBy(instanceId: string, runId: string): Promise<void> {
+    const row = await this.db.queryOne<{ run_id: string }>("SELECT run_id FROM agent_instances WHERE id = ?", [instanceId]);
+    if (!row) throw new OctusError("not_found", `Agent instance not found: ${instanceId}`);
+    if (String(row.run_id) !== runId) {
+      throw new OctusError(
+        "invalid_state",
+        `Agent ${instanceId} belongs to run ${row.run_id}, not this run. Previous runs are not continuable from a new coordinator; create the work with plan_tasks.`,
+      );
+    }
   }
 
   async message(instanceId: string, text: string): Promise<void> {
@@ -496,8 +585,10 @@ export class AgentManager implements AgentToolService {
     const session = await this.db.queryOne<{ directory: string }>("SELECT directory FROM sessions WHERE id = ?", [parent.sessionId]);
     const sessionDir = session ? String(session.directory) : "";
     if (!directoryId) {
-      // Sin asignación: el implementer queda en solo lectura (denegación explícita auditable).
-      if (childKind === "implementer") {
+      // Implementer del scheduler en proyecto no-git: el workspace legacy es el
+      // directorio de la sesión. Las reservas de scope evitan solapes entre
+      // writers. La delegación manual (sin taskId) sigue siendo solo lectura.
+      if (childKind === "implementer" && !taskId) {
         const deny = ["write", "edit", "shell", "git_stage", "git_commit"].map((action) => ({ action, resource: "*", effect: "deny" as const }));
         return { directory: sessionDir, directoryId: null, instanceRules: deny };
       }

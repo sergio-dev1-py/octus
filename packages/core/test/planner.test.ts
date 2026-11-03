@@ -272,4 +272,34 @@ describe("task planning (validation + idempotency + anchoring)", () => {
       await t.cleanup();
     }
   });
+
+  test("build anclado sin tasks no puede escribir directamente (debe plan_tasks)", async () => {
+    const t = await makeTestCore();
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "X", structured: STRUCTURED, runId, createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_seed");
+      await t.core.db.exec("UPDATE runs SET plan_revision_id = ? WHERE id = ?", [rev.id, runId]);
+      await expectRejects(
+        t.core.gateway.execute({
+          toolCallId: "tool_direct_write",
+          idempotencyKey: "idem-direct-write",
+          sessionId: session.id,
+          runId,
+          instanceId,
+          definitionId: "coordinator-build",
+          directory: workspaceOf(t),
+          name: "write",
+          args: { path: "direct.txt", content: "should not happen" },
+          signal: new AbortController().signal,
+        }),
+        /anchored to a plan/,
+      );
+    } finally {
+      await t.cleanup();
+    }
+  });
 });

@@ -62,6 +62,67 @@ describe("plan_tasks sin argumentos (run anclado)", () => {
     }
   });
 
+  test("normaliza prioridad textual, nulls y criterios naturales del modelo", async () => {
+    const proposal = {
+      tasks: [
+        {
+          tempId: "e1",
+          title: "Inspect FAQ implementation",
+          description: "Read the FAQ page and the Base layout to list exact files and gaps.",
+          agentRole: "explorer",
+          priority: "high",
+          dependencies: null,
+          acceptanceCriteria: ["Schema FAQPage presente en el HTML final"],
+          requiredTools: ["read", "shell"],
+          writeScope: null,
+          validationCommands: ["npm run build"],
+          needsReview: "false",
+        },
+      ],
+    };
+    const t = await makeTestCore({ metaTurns: [{ text: JSON.stringify(proposal) }] });
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "Build auth", structured: STRUCTURED, runId, createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_p");
+      const out = await t.core.planner.planTasks(instanceId, { runId, objective: "Build auth", planId: plan.id, revisionId: "v1" });
+      expect(out.created).toBe(true);
+      const tasks = await t.core.tasks.listTasks({ runId });
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]!.priority).toBe(8);
+      // El planner no puede colar tools ni comandos fuera de lo permitido.
+      expect(tasks[0]!.requiredTools).toEqual(["read"]);
+      expect(tasks[0]!.validationCommands).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("un run no crea un segundo DAG aunque cambie el brief", async () => {
+    const t = await makeTestCore({ metaTurns: [{ text: JSON.stringify(PROPOSAL) }] });
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "Build auth", structured: STRUCTURED, runId, createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_p");
+      const first = await t.core.planner.planTasks(instanceId, { runId, objective: "Build auth", planId: plan.id, revisionId: rev.id, brief: "first" });
+      expect(first.created).toBe(true);
+      const second = await t.core.planner.planTasks(instanceId, { runId, objective: "Build auth", planId: plan.id, revisionId: rev.id, brief: "second", nonce: "again" });
+      expect(second.created).toBe(false);
+      expect([...second.taskIds].sort()).toEqual([...first.taskIds].sort());
+      expect(await t.core.tasks.listTasks({ runId })).toHaveLength(first.taskIds.length);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("sin ancla devuelve error accionable (no auto-selecciona)", async () => {
     const t = await makeTestCore();
     try {

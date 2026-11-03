@@ -41,6 +41,7 @@ export interface RuntimeOptions {
   sessionProviders?: {
     planState?: (sessionId: string) => Promise<string | undefined>;
     deliveries?: (sessionId: string) => Promise<string | undefined>;
+    runState?: (runId: string, instanceId: string) => Promise<string | undefined>;
     projectIdOf?: (sessionId: string) => Promise<string | undefined>;
     /** Todo 23: secciones progresivas de skills (metadatos + relevante). */
     skillSections?: SkillSectionsHook;
@@ -145,6 +146,7 @@ export class AgentRuntime {
           instanceId: instance.id,
           planState: providers?.planState ? await providers.planState(session.id) : undefined,
           deliveries: providers?.deliveries ? await providers.deliveries(session.id) : undefined,
+          runState: providers?.runState && definition.profile === "build" ? await providers.runState(instance.runId, instance.id) : undefined,
           ...skillExtras,
         }
       : {
@@ -770,7 +772,19 @@ export class AgentRuntime {
     const instanceStatus = status === "completed" ? "completed" : status === "failed" ? "failed" : "cancelled";
     await this.setInstanceStatus(instance, instanceStatus, correlationId, error);
     if (ownsRun) {
-      await this.setRunStatus(instance.runId, status === "completed" ? "done" : status, correlationId, error);
+      // El coordinador puede terminar su turno antes que los workers. El run no
+      // se cierra hasta que el scheduler no tenga tasks abiertas.
+      let settle = true;
+      if (status === "completed") {
+        const open = await this.db
+          .queryOne<{ n: number }>(
+            `SELECT COUNT(*) AS n FROM tasks WHERE run_id = ? AND status NOT IN ('completed','reviewed','integrated','failed','cancelled','interrupted')`,
+            [instance.runId],
+          )
+          .catch(() => undefined);
+        settle = Number(open?.n ?? 0) === 0;
+      }
+      if (settle) await this.setRunStatus(instance.runId, status === "completed" ? "done" : status, correlationId, error);
       await this.db.exec("UPDATE sessions SET updated_at = ? WHERE id = ?", [now(), instance.sessionId]);
     }
     return { status, finalText, steps, error };

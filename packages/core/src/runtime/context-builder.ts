@@ -41,6 +41,8 @@ export interface InstructionExtras {
   planState?: string;
   /** Entregas de subagentes pendientes de consumir. */
   deliveries?: string;
+  /** Estado del run actual (tareas/workers): evita reutilizar runs anteriores. */
+  runState?: string;
 }
 
 export class ContextBuilder {
@@ -65,6 +67,9 @@ export class ContextBuilder {
     }
     if (extras.deliveries) {
       parts.push(`<subagent-deliveries>\n${extras.deliveries}\n</subagent-deliveries>`);
+    }
+    if (extras.runState) {
+      parts.push(`<run-state>\n${extras.runState}\n</run-state>`);
     }
     // Todo 23: carga progresiva de skills. Metadatos de las habilitadas +
     // instrucciones completas SOLO de la relevante (nunca todas completas).

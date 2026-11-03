@@ -49,7 +49,7 @@ export const planTasksTool: ToolDefinition = {
       nonce: parsed.nonce,
       coordinatorInstanceId: ctx.instanceId,
     });
-    return { text: `Task DAG ${result.created ? "created" : "reused (idempotent)"}: planning ${result.planningId} with tasks ${result.taskIds.join(", ")}. The scheduler now provisions worktrees and spawns the workers; supervise with agent_status/agent_wait.` };
+    return { text: `Task DAG ${result.created ? "created" : "reused (idempotent)"}: planning ${result.planningId} with tasks ${result.taskIds.join(", ")}. The scheduler provisions the workspaces and spawns the workers. Call agent_wait with {all:true} to wait for every worker and collect deliveries; agent_status without instanceId lists them. Task/planning ids are NOT agent instance ids.` };
   },
 };
 

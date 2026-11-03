@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PermissionRule } from "@octus/shared";
-import { makeTestCore, workspaceOf, makeRun } from "./helpers.js";
+import { makeTestCore, workspaceOf, makeRun, expectRejects } from "./helpers.js";
 
 const STRUCTURED = { objective: "Build auth", steps: [{ title: "S1" }], acceptanceCriteria: ["done"] };
 
@@ -45,6 +45,90 @@ describe("auto-aprobación al pasar a build", () => {
       await t.core.prompt(session.id, "procede");
       await t.core.waitForIdle(session.id);
       expect(await t.core.pendingApprovals(session.id)).toHaveLength(2);
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
+
+describe("supervisión de subagentes", () => {
+  test("children y waitForChildren permiten supervisar sin conocer ids de tarea", async () => {
+    const t = await makeTestCore();
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const { instanceId: parentId } = await makeRun(t, session.id);
+      const spawned = await t.core.agents.spawn({
+        parentInstanceId: parentId,
+        definitionId: "explorer",
+        brief: "look",
+        mode: "background",
+        model: { providerId: "fake-meta", modelId: "muse-wonder-1.0" },
+      });
+      const children = await t.core.agents.children(parentId);
+      expect(children.map((c) => c.instanceId)).toContain(spawned.instanceId);
+      const deliveries = await t.core.agents.waitForChildren(parentId, 10_000);
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0]!.status).toBe("completed");
+    } finally {
+      await t.cleanup();
+    }
+  }, 20_000);
+  test("build no puede delegar implementer/reviewer fuera de plan_tasks", async () => {
+    const t = await makeTestCore();
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      await expectRejects(
+        t.core.gateway.execute({
+          toolCallId: "tool_del_impl",
+          idempotencyKey: "idem-del-impl",
+          sessionId: session.id,
+          runId,
+          instanceId,
+          definitionId: "coordinator-build",
+          directory: workspaceOf(t),
+          name: "delegate",
+          args: { definitionId: "implementer", brief: "write code", mode: "background" },
+          signal: new AbortController().signal,
+        }),
+        /must run through plan_tasks/,
+      );
+    } finally {
+      await t.cleanup();
+    }
+  });
+  test("un run nuevo no puede revivir agentes de un run anterior", async () => {
+    const t = await makeTestCore();
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      const first = await makeRun(t, session.id);
+      const old = await t.core.agents.spawn({
+        parentInstanceId: first.instanceId,
+        definitionId: "explorer",
+        brief: "look",
+        mode: "background",
+        model: { providerId: "fake-meta", modelId: "muse-wonder-1.0" },
+      });
+      const second = await makeRun(t, session.id);
+      await expectRejects(
+        t.core.gateway.execute({
+          toolCallId: "tool_old_status",
+          idempotencyKey: "idem-old-status",
+          sessionId: session.id,
+          runId: second.runId,
+          instanceId: second.instanceId,
+          definitionId: "coordinator-build",
+          directory: workspaceOf(t),
+          name: "agent_status",
+          args: { instanceId: old.instanceId },
+          signal: new AbortController().signal,
+        }),
+        /belongs to run/,
+      );
     } finally {
       await t.cleanup();
     }

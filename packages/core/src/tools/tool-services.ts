@@ -54,13 +54,18 @@ export interface AgentStatusView {
   depth: number;
   directory: string;
   error?: string;
+  taskId?: string;
+  reviewTargetTaskId?: string;
 }
 
 export interface AgentToolService {
   spawn(request: SpawnRequest): Promise<SpawnResult>;
   status(instanceId: string): Promise<AgentStatusView>;
+  children(parentInstanceId: string): Promise<AgentStatusView[]>;
+  assertOwnedBy(instanceId: string, runId: string): Promise<void>;
   message(instanceId: string, text: string): Promise<void>;
   wait(instanceId: string, timeoutMs: number): Promise<AgentDelivery>;
+  waitForChildren(parentInstanceId: string, timeoutMs: number): Promise<AgentDelivery[]>;
   result(instanceId: string): Promise<AgentDelivery>;
   cancel(instanceId: string): Promise<{ cancelled: string[] }>;
 }

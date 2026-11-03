@@ -278,9 +278,13 @@ export class TaskManager {
       if (!t.title || t.title.trim().length < 8) reasons.push(`task '${t.tempId}': title is too vague (min 8 chars with a concrete deliverable)`);
       if (!t.description || t.description.trim().length < 20) reasons.push(`task '${t.tempId}': description is too vague (min 20 chars)`);
       if (!t.acceptanceCriteria || t.acceptanceCriteria.length === 0) reasons.push(`task '${t.tempId}': at least one acceptance criterion is required`);
+      // No exigimos palabras mágicas: los criterios naturales ("el schema FAQ
+      // aparece en el HTML") son válidos. Solo rechazamos los vacíos y los
+      // genéricos que no aportan evidencia.
       for (const c of t.acceptanceCriteria ?? []) {
-        if (c.trim().length < 10 || !/[\\/.:0-9]|test|spec|lint|build|compil|verific|verif|comprob|check|ejecut|exec|valid|pasar|fallar|medir|assert|expect|should|must|run|pass|fail|coverage/i.test(c)) {
-          reasons.push(`task '${t.tempId}': acceptance criterion is not verifiable: '${c.slice(0, 80)}'`);
+        const text = c.trim();
+        if (text.length < 5 || /^(ok|okay|bien|correcto|done|works|funciona|funcional|fine)\.?$/i.test(text)) {
+          reasons.push(`task '${t.tempId}': acceptance criterion is too vague: '${text.slice(0, 80)}'`);
         }
       }
     }

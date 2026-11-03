@@ -106,6 +106,19 @@ export class ToolGateway {
       throw new OctusError("invalid_tool_args", `Invalid arguments for '${request.name}': ${parsed.error.issues.map((i) => i.message).slice(0, 3).join("; ")}`);
     }
 
+    // Build anclado a un plan: la implementación va por plan_tasks y sus
+    // workers. Bloqueamos escrituras directas del coordinador para que no se
+    // salte la delegación (el modelo ignora la instrucción bajo inercia del chat).
+    if (request.definitionId === "coordinator-build" && ["write", "edit", "shell", "git_stage", "git_commit"].includes(request.name)) {
+      const run = await this.db.queryOne<{ plan_revision_id: string | null }>("SELECT plan_revision_id FROM runs WHERE id = ?", [request.runId]).catch(() => undefined);
+      if (run?.plan_revision_id) {
+        throw new OctusError(
+          "permission_denied",
+          "This build run is anchored to a plan: call plan_tasks and let the workers implement. Direct write/edit/shell by the coordinator is blocked.",
+        );
+      }
+    }
+
     const layers = await this.options.layersFor(request.definitionId, request.sessionId, request.instanceId);
     const projectId = await this.options.projectIdForSession(request.sessionId);
     const correlationId = createId("cor");

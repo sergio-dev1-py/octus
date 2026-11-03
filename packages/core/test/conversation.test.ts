@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeTestCore, workspaceOf } from "./helpers.js";
+import { makeTestCore, workspaceOf, makeRun } from "./helpers.js";
 
 describe("continuous plan/build conversation (scenario C)", () => {
   test("same session_id, mode stamped per message, shared context across runs", async () => {
@@ -201,6 +201,87 @@ describe("continuous plan/build conversation (scenario C)", () => {
       }
     } finally {
       await t.cleanup().catch(() => undefined);
+    }
+  });
+
+  test("un run no se cierra mientras queden tasks abiertas", async () => {
+    const t = await makeTestCore({ metaTurns: [{ text: "finished" }] });
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "X", structured: { objective: "X", steps: [{ title: "S1" }], acceptanceCriteria: ["done"] }, runId, createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_seed");
+      await t.core.tasks.createDag({
+        runId,
+        planId: plan.id,
+        revisionId: rev.id,
+        requestHash: "h-open",
+        tasks: [
+          {
+            tempId: "e1",
+            title: "Inspect project files",
+            description: "Read the project files and report what exists.",
+            agentRole: "explorer",
+            priority: 1,
+            dependencies: [],
+            acceptanceCriteria: ["files listed with paths"],
+            requiredTools: ["read"],
+            writeScope: [],
+            validationCommands: [],
+            needsReview: false,
+          },
+        ],
+      });
+      await t.core.runtime.runInstance(instanceId, { signal: new AbortController().signal, correlationId: "cor_test", onStream: () => undefined, ownsRun: true });
+      const { run } = await t.core.getRun(runId);
+      expect(run.status).toBe("executing");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("auto-plan al pedir continuar en build crea el DAG y lanza workers", async () => {
+    const proposal = {
+      tasks: [
+        {
+          tempId: "e1",
+          title: "Inspect project files",
+          description: "Read the project files and report what exists.",
+          agentRole: "explorer",
+          priority: 1,
+          dependencies: [],
+          acceptanceCriteria: ["files listed with paths"],
+          requiredTools: ["read"],
+          writeScope: [],
+          validationCommands: [],
+          needsReview: false,
+        },
+      ],
+    };
+    const t = await makeTestCore({
+      autoPlanOnContinue: true,
+      metaTurns: (callIndex: number) => ({ text: callIndex === 0 ? JSON.stringify(proposal) : "ok" }),
+    });
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "X", structured: { objective: "X", steps: [{ title: "S1" }], acceptanceCriteria: ["done"] }, runId: "seed", createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_seed");
+      const { runId } = await t.core.prompt(session.id, "continua");
+      let tasks = await t.core.tasks.listTasks({ runId });
+      for (let i = 0; i < 100 && tasks.length === 0; i++) {
+        await Bun.sleep(100);
+        tasks = await t.core.tasks.listTasks({ runId });
+      }
+      expect(tasks.length).toBeGreaterThan(0);
+      await t.core.interrupt(session.id).catch(() => undefined);
+    } finally {
+      await t.cleanup();
     }
   });
 });
