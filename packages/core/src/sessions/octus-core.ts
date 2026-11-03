@@ -1077,7 +1077,7 @@ export class OctusCore {
     const deliveries = await this.agents.consumePendingDeliveries(sessionId);
     if (deliveries.length === 0) return undefined;
     return deliveries
-      .map((d) => `[delivery ${d.definitionId} ${d.instanceId} ${d.status}]\n${d.summary.slice(0, 20000)}${d.error ? `\nError: ${d.error}` : ""}`)
+      .map((d) => `[delivery ${d.definitionId} ${d.instanceId} ${d.status}]\n${d.summary.slice(0, 8000)}${d.summary.length > 8000 ? "\n…[delivery truncated]" : ""}${d.error ? `\nError: ${d.error}` : ""}`)
       .join("\n\n");
   }
 

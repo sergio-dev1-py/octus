@@ -825,6 +825,16 @@ export function ChatView() {
     if (key !== followKey || nearBottom) el.scrollTop = el.scrollHeight;
     followKey = key;
   });
+  // Al aparecer el resumen de compactación (arriba del timeline), volver al
+  // final para no dejar al usuario mirando solo el resumen.
+  let lastCompactionSummary = "";
+  createEffect(() => {
+    const summary = state.compactionSummary ?? "";
+    if (summary === lastCompactionSummary) return;
+    lastCompactionSummary = summary;
+    const el = timelineEl;
+    if (el && summary) setTimeout(() => { el.scrollTop = el.scrollHeight; }, 0);
+  });
   return (
     <main class="chat">
       <Show when={state.error}>
@@ -841,13 +851,13 @@ export function ChatView() {
       </Show>
       <Show when={state.compactionNotice}>
         <div id="compaction-notice" class="banner warn" role="status" data-compaction-notice>
-          <span class="spinner" aria-hidden="true" /> {state.compactionNotice}
+          {state.compactionNotice}
           <button aria-label="Descartar aviso de compactación" onClick={() => { setState("compactionNotice", undefined); setState("compactionSummary", undefined); }}>
             ×
           </button>
         </div>
         <Show when={state.compactionSummary}>
-          <details class="compaction-summary" open>
+          <details class="compaction-summary">
             <summary>Ver resumen compactado (nuevo contexto de los agentes)</summary>
             <div class="md" innerHTML={renderMarkdown(state.compactionSummary!)} />
           </details>

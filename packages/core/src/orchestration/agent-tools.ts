@@ -116,11 +116,12 @@ export const agentWaitTool: ToolDefinition = {
   async run(args, ctx) {
     const parsed = args as { instanceId?: string; all?: boolean; timeoutMs?: number };
     const agents = requireAgents(ctx.services);
+    const clip = (text: string): string => (text.length > 8000 ? `${text.slice(0, 8000)}\n…[delivery truncated]` : text);
     const format = (delivery: { definitionId: string; status: string; summary: string; error?: string }) =>
-      `Delivery from ${delivery.definitionId} (${delivery.status}):\n${delivery.summary}${delivery.error ? `\nError: ${delivery.error}` : ""}`;
+      `Delivery from ${delivery.definitionId} (${delivery.status}):\n${clip(delivery.summary)}${delivery.error ? `\nError: ${delivery.error}` : ""}`;
     if (parsed.all || !parsed.instanceId) {
       const deliveries = await agents.waitForChildren(ctx.instanceId, parsed.timeoutMs ?? 300_000);
-      if (deliveries.length === 0) return { text: "No worker deliveries yet (the scheduler may still be provisioning tasks)." };
+      if (deliveries.length === 0) return { text: "No new worker deliveries. If tasks remain, record pending reviewer verdicts with record_review and call agent_wait {all:true} again." };
       return { text: deliveries.map(format).join("\n\n") };
     }
     await agents.assertOwnedBy(parsed.instanceId, ctx.runId);
@@ -137,7 +138,8 @@ export const agentResultTool: ToolDefinition = {
     const agents = requireAgents(ctx.services);
     await agents.assertOwnedBy(parsed.instanceId, ctx.runId);
     const delivery = await agents.result(parsed.instanceId);
-    return { text: `Delivery from ${delivery.definitionId} (${delivery.status}):\n${delivery.summary}${delivery.error ? `\nError: ${delivery.error}` : ""}` };
+    const summary = delivery.summary.length > 8000 ? `${delivery.summary.slice(0, 8000)}\n…[delivery truncated]` : delivery.summary;
+    return { text: `Delivery from ${delivery.definitionId} (${delivery.status}):\n${summary}${delivery.error ? `\nError: ${delivery.error}` : ""}` };
   },
 };
 

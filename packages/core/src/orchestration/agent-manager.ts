@@ -199,15 +199,32 @@ export class AgentManager implements AgentToolService {
     if (!coord) throw new OctusError("not_found", `Agent instance not found: ${parentInstanceId}`);
     const deadline = now() + timeoutMs;
     const started = now();
+    const activeStatuses = ["created", "running", "waiting_permission", "waiting_input"];
     let seen = false;
     let idleSince = 0;
     let emptySince = 0;
+    const deliver = async (rows: Array<{ id: string; status: string }>): Promise<AgentDelivery[]> => {
+      const fresh: Array<{ id: string; status: string }> = [];
+      for (const row of rows) {
+        if (activeStatuses.includes(row.status)) continue;
+        const already = await this.db.queryOne<{ key: string }>("SELECT key FROM kv WHERE key = ?", [`delivery.wait.${row.id}`]).catch(() => undefined);
+        if (!already) fresh.push(row);
+      }
+      const deliveries: AgentDelivery[] = [];
+      for (const row of fresh) {
+        const delivery = await this.result(row.id).catch(() => undefined);
+        if (!delivery) continue;
+        deliveries.push(delivery);
+        await this.db.exec("INSERT INTO kv (key, value, updated_at) VALUES (?, '1', ?) ON CONFLICT(key) DO NOTHING", [`delivery.wait.${row.id}`, now()]).catch(() => undefined);
+      }
+      return deliveries;
+    };
     for (;;) {
       const rows = await this.db.query<{ id: string; status: string }>(
         "SELECT id, status FROM agent_instances WHERE parent_instance_id = ? ORDER BY created_at ASC",
         [parentInstanceId],
       );
-      const active = rows.filter((row) => ["created", "running", "waiting_permission", "waiting_input"].includes(row.status));
+      const active = rows.filter((row) => activeStatuses.includes(row.status));
       if (rows.length > 0) seen = true;
       if (active.length > 0) {
         idleSince = 0;
@@ -215,11 +232,7 @@ export class AgentManager implements AgentToolService {
       } else if (seen) {
         // Gracia corta para que el scheduler asigne la siguiente oleada.
         if (idleSince === 0) idleSince = now();
-        if (now() - idleSince >= 5000) {
-          return Promise.all(rows.map((row) => this.result(row.id).catch(() => undefined))).then((items) =>
-            items.filter((item): item is AgentDelivery => Boolean(item)),
-          );
-        }
+        if (now() - idleSince >= 5000) return deliver(rows);
       } else {
         const actionable = await this.db.queryOne<{ n: number }>(
           "SELECT COUNT(*) AS n FROM tasks WHERE run_id = ? AND status IN ('ready','assigned','running')",

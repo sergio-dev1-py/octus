@@ -67,6 +67,9 @@ interface StepAccumulator {
 }
 
 export class AgentRuntime {
+  /** Último input_tokens real por instancia (calibra la compactación). */
+  private readonly lastInputTokens = new Map<string, number>();
+
   constructor(
     private readonly db: PersistenceService,
     private readonly events: EventStore,
@@ -167,9 +170,15 @@ export class AgentRuntime {
     });
     const estimated = this.context.estimateTokens(instructions, tools, built.messages);
     // Umbral de compactación: 87% de la ventana del modelo (15k tokens recientes).
+    // La estimación por caracteres puede inflarse; si el último input real del
+    // proveedor está muy por debajo del techo, esperamos a que el proveedor
+    // reporte presión real (o a un context_overflow) antes de compactar.
     const ceiling = Math.floor(resolution.model.capabilities.maxContextTokens * (this.options.compactionThresholdRatio ?? 0.87));
-    if (estimated > ceiling) {
+    const lastActual = this.lastInputTokens.get(instance.id) ?? 0;
+    const actualPressure = lastActual === 0 || lastActual >= ceiling * 0.8;
+    if (estimated > ceiling && actualPressure) {
       const compacted = await this.compact(instance, definition, session, opts);
+      if (compacted) this.lastInputTokens.delete(instance.id);
       if (!compacted) {
         return { done: true, finalText: "", fatal: "Context exceeds the model window and compaction produced no room" };
       }
@@ -200,6 +209,7 @@ export class AgentRuntime {
       await sleepAbortable(Math.min(wait, 60_000), opts.signal);
     }
     const final = acc!;
+    if (final.usage.inputTokens > 0) this.lastInputTokens.set(instance.id, final.usage.inputTokens);
     const toolIds = new Map<string, string>();
     for (const providerCallId of final.calls.keys()) toolIds.set(providerCallId, createId("tool"));
     await this.persistAssistantMessage(instance, messageId, final, toolIds, opts.correlationId, this.messageMode(definition, session));
