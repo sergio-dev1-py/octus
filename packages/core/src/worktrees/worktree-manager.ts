@@ -177,7 +177,7 @@ export class WorktreeManager implements WorktreePort {
       // Greenfield / proyecto sin git: preparar repo automaticamente para
       // que el scheduler pueda aislar a los implementers en worktrees.
       try {
-        await this.notifySession(input.runId, "Git no detectado: preparando repositorio y worktrees…");
+        await this.notifySession(input.runId, "Preparando repositorio Git para aislar implementers en worktrees…");
         const init = await this.repos.ensureInitialized(input.projectId);
         await this.notifySession(
           input.runId,

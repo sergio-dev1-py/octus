@@ -250,7 +250,7 @@ export const writeTool: ToolDefinition = {
     return {
       text: `Wrote ${content.length} chars to ${relative}`,
       // Solo archivos existentes: los nuevos no muestran "todo añadido".
-      diff: existed && before !== undefined && before.length <= 200_000 && content.length <= 200_000 ? { path: relative, before, after: content } : undefined,
+      diff: existed && before !== undefined && before !== content && before.length <= 200_000 && content.length <= 200_000 ? { path: relative, before, after: content } : undefined,
     };
   },
 };

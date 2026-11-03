@@ -594,11 +594,25 @@ export class OctusCore {
       if (!run?.plan_revision_id) return;
       const existing = await this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE run_id = ?", [runId]);
       if (Number(existing?.n ?? 0) > 0) return;
+      await this.notifySession(session.id, "Generando el DAG de tareas a partir del plan…");
       const out = await this.planner.planTasks(instanceId, { runId });
-      if (out.created) await this.scheduler.tick({ sessionId: session.id });
+      if (out.created) {
+        await this.scheduler.tick({ sessionId: session.id });
+        await this.notifySession(session.id, `DAG creado con ${out.taskIds.length} tareas. Lanzando workers…`);
+      }
     } catch {
       // El planner deja el rechazo auditado; el coordinador puede reintentar.
     }
+  }
+
+  private async notifySession(sessionId: string, message: string): Promise<void> {
+    const event = await this.events.append({
+      type: "session.notice",
+      aggregate: { kind: "session", id: sessionId },
+      correlationId: createId("cor"),
+      payload: { message },
+    });
+    this.bus.publish(event);
   }
 
   /**
