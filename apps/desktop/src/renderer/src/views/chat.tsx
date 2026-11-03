@@ -658,12 +658,31 @@ export function Composer() {
 
 export function PermissionDialogs() {
   const [feedback, setFeedback] = createSignal("");
+  const reject = (request: { id: string }, message = feedback()) =>
+    void invoke("permissions.reply", { requestId: request.id, decision: "reject", message: message || "Rejected by user" });
+  // Escape rechaza la petición visible: el modal nunca debe atrapar al usuario.
+  createEffect(() => {
+    const request = state.permissions[state.permissions.length - 1];
+    if (!request) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      reject(request, "Dismissed with Escape");
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
   return (
     <For each={state.permissions}>
       {(request) => (
         <div class="modal">
           <div class="dialog" data-permission-request={request.id}>
-            <h3>Permission requested</h3>
+            <div class="dialog-head">
+              <h3>Permission requested</h3>
+              <button type="button" class="icon-button dialog-close" aria-label="Cerrar y rechazar" title="Cerrar y rechazar" onClick={() => reject(request)}>
+                ×
+              </button>
+            </div>
             <p>
               <strong>{request.action}</strong>
             </p>
@@ -679,10 +698,7 @@ export function PermissionDialogs() {
               <Show when={request.action !== "shell"}>
                 <button onClick={() => void invoke("permissions.reply", { requestId: request.id, decision: "always" })}>Always</button>
               </Show>
-              <button
-                class="danger"
-                onClick={() => void invoke("permissions.reply", { requestId: request.id, decision: "reject", message: feedback() })}
-              >
+              <button class="danger" onClick={() => reject(request)}>
                 Reject
               </button>
             </div>

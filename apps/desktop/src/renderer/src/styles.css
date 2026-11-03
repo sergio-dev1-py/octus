@@ -592,6 +592,7 @@ pre.detail {
 }
 
 .dialog {
+  position: relative;
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -602,6 +603,39 @@ pre.detail {
   max-width: 640px;
   max-height: 80vh;
   overflow-y: auto;
+}
+
+.dialog h3 {
+  padding-right: var(--oc-space-6);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-space-3);
+}
+
+.dialog-head h3 {
+  padding-right: 0;
+  margin: 0;
+}
+
+.dialog-close {
+  position: absolute;
+  top: var(--oc-space-2);
+  right: var(--oc-space-2);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: var(--oc-text-lg);
+  line-height: 1;
+  color: var(--oc-text-muted);
+}
+
+.dialog-close:hover {
+  color: var(--oc-text);
+  border-color: var(--oc-border-strong);
 }
 
 .dialog pre {

@@ -59,11 +59,14 @@ permissionRules:
   - { action: shell, resource: "*format *", effect: ask }
   - { action: shell, resource: "*FORMAT *", effect: ask }
   - { action: shell, resource: "*diskpart*", effect: ask }
-  - { action: shell, resource: "*taskkill*", effect: ask }
-  - { action: shell, resource: "*TASKKILL*", effect: ask }
-  - { action: shell, resource: "*shutdown*", effect: ask }
-  - { action: shell, resource: "*restart-computer*", effect: ask }
-  - { action: shell, resource: "*Stop-Process*", effect: ask }
+  - { action: shell, resource: "*taskkill*", effect: deny }
+  - { action: shell, resource: "*TASKKILL*", effect: deny }
+  - { action: shell, resource: "*pkill*", effect: deny }
+  - { action: shell, resource: "*killall*", effect: deny }
+  - { action: shell, resource: "*Stop-Process*", effect: deny }
+  - { action: shell, resource: "*stop-process*", effect: deny }
+  - { action: shell, resource: "*shutdown*", effect: deny }
+  - { action: shell, resource: "*restart-computer*", effect: deny }
   - { action: shell, resource: "*taskkill*node*", effect: deny }
   - { action: shell, resource: "*taskkill*electron*", effect: deny }
   - { action: shell, resource: "*taskkill*bun*", effect: deny }
@@ -78,7 +81,7 @@ deliveryFormat: |
   4. Checks executed with real output.
   5. Risks and follow-ups.
 canDelegateTo: []
-promptVersion: 4
+promptVersion: 5
 systemPrompt: |
   You are an Implementer subagent: you write code ONLY inside your assigned directory.
   Writes outside it are blocked by the harness; do not attempt to escape it.

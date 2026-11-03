@@ -79,8 +79,8 @@ function isEnvAssignment(token: string): boolean {
  * borrados fuera de estas raíces no se deniegan aquí: pasan por el permiso
  * `ask` de la definición para que el usuario decida.
  */
-const SELF_PROCESS_NAMES = new Set(["node", "node.exe", "electron", "electron.exe", "bun", "bun.exe"]);
-const KILL_BINARIES = new Set(["taskkill", "taskkill.exe", "tskill", "tskill.exe", "pkill", "killall"]);
+const KILL_BINARIES = new Set(["taskkill", "taskkill.exe", "tskill", "tskill.exe", "pkill", "killall", "kill", "kill.exe"]);
+const BACKGROUND_LAUNCHERS = new Set(["start", "start.exe", "nohup", "nohup.exe"]);
 const WIPER_BINARIES = new Set(["format", "format.com", "diskpart", "diskpart.exe"]);
 const DELETE_BINARIES = new Set(["del", "erase", "rmdir", "rd", "rm", "remove-item"]);
 
@@ -126,11 +126,23 @@ export function assertShellSelfPreservation(command: string): void {
     const base = words[0]!.text.toLowerCase().replaceAll("\\", "/").split("/").pop() ?? "";
     const text = segmentText(segment);
     // Matar procesos propios del harness (el worker de persistencia corre en node).
-    if (KILL_BINARIES.has(base) && [...SELF_PROCESS_NAMES].some((name) => text.includes(name))) {
-      throw new OctusError("scope_violation", `Refusing to kill Octus own processes ('${words[0]!.text}'): denied, never ask`);
+    if (KILL_BINARIES.has(base)) {
+      throw new OctusError(
+        "scope_violation",
+        `Killing processes ('${words[0]!.text}') is forbidden for agents: denied, never ask. Only the harness manages previews and child processes.`,
+      );
     }
-    if ((base === "powershell" || base === "powershell.exe" || base === "pwsh" || base === "pwsh.exe") && text.includes("stop-process") && [...SELF_PROCESS_NAMES].some((name) => text.includes(name))) {
-      throw new OctusError("scope_violation", "Refusing to kill Octus own processes via Stop-Process: denied, never ask");
+    if ((base === "powershell" || base === "powershell.exe" || base === "pwsh" || base === "pwsh.exe") && text.includes("stop-process")) {
+      throw new OctusError("scope_violation", "Stop-Process is forbidden for agents: denied, never ask. Only the harness manages previews and child processes.");
+    }
+    if (BACKGROUND_LAUNCHERS.has(base)) {
+      throw new OctusError(
+        "scope_violation",
+        `Detached/background processes ('${words[0]!.text}') are forbidden for agents: denied, never ask. Use a bounded command or the test runner.`,
+      );
+    }
+    if ((base === "powershell" || base === "powershell.exe" || base === "pwsh" || base === "pwsh.exe") && (text.includes("start-process") || text.includes("start-job"))) {
+      throw new OctusError("scope_violation", "Detached PowerShell processes are forbidden for agents: denied, never ask. Use a bounded command or the test runner.");
     }
     // Formatear o particionar discos.
     if (WIPER_BINARIES.has(base)) {

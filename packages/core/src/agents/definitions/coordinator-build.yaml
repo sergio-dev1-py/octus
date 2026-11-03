@@ -69,11 +69,14 @@ permissionRules:
   - { action: shell, resource: "*format *", effect: ask }
   - { action: shell, resource: "*FORMAT *", effect: ask }
   - { action: shell, resource: "*diskpart*", effect: ask }
-  - { action: shell, resource: "*taskkill*", effect: ask }
-  - { action: shell, resource: "*TASKKILL*", effect: ask }
-  - { action: shell, resource: "*shutdown*", effect: ask }
-  - { action: shell, resource: "*restart-computer*", effect: ask }
-  - { action: shell, resource: "*Stop-Process*", effect: ask }
+  - { action: shell, resource: "*taskkill*", effect: deny }
+  - { action: shell, resource: "*TASKKILL*", effect: deny }
+  - { action: shell, resource: "*pkill*", effect: deny }
+  - { action: shell, resource: "*killall*", effect: deny }
+  - { action: shell, resource: "*Stop-Process*", effect: deny }
+  - { action: shell, resource: "*stop-process*", effect: deny }
+  - { action: shell, resource: "*shutdown*", effect: deny }
+  - { action: shell, resource: "*restart-computer*", effect: deny }
   # Matar procesos propios del harness: denegado (shell-guard lo aplica en duro).
   - { action: shell, resource: "*taskkill*node*", effect: deny }
   - { action: shell, resource: "*taskkill*electron*", effect: deny }
@@ -89,7 +92,7 @@ canDelegateTo:
   - researcher
   - implementer
   - reviewer
-promptVersion: 13
+promptVersion: 14
 systemPrompt: |
   You are the session coordinator in BUILD profile.
   You execute the user's request: directly for trivial tasks, by delegating to

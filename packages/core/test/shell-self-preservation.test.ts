@@ -17,13 +17,16 @@ function allows(command: string): void {
 }
 
 describe("shell self-preservation (nunca matar al harness ni tocar sistema)", () => {
-  test("taskkill/pkill contra node/electron/bun se deniega", () => {
-    expect(denies("taskkill /F /IM node.exe")).toMatch(/own processes/i);
-    expect(denies("TASKKILL /F /IM NODE.EXE")).toMatch(/own processes/i);
-    expect(denies("taskkill /F /IM electron.exe")).toMatch(/own processes/i);
-    expect(denies("pkill -f node")).toMatch(/own processes/i);
-    expect(denies("killall node")).toMatch(/own processes/i);
-    expect(denies("powershell -Command Stop-Process -Name node -Force")).toMatch(/own processes/i);
+  test("matar procesos se deniega para agentes (siempre, sin preguntar)", () => {
+    expect(denies("taskkill /F /IM node.exe")).toMatch(/forbidden for agents/i);
+    expect(denies("TASKKILL /F /IM NODE.EXE")).toMatch(/forbidden for agents/i);
+    expect(denies("taskkill /F /IM electron.exe")).toMatch(/forbidden for agents/i);
+    expect(denies("taskkill /F /PID 10868")).toMatch(/forbidden for agents/i);
+    expect(denies("pkill -f node")).toMatch(/forbidden for agents/i);
+    expect(denies("killall node")).toMatch(/forbidden for agents/i);
+    expect(denies("powershell -Command Stop-Process -Name node -Force")).toMatch(/forbidden for agents/i);
+    expect(denies("start /B node dist/server/entry.mjs")).toMatch(/background processes/i);
+    expect(denies("powershell -Command Start-Process node")).toMatch(/detached powershell/i);
   });
 
   test("formatear o particionar se deniega", () => {
@@ -44,7 +47,7 @@ describe("shell self-preservation (nunca matar al harness ni tocar sistema)", ()
     allows("del build\\out.txt");
     allows("rm -rf dist");
     allows("Remove-Item .\\temp\\*.log");
-    allows("taskkill /F /IM notepad.exe");
+    expect(denies("taskkill /F /IM notepad.exe")).toMatch(/forbidden for agents/i);
   });
 
   test("sigue integrado con el gate git (sin regresión)", () => {
