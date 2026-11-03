@@ -5,7 +5,7 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type IpcMainInvokeEvent } from "electron";
 import { OctusCore } from "@octus/core";
 import {
   IPC_EVENT_CHANNEL,
@@ -28,7 +28,7 @@ import { ElectronSecretStore } from "./secret-store.js";
 import { decideExternalLink, isAllowedNavigationUrl } from "./security-policy.js"; // Todo 35: política de navegación/enlaces auditada
 import { MainMcpService } from "./mcp-service.js"; // Todo 10 (workbench-chat-terminal): servicio MCP en main
 import { MainSkillsService } from "./skills-service.js"; // Todo 24 (montaje aditivo): servicio de Skills en main
-import { TerminalService } from "./terminal-service.js"; // Todo 32: PTY persistente en main
+import { TerminalService, listShells } from "./terminal-service.js"; // Todo 32: PTY persistente en main
 import { checkDirectoryReadable, directoryErrorMessage } from "./validate-directory.js";
 import { resolveDefinitionsDir, resolveWorkerPath } from "./worker-path.js";
 
@@ -42,6 +42,8 @@ const CHANNELS: IpcChannel[] = [
   "app.validateDirectory",
   "projects.list",
   "projects.create",
+  "projects.hide",
+  "projects.unhide",
   "sessions.list",
   "sessions.create",
   "sessions.get",
@@ -52,12 +54,15 @@ const CHANNELS: IpcChannel[] = [
   "sessions.messages",
   "sessions.recover",
   "sessions.prompt",
+  "sessions.compact",
+  "sessions.compaction",
   "sessions.interrupt",
   "runs.get",
   "runs.usage",
   "providers.list",
   "providers.models",
   "providers.setKey",
+  "providers.refreshCatalog",
   "providers.removeKey",
   "providers.test",
   "permissions.pending",
@@ -97,6 +102,7 @@ const CHANNELS: IpcChannel[] = [
   // Todo workbench-chat-terminal/7: programadas por cron (sin DAG).
   "schedules.list",
   "schedules.create",
+  "schedules.update",
   "schedules.setEnabled",
   "schedules.remove",
   "schedules.runs",
@@ -156,6 +162,7 @@ const CHANNELS: IpcChannel[] = [
   "diagnostics.list",
   // Todo 32: terminal persistente con PTY (streaming por TERMINAL_DATA_CHANNEL).
   "terminal.create",
+  "terminal.shells",
   "terminal.list",
   "terminal.write",
   "terminal.read",
@@ -270,6 +277,33 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     const projects = await need().listProjects();
     return projects.find((p) => p.id === projectId)?.rootPath;
   };
+  // Papelera de workspaces (solo UI): ids ocultos en kv; la BD conserva todo.
+  const HIDDEN_PROJECTS_KEY = "ui.hiddenProjects.v1";
+  let hiddenCache: Set<string> | undefined;
+  const hiddenProjectIds = (): Set<string> => {
+    if (!hiddenCache) hiddenCache = new Set();
+    return hiddenCache;
+  };
+  void (async () => {
+    try {
+      const row = await need().db.queryOne<{ value: string }>("SELECT value FROM kv WHERE key = ?", [HIDDEN_PROJECTS_KEY]).catch(() => null);
+      if (row?.value) {
+        const parsed: unknown = JSON.parse(row.value);
+        if (Array.isArray(parsed)) {
+          for (const v of parsed) if (typeof v === "string") hiddenProjectIds().add(v);
+        }
+      }
+    } catch {
+      // kv ausente o corrupta: sin ocultos, sin romper el arranque.
+    }
+  })();
+  const persistHiddenProjectIds = (): void => {
+    void need().db.exec("INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", [
+      HIDDEN_PROJECTS_KEY,
+      JSON.stringify([...hiddenProjectIds()]),
+      Date.now(),
+    ]).catch(() => undefined);
+  };
   return {
     "prefs.get": async () => {
       // Degradación del caso failure del Todo 6: kv ausente o corrupta → defecto, sin romper el arranque.
@@ -321,13 +355,36 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
       if (check.ok) return { ok: true as const, realPath: check.realPath };
       return { ok: false as const, error: directoryErrorMessage(check) };
     },
-    "projects.list": async () => ({ projects: await need().listProjects() }),
+    "projects.list": async () => ({ projects: (await need().listProjects()).filter((p) => !hiddenProjectIds().has(p.id)) }),
     "projects.create": async (payload) => {
       if (!isNonEmptyString(payload.name) || !isNonEmptyString(payload.rootPath)) throw new Error("invalid payload");
       // Todo 10 (failure): carpeta inexistente o sin permiso → error sin crear nada.
       const check = checkDirectoryReadable(payload.rootPath);
       if (!check.ok) throw new Error(directoryErrorMessage(check));
-      return { project: await need().createProject(payload.name.trim(), check.realPath) };
+      // Reabrir (drop o selector) un proyecto existente —visible u oculto— lo
+      // desoculta y lo devuelve con sus sesiones (sin duplicar en BD).
+      const existing = (await need().listProjects()).find((p) => p.rootPath === check.realPath);
+      if (existing) {
+        hiddenProjectIds().delete(existing.id);
+        persistHiddenProjectIds();
+        return { project: existing };
+      }
+      const project = await need().createProject(payload.name.trim(), check.realPath);
+      return { project };
+    },
+    // Papelera de workspaces: solo oculta de la interfaz (kv local); la BD
+    // conserva proyectos y sesiones para reabrirlos con todo el historial.
+    "projects.hide": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      hiddenProjectIds().add(payload.projectId);
+      persistHiddenProjectIds();
+      return { ok: true as const };
+    },
+    "projects.unhide": async (payload) => {
+      if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
+      hiddenProjectIds().delete(payload.projectId);
+      persistHiddenProjectIds();
+      return { ok: true as const };
     },
     "sessions.list": async (payload) => ({ sessions: await need().listSessions(payload.projectId) }),
     "sessions.create": async (payload) => {
@@ -373,9 +430,27 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     "sessions.prompt": async (payload) => {
       if (!isNonEmptyString(payload.sessionId) || typeof payload.text !== "string" || !payload.text.trim()) throw new Error("invalid payload");
       try {
-        return await need().prompt(payload.sessionId, payload.text, onStream);
+        return await need().prompt(payload.sessionId, payload.text, onStream, payload.skills?.length ? { skills: payload.skills } : undefined);
       } catch (error) {
         throw new Error(error instanceof Error ? error.message : String(error));
+      }
+    },
+    "sessions.compact": async (payload) => {
+      if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
+      try {
+        const { compacted } = await need().compactSessionNow(payload.sessionId, onStream);
+        return { ok: true as const, compacted };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "sessions.compaction": async (payload) => {
+      if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
+      try {
+        const info = await need().compactionInfo(payload.sessionId);
+        return { ok: true as const, ...info };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
       }
     },
     "sessions.interrupt": async (payload) => {
@@ -416,6 +491,10 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     "providers.test": async (payload) => {
       if (!isNonEmptyString(payload.providerId)) throw new Error("invalid payload");
       return need().testProvider(payload.providerId);
+    },
+    "providers.refreshCatalog": async (payload) => {
+      if (!isNonEmptyString(payload.providerId)) throw new Error("invalid payload");
+      return need().refreshProviderCatalog(payload.providerId);
     },
     "permissions.pending": async (payload) => ({ requests: need().permissions.pendingFor(payload.sessionId) }),
     "permissions.reply": async (payload) => {
@@ -638,6 +717,15 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
       try {
         await need().setScheduleEnabled(payload.id, payload.enabled);
         return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "schedules.update": async (payload) => {
+      if (!isNonEmptyString(payload.id)) throw new Error("invalid payload");
+      try {
+        const schedule = await need().updateSchedule(payload.id, payload);
+        return { ok: true as const, schedule };
       } catch (error) {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
       }
@@ -1277,12 +1365,15 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
           name: payload.name,
           cols: payload.cols,
           rows: payload.rows,
+          shellId: payload.shellId,
+          cwd: payload.cwd,
         });
         return { ok: true as const, terminal };
       } catch (error) {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
       }
     },
+    "terminal.shells": async () => ({ shells: listShells() }),
     "terminal.list": async (payload) => {
       if (!isNonEmptyString(payload.projectId)) throw new Error("invalid payload");
       return { terminals: terminals().list(payload.projectId) };
@@ -1375,6 +1466,12 @@ async function createCore(): Promise<OctusCore> {
     definitionsDir: resolveDefinitionsDir(),
     onEvent: onCoreEvent,
   });
+  try {
+    const defs = await instance.definitionSummary();
+    console.log(`[definitions] ${defs.map((d) => `${d.id} v${d.promptVersion} (${d.tools} tools, ${d.rules} rules)`).join(" | ")}`);
+  } catch (error) {
+    console.error(`[definitions] no se pudo listar: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return instance;
 }
 
@@ -1388,11 +1485,23 @@ function preloadPath(): string {
 }
 
 function createWindow(): void {
+  // Sin menú nativo (File/Edit/…): la navegación vive en el TopBar del renderer.
+  Menu.setApplicationMenu(null);
+  const iconPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "build", "icons", "icon.ico");
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 900,
     minHeight: 600,
+    icon: existsSync(iconPath) ? iconPath : undefined,
+    // Una sola barra superior estilo Antigravity: el TopBar del renderer ocupa
+    // la franja y los controles de ventana los dibuja la overlay nativa.
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#2a3042",
+      symbolColor: "#e8eaf0",
+      height: 40,
+    },
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

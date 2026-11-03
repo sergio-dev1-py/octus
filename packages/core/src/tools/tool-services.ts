@@ -107,12 +107,31 @@ export interface MemoryToolService {
   validate(id: string, coordinatorInstanceId: string): Promise<{ id: string; status: string }>;
 }
 
+export interface SkillInstallRequest {
+  kind: "folder" | "zip";
+  /** Ruta absoluta o relativa al workspace del agente. */
+  path: string;
+  scope?: "global" | "project" | "managed";
+}
+
+export interface SkillInstallResult {
+  name: string;
+  version: string;
+  scope: "global" | "project" | "managed";
+  enabled: boolean;
+}
+
+export interface SkillToolService {
+  install(input: SkillInstallRequest, context: { projectId: string; enable?: boolean }): Promise<SkillInstallResult>;
+}
+
 export interface ToolServices {
   agents?: AgentToolService;
   plans?: PlanToolService;
   tests?: TestRunnerService;
   tasks?: TaskPlannerService;
   memory?: MemoryToolService;
+  skills?: SkillToolService;
 }
 
 export interface TestAllowlistEntry {
@@ -127,7 +146,8 @@ export interface TestRunnerService {
 
 export interface PlanTasksInput {
   runId: string;
-  objective: string;
+  /** Opcional: por defecto el objetivo del plan aprobado. */
+  objective?: string;
   brief?: string;
   planId?: string;
   revisionId?: string;
@@ -170,6 +190,11 @@ export function requirePlans(services: ToolServices | undefined): PlanToolServic
 export function requireMemory(services: ToolServices | undefined): MemoryToolService {
   if (!services?.memory) throw new Error("memory service is not available in this context");
   return services.memory;
+}
+
+export function requireSkills(services: ToolServices | undefined): SkillToolService {
+  if (!services?.skills) throw new Error("skill service is not available in this context");
+  return services.skills;
 }
 
 export type { AgentDefinitionSnapshot, AgentKind };

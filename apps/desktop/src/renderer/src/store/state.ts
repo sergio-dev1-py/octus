@@ -39,7 +39,13 @@ interface UIState {
   /** Modelos por proveedor para el selector (caché de providers.models). */
   modelsByProvider: Record<string, ModelDescriptor[]>;
   view: "chat" | "settings";
+  /** Sección visible del modal de ajustes. */
+  settingsSection: "providers" | "agents" | "shortcuts" | "skills" | "mcp" | "schedules";
   sessionNotice?: string;
+  /** Aviso de compactación (estilo OpenOrch): compactando / compactado / fallo. */
+  compactionNotice?: string;
+  /** Resumen del último checkpoint (se muestra expandible en el banner). */
+  compactionSummary?: string;
   welcomeError?: string;
   brokenProjectIds: string[];
   prefs: UiPrefs;
@@ -121,6 +127,7 @@ const [state, setState] = createStore<UIState>({
   attachments: [],
   modelsByProvider: {},
   view: "chat",
+  settingsSection: "providers",
   sessionNotice: undefined,
   brokenProjectIds: [],
   prefs: { ...DEFAULT_UI_PREFS },
@@ -182,6 +189,11 @@ export { state, setState };
 
 export function setView(view: UIState["view"]): void {
   setState("view", view);
+}
+
+export function openSettings(section?: UIState["settingsSection"]): void {
+  if (section) setState("settingsSection", section);
+  setState("view", "settings");
 }
 
 export function setError(message?: string): void {

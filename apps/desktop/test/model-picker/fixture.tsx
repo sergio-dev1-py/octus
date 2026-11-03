@@ -73,6 +73,14 @@ const calls: Array<{ channel: string; payload: unknown }> = [];
     if (channel === "providers.models") {
       return { models: [effortModel, plainModel].filter((m) => m.providerId === payload.providerId) };
     }
+    if (channel === "providers.list") {
+      return {
+        providers: [{ id: "p1", displayName: "Proveedor 1", configured: true, models: [effortModel, plainModel] }],
+      };
+    }
+    if (channel === "providers.refreshCatalog") {
+      return { ok: true, count: 2 };
+    }
     throw new Error(`unexpected channel ${channel}`);
   },
   onEvent: () => () => {},
@@ -88,4 +96,9 @@ setState("activeSessionId", "s1");
 setState("sessions", [structuredClone(seedSession)]);
 setState("busy", false);
 
-render(() => <ModelPicker />, document.getElementById("root")!);
+render(() => (
+  <>
+    <div style={{ height: "420px" }} />
+    <ModelPicker />
+  </>
+), document.getElementById("root")!);

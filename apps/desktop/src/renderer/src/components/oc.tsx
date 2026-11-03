@@ -135,7 +135,24 @@ export function OcMenu(props: OcMenuProps) {
 
 /* --- iconografia monocromatica (trazo currentColor, sin rellenos) --- */
 
-export type OcIconName = "check" | "x" | "warn" | "info" | "chevron-down" | "plus" | "search" | "folder";
+export type OcIconName =
+  | "check"
+  | "x"
+  | "warn"
+  | "info"
+  | "chevron-down"
+  | "chevron-right"
+  | "plus"
+  | "search"
+  | "folder"
+  | "folder-open"
+  | "trash"
+  | "gear"
+  | "sort"
+  | "panel-left"
+  | "panel-bottom"
+  | "panel-right"
+  | "clock";
 
 const OC_ICON_PATHS: Record<OcIconName, string> = {
   check: "M3 8.5l3.5 3.5L13 4.5",
@@ -143,12 +160,21 @@ const OC_ICON_PATHS: Record<OcIconName, string> = {
   warn: "M8 2.5L14.5 13.5h-13L8 2.5z",
   info: "M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11z",
   "chevron-down": "M4 6l4 4 4-4",
+  "chevron-right": "M6 4l4 4-4 4",
   plus: "M8 3v10M3 8h10",
   search: "M7 2.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9zM10.5 10.5L14 14",
   folder: "M1.5 4.5c0-.8.7-1.5 1.5-1.5h3l1.5 2H13c.8 0 1.5.7 1.5 1.5v4c0 .8-.7 1.5-1.5 1.5H3c-.8 0-1.5-.7-1.5-1.5v-6z",
+  "folder-open": "M1.5 5.5c0-.8.7-1.5 1.5-1.5h3l1.5 2h5.5c.8 0 1.5.7 1.5 1.5v3.5c0 .8-.7 1.5-1.5 1.5h-10c-.8 0-1.5-.7-1.5-1.5v-5zM1.5 5.5L3 13",
+  trash: "M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.2c.1.7.6 1.3 1.3 1.3h4c.7 0 1.2-.6 1.3-1.3L12 4M6.5 7v4M9.5 7v4",
+  gear: "M8 5.2a2.8 2.8 0 100 5.6 2.8 2.8 0 000-5.6zM8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2",
+  sort: "M5 2.5v11M5 13.5l-2.5-3M5 13.5l2.5-3M11 13.5v-11M11 2.5L8.5 5.5M11 2.5l2.5 3",
+  "panel-left": "M2.5 3h11v10h-11zM6 3v10",
+  "panel-bottom": "M2.5 3h11v10h-11zM2.5 10h11",
+  "panel-right": "M2.5 3h11v10h-11zM10 3v10",
+  "clock": "M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM8 5v3.2l2.2 1.3",
 };
 
-const OC_ICON_NAMES: OcIconName[] = ["check", "x", "warn", "info", "chevron-down", "plus", "search", "folder"];
+const OC_ICON_NAMES: OcIconName[] = ["check", "x", "warn", "info", "chevron-down", "chevron-right", "plus", "search", "folder", "folder-open", "trash", "gear", "sort", "panel-left", "panel-bottom", "panel-right", "clock"];
 
 export function ocIconNames(): OcIconName[] {
   return [...OC_ICON_NAMES];

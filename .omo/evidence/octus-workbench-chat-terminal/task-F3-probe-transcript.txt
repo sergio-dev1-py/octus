@@ -1,0 +1,11 @@
+pid=12740
+project=prj_7aee353e52ad
+STATE0: {"textLen":55362,"text":">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>.xterm-dom-renderer-owner-1 .xterm-rows span { display: inline-block; height: 100%; vertical-align: top;}.xterm-dom-renderer-owner-1 .xterm-rows { pointer-events: none; color: #e8eaf0; font-family: ui-monospace, \"Cascadia Mono\", Consolas, monospace; font-size: 13px; font-kerning: none; white-space: pre}.xterm-dom-renderer-owner-1 .xterm-rows .xterm-dim { color: #e8eaf080;}.xterm-dom-renderer-owner-1 span:not(.xterm-bold) { font-weight: normal;}.xterm-dom-renderer-","nCanvas":0,"nRows":2,"display":"block"}
+IPC0: {"list":[{"id":"term_dbbfd6e0196c","status":"open"}],"readOk":true,"chunks":3,"tail":"\r\nC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3probe-1793653598776\\octus-f3-proj>\u001b[25l\u001b[HMicrosoft Windows [Versión 10.0.19044.3693]\u001b[K\r\n(c) Microsoft Corporation. Todos los derechos reservados.\u001b[K\r\n\u001b[K\r\nC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3probe-1793653598776\\octus-f3-proj>\u001b[K\r\n\u001b[K\u001b[4;78H\u001b[?25h","status":"open"}
+WRITE-IPC: {"ok":true}
+IPC1-tail: "\u001b[HMicrosoft Windows [Versión 10.0.19044.3693]\u001b[K\r\n(c) Microsoft Corporation. Todos los derechos reservados.\u001b[K\r\n\u001b[K\r\nC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3probe-1793653598776\\octus-f3-proj>\u001b[K\r\n\u001b[K\u001b[4;78H\u001b[?25hecho F3VIAIPC\r\nF3VIAIPC\r\u001b]0;C:\\Windows\\system32\\cmd.exe - echo  F3VIAIPC\u0007\n\u001b]0;C:\\Windows\\system32\\cmd.exe\u0007\nC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3probe-1793653598776\\octus-f3-proj>"
+HOST1-tail: "er-owner-1 .xterm-bg-257 { background-color: #e8eaf0; }C:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3probe-1793653598776\\octus-f3-proj> .xterm .xterm-scrollable-element > .scrollbar > .slider {\n  background: #e8eaf033;\n}\n.xterm .xterm-scrollable-element > .scrollbar > .slider:hover {\n  background: #e8eaf066;\n}\n.xterm .xterm-scrollable-element > .scrollbar > .slider.active {\n  background: #e8eaf080;\n}"
+FATAL: page.evaluate: SyntaxError: Invalid or unexpected token
+    at eval (<anonymous>)
+    at UtilityScript.evaluate (<anonymous>:234:30)
+    at UtilityScript.<anonymous> (<anonymous>:1:44)

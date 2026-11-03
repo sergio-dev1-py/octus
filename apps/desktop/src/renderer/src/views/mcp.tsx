@@ -6,7 +6,7 @@
  * Sin datos inventados: vacíos honestos y errores con reintento sin bloquear. */
 import { For, Show, createSignal, onMount } from "solid-js";
 import { OcButton, OcEmpty, OcErrorState } from "../components/oc.jsx";
-import { state } from "../store.js";
+import { setLayoutActivity, state } from "../store.js";
 import {
   mcpAdd,
   mcpConnect,
@@ -363,6 +363,9 @@ export function McpManagerView(props?: { projectId?: string }) {
   const selected = () => mcpState.servers.find((s) => s.id === mcpState.selectedId);
   return (
     <main class="settings-view" id="mcp-manager" aria-label="Gestor MCP">
+      <button type="button" onClick={() => void setLayoutActivity("chat")}>
+        ← Volver al chat
+      </button>
       <h2>Conectores MCP</h2>
       <p class="muted">Lista de servidores con sus tres estados siempre distintos: configurado, conectado y autorizado. Nada se conecta sin confianza explícita.</p>
       <Show when={mcpState.error}>

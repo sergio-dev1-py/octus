@@ -22,6 +22,7 @@ tools:
   - git_stage
   - git_commit
   - memory_propose
+  - skill_install
 deniedTools:
   - delegate
   - websearch
@@ -29,7 +30,46 @@ deniedTools:
   - test_run
   - plan.create
   - plan.update
-permissionRules: []
+permissionRules:
+  # Implementer delegado por build: mismos permisos de escritura que su
+  # coordinador dentro del espacio asignado (el scope lo impone path-scope).
+  # Borrados por shell: preguntan solo si salen del espacio asignado (ruta
+  # absoluta, ".." o unidad). El borrado relativo dentro del worktree va directo.
+  - { action: write, resource: "*", effect: allow }
+  - { action: edit, resource: "*", effect: allow }
+  - { action: shell, resource: "*", effect: allow }
+  - { action: skill_install, resource: "*", effect: allow }
+  - { action: git_stage, resource: "*", effect: allow }
+  - { action: git_commit, resource: "*", effect: allow }
+  - { action: shell, resource: "*del C:*", effect: ask }
+  - { action: shell, resource: "*DEL C:*", effect: ask }
+  - { action: shell, resource: "*del /*", effect: ask }
+  - { action: shell, resource: "*DEL /*", effect: ask }
+  - { action: shell, resource: "*del \\*", effect: ask }
+  - { action: shell, resource: "*del *..*", effect: ask }
+  - { action: shell, resource: "*DEL *..*", effect: ask }
+  - { action: shell, resource: "*erase *", effect: ask }
+  - { action: shell, resource: "*rmdir*", effect: ask }
+  - { action: shell, resource: "*RMDIR*", effect: ask }
+  - { action: shell, resource: "*rd /s*", effect: ask }
+  - { action: shell, resource: "*rm -rf*", effect: ask }
+  - { action: shell, resource: "*rm -r *", effect: ask }
+  - { action: shell, resource: "*Remove-Item*", effect: ask }
+  - { action: shell, resource: "*remove-item*", effect: ask }
+  - { action: shell, resource: "*format *", effect: ask }
+  - { action: shell, resource: "*FORMAT *", effect: ask }
+  - { action: shell, resource: "*diskpart*", effect: ask }
+  - { action: shell, resource: "*taskkill*", effect: ask }
+  - { action: shell, resource: "*TASKKILL*", effect: ask }
+  - { action: shell, resource: "*shutdown*", effect: ask }
+  - { action: shell, resource: "*restart-computer*", effect: ask }
+  - { action: shell, resource: "*Stop-Process*", effect: ask }
+  - { action: shell, resource: "*taskkill*node*", effect: deny }
+  - { action: shell, resource: "*taskkill*electron*", effect: deny }
+  - { action: shell, resource: "*taskkill*bun*", effect: deny }
+  - { action: shell, resource: "*pkill*node*", effect: deny }
+  - { action: shell, resource: "*killall*node*", effect: deny }
+  - { action: shell, resource: "*Stop-Process*node*", effect: deny }
 deliveryFormat: |
   Implementation delivery:
   1. Summary of the change.
@@ -38,7 +78,7 @@ deliveryFormat: |
   4. Checks executed with real output.
   5. Risks and follow-ups.
 canDelegateTo: []
-promptVersion: 1
+promptVersion: 4
 systemPrompt: |
   You are an Implementer subagent: you write code ONLY inside your assigned directory.
   Writes outside it are blocked by the harness; do not attempt to escape it.

@@ -1,0 +1,97 @@
+{
+  "runTs": "2026-11-02T18-04-44-032Z",
+  "fixture": "C:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3-proj-8uiOYy",
+  "dataDir": "C:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3-data-4ZY6o5",
+  "rows": [
+    {
+      "gap": "base",
+      "check": "welcome renders live with isolated data",
+      "pass": true,
+      "detail": "task-F3.welcome.png, #welcome-shell + #welcome-dropzone present"
+    },
+    {
+      "gap": "c",
+      "check": "synthetic drop in LIVE Electron yields honest empty-drop error",
+      "pass": true,
+      "detail": "err=\"No se recibió ninguna carpeta (soltado vacío).×\" (synthetic File carries no OS path, as predicted) :: task-F3.drop-synthetic.png"
+    },
+    {
+      "gap": "c",
+      "check": "live app.validateDirectory accepts fixture dir (real IPC/main)",
+      "pass": true,
+      "detail": "{\"ok\":true,\"realPath\":\"C:\\\\Users\\\\UserPy\\\\AppData\\\\Local\\\\Temp\\\\octus-f3-proj-8uiOYy\"}"
+    },
+    {
+      "gap": "c",
+      "check": "live app.validateDirectory rejects missing path (broken-path failure path)",
+      "pass": true,
+      "detail": "{\"ok\":false,\"error\":\"La carpeta no existe.\"}"
+    },
+    {
+      "gap": "c",
+      "check": "live app.validateDirectory rejects a file (not-directory)",
+      "pass": true,
+      "detail": "{\"ok\":false,\"error\":\"La ruta no es una carpeta.\"}"
+    },
+    {
+      "gap": "a",
+      "check": "live workbench present with project",
+      "pass": true,
+      "detail": "task-F3.workbench.png shows #workbench"
+    },
+    {
+      "gap": "a",
+      "check": "3 toggles ENABLED with project (live)",
+      "pass": true,
+      "detail": "sidebar=true inspector=true bottom=true"
+    },
+    {
+      "gap": "a",
+      "check": "session-new enabled + session exists (live)",
+      "pass": true,
+      "detail": "sessionNew=true row=\"New session [build]×\""
+    },
+    {
+      "gap": "a",
+      "check": "4 bottom tabs enabled with project (live)",
+      "pass": true,
+      "detail": "[{\"id\":\"terminal\",\"disabled\":false},{\"id\":\"problems\",\"disabled\":false},{\"id\":\"output\",\"disabled\":false},{\"id\":\"tests\",\"disabled\":false}]"
+    },
+    {
+      "gap": "a",
+      "check": "TerminalPanel mounted, create enabled, projectRoot==fixture (live)",
+      "pass": true,
+      "detail": "rootShown=\"C:\\\\Users\\\\UserPy\\\\AppData\\\\Local\\\\Temp\\\\octus-f3-proj-8uiOYy\""
+    },
+    {
+      "gap": "a",
+      "check": "live PTY rooted at project root via REAL UI (create+cd+Enter, output shows fixture)",
+      "pass": true,
+      "detail": "output contains fixture path; tail=\"indows [Versión 10.0.19044.3693]\\u001b]0;C:\\\\Windows\\\\system32\\\\cmd.exe\\u0007\\u001b[?25h\\r\\n(c) Microsoft Corporation. Todos los derechos reservados.\\r\\n\\u001b[57X\\r\\nC:\\\\Users\\\\UserPy\\\\AppData\\\\Local\\\\Temp\\\\octus-f3-proj-8uiOYy> \\bcd\\r\\n\""
+    },
+    {
+      "gap": "b",
+      "check": "toggle-sidebar flips #sidebar visibility via REAL click",
+      "pass": true,
+      "detail": "{\"before\":\"\",\"after\":\"none\",\"restored\":\"\",\"flipped\":true,\"backTo\":true}"
+    },
+    {
+      "gap": "b",
+      "check": "toggle-bottom flips #bottom-panel visibility via REAL click",
+      "pass": true,
+      "detail": "{\"before\":\"\",\"after\":\"none\",\"restored\":\"\",\"flipped\":true,\"backTo\":true}"
+    },
+    {
+      "gap": "b",
+      "check": "toggle-inspector flips #inspector visibility via REAL click",
+      "pass": true,
+      "detail": "{\"before\":\"\",\"after\":\"none\",\"restored\":\"\",\"flipped\":true,\"backTo\":true}"
+    },
+    {
+      "gap": "b",
+      "check": "Ctrl+B shortcut toggles sidebar live",
+      "pass": true,
+      "detail": "before= after=none"
+    }
+  ]
+}

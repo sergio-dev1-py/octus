@@ -316,6 +316,15 @@ export function deserializeMessage(row: Record<string, string | number | null>):
 }
 
 export function toNormalized(messages: Message[]): NormalizedMessage[] {
+  // Llamadas sin resultado (run muerto, cancelado o permiso denegado a medias):
+  // el proveedor (Responses 400) exige salida para cada function_call, así que
+  // se excluyen del contexto. Sin esto, continuar la sesión es imposible.
+  const callsWithResult = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool_result") callsWithResult.add((part as ToolResultPart).toolCallId);
+    }
+  }
   const calls = new Map<string, { providerCallId: string; name: string; argumentsJson: string }>();
   for (const message of messages) {
     for (const part of message.parts) {
@@ -353,7 +362,7 @@ export function toNormalized(messages: Message[]): NormalizedMessage[] {
     }
     const text = message.parts.filter((p) => p.type === "text" || p.type === "reasoning_summary").map((p) => (p as { text: string }).text).join("\n");
     const toolCalls = message.parts
-      .filter((p): p is ToolCallPart => p.type === "tool_call")
+      .filter((p): p is ToolCallPart => p.type === "tool_call" && callsWithResult.has(p.toolCallId))
       .map((p) => {
         const known = calls.get(p.toolCallId);
         return {
@@ -362,6 +371,9 @@ export function toNormalized(messages: Message[]): NormalizedMessage[] {
           argumentsJson: p.argumentsJson,
         };
       });
+    // Mensaje que quedaría vacío (solo llamadas huérfanas): se omite para no
+    // enviar bloques de texto vacíos al proveedor.
+    if (!text && toolCalls.length === 0) continue;
     out.push({ role: "assistant", blocks: [{ type: "text", text }], toolCalls: toolCalls.length > 0 ? toolCalls : undefined, providerState: message.providerState });
   }
   return out;

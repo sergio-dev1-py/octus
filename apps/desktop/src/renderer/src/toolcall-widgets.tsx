@@ -209,7 +209,12 @@ export function SubagentToolGroup(props: { instanceId: string; runId: string; ca
   const label = () => {
     const chain = lineage();
     if (chain.length === 0) return props.instanceId.slice(0, 12);
-    return chain.map((entry) => entry.definitionId).join(" › ");
+    return chain.map((entry) => {
+      const def = state.definitions.find((d) => d.id === entry.definitionId);
+      if (def?.kind === "coordinator") return "coordinador";
+      const task = entry.taskId ? state.tasks.find((t) => t.id === entry.taskId) : undefined;
+      return `subagente ${entry.definitionId}${task ? ` · ${task.title}` : ""}`;
+    }).join(" › ");
   };
   const callStatus = (item: PairedToolCall) =>
     toolRecordFor(props.runId, item.call.toolCallId)?.status ?? (item.result ? (item.result.ok ? "completed" : "failed") : "pending");
@@ -223,7 +228,7 @@ export function SubagentToolGroup(props: { instanceId: string; runId: string; ca
   return (
     <details class="subagent-group" data-subagent-group={props.instanceId} data-subagent-depth={depth()} data-subagent-status={rollup().status}>
       <summary>
-        <span class="toolname">subagent {label()}</span>
+        <span class="toolname">{label()}</span>
         <span class={`pill ${toneClass(rollup().tone)}`} data-subagent-rollup={rollup().status}>
           {rollup().status}
         </span>

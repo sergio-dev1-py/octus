@@ -164,7 +164,8 @@ export class AgentRuntime {
       globalDefault: definition.defaultModel,
     });
     const estimated = this.context.estimateTokens(instructions, tools, built.messages);
-    const ceiling = Math.floor(resolution.model.capabilities.maxContextTokens * (this.options.compactionThresholdRatio ?? 0.8));
+    // Umbral de compactación: 87% de la ventana del modelo (15k tokens recientes).
+    const ceiling = Math.floor(resolution.model.capabilities.maxContextTokens * (this.options.compactionThresholdRatio ?? 0.87));
     if (estimated > ceiling) {
       const compacted = await this.compact(instance, definition, session, opts);
       if (!compacted) {
@@ -387,6 +388,12 @@ export class AgentRuntime {
     const keep = emergency ? Math.floor((this.options.compactionKeepTokens ?? 15_000) / 2) : (this.options.compactionKeepTokens ?? 15_000);
     const { recent, older } = this.context.recentWindow(history, keep);
     if (older.length === 0 || recent.length === 0) return false;
+    const compactMsgId = `compact-${instance.runId}`;
+    try {
+      opts.onStream({ kind: "step.retry", sessionId: session.id, runId: instance.runId, instanceId: instance.id, messageId: compactMsgId, attempt: 1, reason: "compact:start" });
+    } catch {
+      // La notificación de UI nunca rompe la compactación.
+    }
     const resolution = this.router.resolve({
       instance: instance.model,
       session: session.model,
@@ -427,9 +434,21 @@ export class AgentRuntime {
         if (event.type === "completed") break;
       }
     } catch {
+      try {
+        opts.onStream({ kind: "step.retry", sessionId: session.id, runId: instance.runId, instanceId: instance.id, messageId: compactMsgId, attempt: 1, reason: "compact:failed" });
+      } catch {
+        // ignore
+      }
       return false;
     }
-    if (!summary.trim()) return false;
+    if (!summary.trim()) {
+      try {
+        opts.onStream({ kind: "step.retry", sessionId: session.id, runId: instance.runId, instanceId: instance.id, messageId: compactMsgId, attempt: 1, reason: "compact:failed" });
+      } catch {
+        // ignore
+      }
+      return false;
+    }
     if (isCoordinator) {
       const last = older[older.length - 1]! as { createdAt: number } & { rowid?: number };
       const rowid = typeof last.rowid === "number" ? last.rowid : -1;
@@ -438,7 +457,34 @@ export class AgentRuntime {
       const cutoffSeq = older[older.length - 1]!.seq;
       await this.context.saveCompaction(instance.id, cutoffSeq, summary.trim());
     }
+    try {
+      opts.onStream({ kind: "step.retry", sessionId: session.id, runId: instance.runId, instanceId: instance.id, messageId: compactMsgId, attempt: 1, reason: "compact:done" });
+    } catch {
+      // ignore
+    }
     return true;
+  }
+
+  /**
+   * Compactación manual (`/compactation`): reutiliza el mismo camino que la
+   * automática (mismo prompt estructurado y mismo corte de 15k). Devuelve
+   * false cuando no hay nada que compactar (conversación corta o sin
+   * instancia coordinadora). Emite `compact:start/done/failed` por onStream
+   * para que la UI pinte el mismo aviso que en la automática.
+   */
+  async compactSessionNow(sessionId: string, opts: Pick<RunInstanceOptions, "signal" | "correlationId" | "onStream">): Promise<boolean> {
+    const session = await this.loadSession(sessionId);
+    const row = await this.db.queryOne<{ id: string; definition_id: string }>(
+      `SELECT i.id AS id, i.definition_id AS definition_id FROM agent_instances i
+        JOIN agent_definitions d ON d.id = i.definition_id
+        WHERE i.session_id = ? AND d.kind = 'coordinator'
+        ORDER BY i.created_at DESC LIMIT 1`,
+      [sessionId],
+    );
+    if (!row) return false;
+    const instance = await this.loadInstance(String(row.id));
+    const definition = await this.loadDefinition(instance.definitionId);
+    return this.compact(instance, definition, session, { ...opts }, false);
   }
 
   private async visibleInstanceHistory(instanceId: string) {

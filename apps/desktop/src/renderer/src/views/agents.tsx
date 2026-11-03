@@ -140,6 +140,13 @@ export function AgentDefinitionsSection() {
             <div class="row">
               <code>{instance.definitionId}</code>
               <span class={`pill ${pillClass(instance.status)}`}>{instance.status}</span>
+              <Show when={state.definitions.find((d) => d.id === instance.definitionId)}>
+                {(def) => (
+                  <span class={`pill ${def().kind === "coordinator" ? "warn" : "ok"}`}>
+                    {def().kind === "coordinator" ? "coordinador" : "subagente"}
+                  </span>
+                )}
+              </Show>
               <code class="muted">{instance.id}</code>
             </div>
             <p class="muted">
@@ -428,6 +435,9 @@ export function AgentsView() {
   return (
     <main class="agents" id="agents-view" aria-label="Agentes">
       <header>
+        <button type="button" onClick={() => void import("../store.js").then((m) => m.setLayoutActivity("chat"))}>
+          ← Volver al chat
+        </button>
         <h2>Agentes</h2>
         <Show when={!state.activeSessionId}>
           <p class="muted">Crea o elige una sesión para ver sus agentes, tareas, runs y worktrees.</p>

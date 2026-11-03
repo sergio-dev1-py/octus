@@ -15,6 +15,7 @@ import {
 } from "../store.js";
 import { OcIcon } from "../components/oc.jsx";
 import { pathsFromDrop } from "../drop-paths.js";
+import logoUrl from "../assets/octus-logo.png";
 import { SettingsView } from "./settings.jsx";
 
 // ---------------------------------------------------------------- bienvenida (Todo 10, F-1/W-01).
@@ -41,7 +42,11 @@ export function WelcomeView() {
   const [showAll, setShowAll] = createSignal(false);
   const visibleProjects = () =>
     showAll() ? state.projects : state.projects.slice(0, WELCOME_VISIBLE_COUNT);
-  let nameInput: HTMLInputElement | undefined;
+
+  function basenameOf(directory: string): string {
+    const parts = directory.split(/[\\/]/).filter(Boolean);
+    return parts[parts.length - 1] ?? directory;
+  }
 
   async function enterSessions(proj: { id?: string; name: string; rootPath: string }): Promise<void> {
     setWelcomeError(undefined);
@@ -66,13 +71,15 @@ export function WelcomeView() {
         return;
       }
       const real = check.realPath ?? path;
+      // El nombre del proyecto es siempre el de la carpeta (sin pedirlo).
       const existing = state.projects.find((p) => p.rootPath === real || p.rootPath === path);
       if (existing) {
         await enterSessions({ id: existing.id, name: existing.name, rootPath: existing.rootPath });
       } else {
         setWelcomeError(undefined);
-        setPending({ name: "", rootPath: real });
-        nameInput?.focus();
+        await createProject(basenameOf(real), real);
+        const created = state.projects.find((p) => p.rootPath === real);
+        if (created) await enterSessions({ id: created.id, name: created.name, rootPath: created.rootPath });
       }
     } catch (error) {
       setWelcomeError(error instanceof Error ? error.message : String(error));
@@ -111,26 +118,6 @@ export function WelcomeView() {
     }
   }
 
-  async function createAndEnter(): Promise<void> {
-    const target = pending();
-    const name = nameInput?.value.trim() ?? "";
-    if (!target || target.id || !name) {
-      setWelcomeError("Pon un nombre al proyecto para crearlo.");
-      return;
-    }
-    setBusy(true);
-    try {
-      // main vuelve a validar la carpeta: si falla, nada se crea.
-      await createProject(name, target.rootPath);
-      const created = state.projects.find((p) => p.rootPath === target.rootPath);
-      if (created) await enterSessions({ id: created.id, name: created.name, rootPath: created.rootPath });
-    } catch (error) {
-      setWelcomeError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function continueLatest(): Promise<void> {
     const target = pending();
     if (!target?.id) return;
@@ -160,19 +147,6 @@ export function WelcomeView() {
     }
   }
 
-  async function openWithoutSession(): Promise<void> {
-    const target = pending();
-    if (!target?.id) return;
-    setBusy(true);
-    try {
-      await selectProject(target.id);
-    } catch (error) {
-      setWelcomeError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function backToChoose(): void {
     setWelcomeError(undefined);
     setPending(undefined);
@@ -183,28 +157,7 @@ export function WelcomeView() {
   return (
     <main id="welcome" class="welcome-root" aria-label="Bienvenida">
       <div class="welcome-brand">
-        <svg
-          class="welcome-logo"
-          viewBox="0 0 120 120"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M42 60 C42 40 50 26 60 26 C70 26 78 40 78 60" />
-          <circle cx="53" cy="48" r="3.5" fill="currentColor" stroke="none" />
-          <circle cx="67" cy="48" r="3.5" fill="currentColor" stroke="none" />
-          <path d="M42 52 C34 53 28 57 27 64 C26 70 32 72 35 67" />
-          <path d="M78 52 C86 53 92 57 93 64 C94 70 88 72 85 67" />
-          <path d="M44 60 C38 68 30 70 26 76 C22 82 28 87 32 82" />
-          <path d="M51 61 C48 70 42 74 40 82 C38 88 44 91 47 86" />
-          <path d="M57 61 C56 69 54 77 54 84 C54 90 60 90 60 85" />
-          <path d="M63 61 C64 69 66 77 66 84 C66 90 72 89 71 84" />
-          <path d="M69 61 C72 70 78 74 80 82 C82 88 76 91 73 86" />
-          <path d="M76 60 C82 68 90 70 94 76 C98 82 92 87 88 82" />
-        </svg>
+        <img class="welcome-logo" src={logoUrl} alt="Octus" width={120} height={120} />
         <h1>Octus</h1>
       </div>
         <Show when={state.welcomeError}>
@@ -262,17 +215,6 @@ export function WelcomeView() {
                   >
                     Arrastra una carpeta aquí para abrirla como workspace
                   </div>
-                  <Show when={pending() && !pending()!.id}>
-                    <div class="welcome-create">
-                      <p class="muted">Carpeta: {pending()!.rootPath}</p>
-                      <div class="row">
-                        <input id="welcome-name" ref={nameInput} placeholder="Nombre del proyecto nuevo" />
-                        <button id="welcome-create" type="button" class="primary" disabled={busy()} onClick={() => void createAndEnter()}>
-                          Crear proyecto
-                        </button>
-                      </div>
-                    </div>
-                  </Show>
                   <section class="welcome-recents" aria-label="Workspaces">
                     <h2>Workspaces</h2>
                     <Show when={state.projects.length === 0} fallback={<></>}>
@@ -319,9 +261,6 @@ export function WelcomeView() {
                   </button>
                   <button id="welcome-new-session" type="button" disabled={busy()} onClick={() => void startNewSession()}>
                     Nueva sesión
-                  </button>
-                  <button id="welcome-open" type="button" disabled={busy()} onClick={() => void openWithoutSession()}>
-                    Abrir sin sesión
                   </button>
                   <button id="welcome-back" type="button" onClick={backToChoose}>
                     Volver

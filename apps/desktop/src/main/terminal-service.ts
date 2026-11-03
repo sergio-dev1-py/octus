@@ -23,9 +23,11 @@
  *   se analizan porque los chunks son teclas, no comandos.
  */
 import pty, { type IPty } from "node-pty";
+import path from "node:path";
 import { createId } from "@octus/shared";
 import { OctusError, isAlive, killTree, scrubbedEnv } from "@octus/core";
 import type { TerminalChunk, TerminalInfo } from "@octus/shared";
+import { availableShells, resolveShell } from "./shells.js";
 
 export const TERMINAL_MAX_WRITE = 64 * 1024;
 const TERMINAL_MAX_BUFFER_CHARS = 256 * 1024;
@@ -42,14 +44,20 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
   return Math.min(max, Math.max(min, n));
 }
 
+export function listShells(): Array<{ id: string; name: string; path: string }> {
+  return availableShells().map((shell) => ({ id: shell.id, name: shell.name, path: shell.path }));
+}
+
 function defaultShell(): { file: string; args: string[] } {
-  if (process.platform === "win32") return { file: process.env.COMSPEC ?? "cmd.exe", args: [] };
-  return { file: process.env.SHELL ?? "/bin/sh", args: [] };
+  const shell = resolveShell();
+  return { file: shell.path, args: shell.args };
 }
 
 interface TerminalRecord {
   info: TerminalInfo;
   pty: IPty;
+  shellFile: string;
+  shellArgs: string[];
   chunks: TerminalChunk[];
   bufferedChars: number;
   nextSeq: number;
@@ -108,8 +116,7 @@ export class TerminalService {
   }
 
   private spawnPty(record: TerminalRecord): void {
-    const shell = defaultShell();
-    const proc = pty.spawn(shell.file, shell.args, {
+    const proc = pty.spawn(record.shellFile, record.shellArgs, {
       name: "xterm-256color",
       cols: record.info.cols,
       rows: record.info.rows,
@@ -131,7 +138,7 @@ export class TerminalService {
     });
   }
 
-  async create(input: { projectId: string; name?: string; cols?: number; rows?: number }): Promise<TerminalInfo> {
+  async create(input: { projectId: string; name?: string; cols?: number; rows?: number; shellId?: string; cwd?: string }): Promise<TerminalInfo> {
     if (typeof input.projectId !== "string" || input.projectId.length === 0) {
       throw new OctusError("invalid_tool_args", "Invalid projectId");
     }
@@ -140,8 +147,17 @@ export class TerminalService {
       : "terminal";
     const cols = clampInt(input.cols, 80, MIN_COLS, MAX_COLS);
     const rows = clampInt(input.rows, 24, MIN_ROWS, MAX_ROWS);
-    // Gate: proyecto existente + raíz validada; el CWD queda fijado a esa raíz.
-    const cwd = await this.resolveRoot(input.projectId);
+    // Gate: proyecto existente + raíz validada; el CWD queda fijado al
+    // directorio de la sesión si viene dentro del proyecto, si no a la raíz.
+    const root = await this.resolveRoot(input.projectId);
+    let cwd = root;
+    if (typeof input.cwd === "string" && input.cwd.length > 0) {
+      const relative = path.relative(root, path.resolve(input.cwd));
+      if (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+        cwd = path.resolve(input.cwd);
+      }
+    }
+    const shell = resolveShell(input.shellId);
     const id = createId("term");
     const record: TerminalRecord = {
       info: {
@@ -152,9 +168,13 @@ export class TerminalService {
         cols,
         rows,
         status: "open",
+        shellId: shell.id,
+        shellName: shell.name,
         active: false,
         createdAt: Date.now(),
       },
+      shellFile: shell.path,
+      shellArgs: shell.args,
       pty: undefined as unknown as IPty,
       chunks: [],
       bufferedChars: 0,

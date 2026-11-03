@@ -1,0 +1,116 @@
+[2026-11-02T21:08:17.630Z] tmp=C:\Users\UserPy\AppData\Local\Temp\octus-f3-1793653697627
+[2026-11-02T21:08:17.633Z] fixture=C:\Users\UserPy\AppData\Local\Temp\octus-f3-1793653697627\octus-f3-proj
+[2026-11-02T21:08:17.634Z] electron=C:\Users\UserPy\Documents\octus\apps\desktop\node_modules\electron\dist\electron.exe exists=true
+[2026-11-02T21:08:17.634Z] main bundle=C:\Users\UserPy\Documents\octus\apps\desktop\out\main\index.js exists=true
+[2026-11-02T21:08:18.078Z] baseline electron pids: []
+[2026-11-02T21:08:18.100Z] spawned electron pid=5440
+[2026-11-02T21:08:18.959Z] CDP up; pages: |file:///C:/Users/UserPy/Documents/octus/apps/desktop/out/renderer/index.html
+[2026-11-02T21:08:19.109Z] driving page: file:///C:/Users/UserPy/Documents/octus/apps/desktop/out/renderer/index.html
+[2026-11-02T21:08:19.353Z] shot task-F3-a-welcome.png ok
+[2026-11-02T21:08:19.354Z] PASS (a0) welcome visible de fabrica — #welcome presente
+[2026-11-02T21:08:19.358Z] PASS (a0) boton Abrir Carpeta presente
+[2026-11-02T21:08:19.361Z] PASS (a0) dropzone presente
+[2026-11-02T21:08:19.481Z] PASS (d) modal Ajustes abre — titulo="Ajustes"
+[2026-11-02T21:08:19.590Z] shot task-F3-d-settings.png ok
+[2026-11-02T21:08:20.307Z] PASS (d) switch Proveedores/Agentes — panel agents visible tras click
+[2026-11-02T21:08:20.417Z] shot task-F3-d-settings-agents.png ok
+[2026-11-02T21:08:21.116Z] PASS (d) X cierra el modal — #settings-modal ausente tras X
+[2026-11-02T21:08:21.223Z] shot task-F3-d-settings-closed.png ok
+[2026-11-02T21:08:21.234Z] PASS (a) validateDirectory ok en fixture real — root=C:\Users\UserPy\AppData\Local\Temp\octus-f3-1793653697627\octus-f3-proj
+[2026-11-02T21:08:21.234Z] PASS (a) projects.create via IPC real — id=prj_f5fb649193c2
+[2026-11-02T21:08:21.250Z] PASS (a/b) 2 sesiones creadas — s1=ses_6e8db4eeebbf s2=ses_7dad3c0f517d
+[2026-11-02T21:08:21.391Z] PASS (a) reciente lista el proyecto — ["F3 ProyectoC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3-17936"]
+[2026-11-02T21:08:21.477Z] (a) pending rootPath: C:\Users\UserPy\AppData\Local\Temp\octus-f3-1793653697627\octus-f3-proj
+[2026-11-02T21:08:21.731Z] PASS (a) proyecto abierto: sidebar muestra la seccion — data-project-section=prj_f5fb649193c2
+[2026-11-02T21:08:21.884Z] shot task-F3-a-project.png ok
+[2026-11-02T21:08:22.744Z] (b) session rows: [{"id":"ses_7dad3c0f517d","dot":"idle","title":"F3 sesion dos [build]"},{"id":"ses_6e8db4eeebbf","dot":"idle","title":"F3 sesion uno [build]"}]
+[2026-11-02T21:08:22.745Z] PASS (b) sidebar lista 2 sesiones — rows=2
+[2026-11-02T21:08:22.780Z] PASS (b) dot verde en sesion activa — dots=[active,idle] bg=rgb(111, 206, 133)
+[2026-11-02T21:08:22.781Z] (b) NOTA: dot "working" requiere un agente corriendo; sin provider keys no hay run en vivo (limite aceptado). El verde se prueba con dot activo (mismo estilo dot(true)).
+[2026-11-02T21:08:22.784Z] PASS (b) fila MCP presente — {"dot":"idle","text":"Conectores MCP · sin conexión"}
+[2026-11-02T21:08:22.785Z] PASS (b) MCP idle honesto sin servidor — {"dot":"idle","text":"Conectores MCP · sin conexión"}
+[2026-11-02T21:08:23.002Z] shot task-F3-b-skills-mcp.png ok
+[2026-11-02T21:08:23.007Z] PASS (b) click MCP abre Skills y MCP — vista skills-mcp visible
+[2026-11-02T21:08:23.765Z] shot task-F3-b-sidebar.png ok
+[2026-11-02T21:08:24.334Z] PASS (c) boton #session-new visible
+[2026-11-02T21:08:24.388Z] PASS (c) sesion nueva muestra CERO cuadros — details=0
+[2026-11-02T21:08:24.407Z] (c) composer={"tag":"DIV","x":304,"y":304,"w":696} picker={"y":425,"h":52,"bottom":477} input={"bottom":374}
+[2026-11-02T21:08:24.408Z] PASS (c) composer visible
+[2026-11-02T21:08:24.408Z] PASS (c) picker visible bajo el input — picker.y=425 input.bottom=374
+[2026-11-02T21:08:24.412Z] PASS (c) chips plan/build presentes — [plan,build]
+[2026-11-02T21:08:24.532Z] shot task-F3-c-chat.png ok
+[2026-11-02T21:08:25.334Z] (e) tab: terminal (open)
+[2026-11-02T21:08:25.377Z] PASS (e) separador redimensionable visible
+[2026-11-02T21:08:25.411Z] (e) handle box: {"x":0,"y":489,"width":1264,"height":4}
+[2026-11-02T21:08:26.938Z] (e) host clientHeight tras resize: 201
+[2026-11-02T21:08:26.946Z] (e) filas visibles: 13
+[2026-11-02T21:08:27.429Z] (e) foco tras click: TEXTAREA/xterm-helper-textarea
+[2026-11-02T21:08:27.923Z] (e) xterm rows tail: "Microsoft Windows [Versión 10.0.19044.3693]\n(c) Microsoft Corporation. Todos los derechos reservados.\nC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3-1793653697627\\octus-f3-proj>echo f3-hola\nf3-hola\nC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3-1793653697627\\octus-f3-proj> "
+[2026-11-02T21:08:27.923Z] PASS (e) comando tecleado + salida visible
+[2026-11-02T21:08:27.924Z] PASS (e) cwd pineado al proyecto — prompt contiene la carpeta del proyecto
+[2026-11-02T21:08:28.066Z] shot task-F3-e-terminal.png ok
+[2026-11-02T21:08:28.707Z] PASS (f) dialogo NUEVA TAREA PROGRAMADA abre — "Nueva tarea programada"
+[2026-11-02T21:08:28.712Z] (f) campos: [["#schedules-name",true],["#schedules-prompt",true],["#schedules-profile",true],["#schedules-timezone",true],["#schedules-cron",true],["#schedules-enabled",true],["#schedules-cancel",true],["#schedules-save",true]]
+[2026-11-02T21:08:28.712Z] PASS (f) formulario completo — 8/8 presentes
+[2026-11-02T21:08:28.836Z] shot task-F3-f-schedules.png ok
+[2026-11-02T21:08:28.882Z] PASS (f) Cancelar cierra el dialogo
+[2026-11-02T21:08:28.899Z] RESULTADO: 27 pass / 0 fail
+[2026-11-02T21:08:17.630Z] tmp=C:\Users\UserPy\AppData\Local\Temp\octus-f3-1793653697627
+[2026-11-02T21:08:17.633Z] fixture=C:\Users\UserPy\AppData\Local\Temp\octus-f3-1793653697627\octus-f3-proj
+[2026-11-02T21:08:17.634Z] electron=C:\Users\UserPy\Documents\octus\apps\desktop\node_modules\electron\dist\electron.exe exists=true
+[2026-11-02T21:08:17.634Z] main bundle=C:\Users\UserPy\Documents\octus\apps\desktop\out\main\index.js exists=true
+[2026-11-02T21:08:18.078Z] baseline electron pids: []
+[2026-11-02T21:08:18.100Z] spawned electron pid=5440
+[2026-11-02T21:08:18.959Z] CDP up; pages: |file:///C:/Users/UserPy/Documents/octus/apps/desktop/out/renderer/index.html
+[2026-11-02T21:08:19.109Z] driving page: file:///C:/Users/UserPy/Documents/octus/apps/desktop/out/renderer/index.html
+[2026-11-02T21:08:19.353Z] shot task-F3-a-welcome.png ok
+[2026-11-02T21:08:19.354Z] PASS (a0) welcome visible de fabrica — #welcome presente
+[2026-11-02T21:08:19.358Z] PASS (a0) boton Abrir Carpeta presente
+[2026-11-02T21:08:19.361Z] PASS (a0) dropzone presente
+[2026-11-02T21:08:19.481Z] PASS (d) modal Ajustes abre — titulo="Ajustes"
+[2026-11-02T21:08:19.590Z] shot task-F3-d-settings.png ok
+[2026-11-02T21:08:20.307Z] PASS (d) switch Proveedores/Agentes — panel agents visible tras click
+[2026-11-02T21:08:20.417Z] shot task-F3-d-settings-agents.png ok
+[2026-11-02T21:08:21.116Z] PASS (d) X cierra el modal — #settings-modal ausente tras X
+[2026-11-02T21:08:21.223Z] shot task-F3-d-settings-closed.png ok
+[2026-11-02T21:08:21.234Z] PASS (a) validateDirectory ok en fixture real — root=C:\Users\UserPy\AppData\Local\Temp\octus-f3-1793653697627\octus-f3-proj
+[2026-11-02T21:08:21.234Z] PASS (a) projects.create via IPC real — id=prj_f5fb649193c2
+[2026-11-02T21:08:21.250Z] PASS (a/b) 2 sesiones creadas — s1=ses_6e8db4eeebbf s2=ses_7dad3c0f517d
+[2026-11-02T21:08:21.391Z] PASS (a) reciente lista el proyecto — ["F3 ProyectoC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3-17936"]
+[2026-11-02T21:08:21.477Z] (a) pending rootPath: C:\Users\UserPy\AppData\Local\Temp\octus-f3-1793653697627\octus-f3-proj
+[2026-11-02T21:08:21.731Z] PASS (a) proyecto abierto: sidebar muestra la seccion — data-project-section=prj_f5fb649193c2
+[2026-11-02T21:08:21.884Z] shot task-F3-a-project.png ok
+[2026-11-02T21:08:22.744Z] (b) session rows: [{"id":"ses_7dad3c0f517d","dot":"idle","title":"F3 sesion dos [build]"},{"id":"ses_6e8db4eeebbf","dot":"idle","title":"F3 sesion uno [build]"}]
+[2026-11-02T21:08:22.745Z] PASS (b) sidebar lista 2 sesiones — rows=2
+[2026-11-02T21:08:22.780Z] PASS (b) dot verde en sesion activa — dots=[active,idle] bg=rgb(111, 206, 133)
+[2026-11-02T21:08:22.781Z] (b) NOTA: dot "working" requiere un agente corriendo; sin provider keys no hay run en vivo (limite aceptado). El verde se prueba con dot activo (mismo estilo dot(true)).
+[2026-11-02T21:08:22.784Z] PASS (b) fila MCP presente — {"dot":"idle","text":"Conectores MCP · sin conexión"}
+[2026-11-02T21:08:22.785Z] PASS (b) MCP idle honesto sin servidor — {"dot":"idle","text":"Conectores MCP · sin conexión"}
+[2026-11-02T21:08:23.002Z] shot task-F3-b-skills-mcp.png ok
+[2026-11-02T21:08:23.007Z] PASS (b) click MCP abre Skills y MCP — vista skills-mcp visible
+[2026-11-02T21:08:23.765Z] shot task-F3-b-sidebar.png ok
+[2026-11-02T21:08:24.334Z] PASS (c) boton #session-new visible
+[2026-11-02T21:08:24.388Z] PASS (c) sesion nueva muestra CERO cuadros — details=0
+[2026-11-02T21:08:24.407Z] (c) composer={"tag":"DIV","x":304,"y":304,"w":696} picker={"y":425,"h":52,"bottom":477} input={"bottom":374}
+[2026-11-02T21:08:24.408Z] PASS (c) composer visible
+[2026-11-02T21:08:24.408Z] PASS (c) picker visible bajo el input — picker.y=425 input.bottom=374
+[2026-11-02T21:08:24.412Z] PASS (c) chips plan/build presentes — [plan,build]
+[2026-11-02T21:08:24.532Z] shot task-F3-c-chat.png ok
+[2026-11-02T21:08:25.334Z] (e) tab: terminal (open)
+[2026-11-02T21:08:25.377Z] PASS (e) separador redimensionable visible
+[2026-11-02T21:08:25.411Z] (e) handle box: {"x":0,"y":489,"width":1264,"height":4}
+[2026-11-02T21:08:26.938Z] (e) host clientHeight tras resize: 201
+[2026-11-02T21:08:26.946Z] (e) filas visibles: 13
+[2026-11-02T21:08:27.429Z] (e) foco tras click: TEXTAREA/xterm-helper-textarea
+[2026-11-02T21:08:27.923Z] (e) xterm rows tail: "Microsoft Windows [Versión 10.0.19044.3693]\n(c) Microsoft Corporation. Todos los derechos reservados.\nC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3-1793653697627\\octus-f3-proj>echo f3-hola\nf3-hola\nC:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-f3-1793653697627\\octus-f3-proj> "
+[2026-11-02T21:08:27.923Z] PASS (e) comando tecleado + salida visible
+[2026-11-02T21:08:27.924Z] PASS (e) cwd pineado al proyecto — prompt contiene la carpeta del proyecto
+[2026-11-02T21:08:28.066Z] shot task-F3-e-terminal.png ok
+[2026-11-02T21:08:28.707Z] PASS (f) dialogo NUEVA TAREA PROGRAMADA abre — "Nueva tarea programada"
+[2026-11-02T21:08:28.712Z] (f) campos: [["#schedules-name",true],["#schedules-prompt",true],["#schedules-profile",true],["#schedules-timezone",true],["#schedules-cron",true],["#schedules-enabled",true],["#schedules-cancel",true],["#schedules-save",true]]
+[2026-11-02T21:08:28.712Z] PASS (f) formulario completo — 8/8 presentes
+[2026-11-02T21:08:28.836Z] shot task-F3-f-schedules.png ok
+[2026-11-02T21:08:28.882Z] PASS (f) Cancelar cierra el dialogo
+[2026-11-02T21:08:28.899Z] RESULTADO: 27 pass / 0 fail
+[2026-11-02T21:08:28.900Z] killing own electron tree pid=5440
+[2026-11-02T21:08:32.138Z] electron pids after kill: []

@@ -448,6 +448,16 @@ export class TaskScheduler {
 
     // 8. Runtime: spawn en background como hijo del coordinador del run.
     const coord = await this.requireCoordinatorInstance(run.runId);
+    // Los workers heredan el modelo que el usuario eligió para la sesión
+    // (antes usaban el default del YAML y podían fallar si ese proveedor no
+    // estaba disponible p. ej. contributor).
+    const coordModelRow = await this.db.queryOne<{ model: string }>("SELECT model FROM agent_instances WHERE id = ?", [coord]).catch(() => undefined);
+    let inheritedModel: { providerId: string; modelId: string; effort?: string } | undefined;
+    try {
+      inheritedModel = coordModelRow ? (JSON.parse(String(coordModelRow.model)) as { providerId: string; modelId: string; effort?: string }) : undefined;
+    } catch {
+      inheritedModel = undefined;
+    }
     const brief = this.renderBrief(task);
     try {
       const spawned = await this.agents().spawn({
@@ -455,6 +465,7 @@ export class TaskScheduler {
         definitionId: task.agentRole,
         brief,
         mode: "background",
+        ...(inheritedModel ? { model: inheritedModel } : {}),
         directoryId,
         taskId: task.id,
         worktreeId: worktreeId ?? reviewTargetWorktreeId,

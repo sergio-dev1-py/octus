@@ -43,7 +43,8 @@ const proposalSchema = z.object({
 
 export interface PlanTasksInput {
   runId: string;
-  objective: string;
+  /** Opcional: por defecto el objetivo del plan aprobado. */
+  objective?: string;
   brief?: string;
   /** Anclaje exacto exigido; si se omite se usa runs.plan_revision_id (sin auto-selección). */
   planId?: string;
@@ -110,9 +111,11 @@ export class TaskPlanner {
     }
     const plan = await this.plans.getPlan(planId);
     if (plan.sessionId !== run.session_id) throw new OctusError("invalid_state", "Plan does not belong to the run session");
+    // Sin objetivo explícito se usa el del plan aprobado (llamada sin fricción).
+    const objective = input.objective?.trim() || plan.objective;
 
     const model = JSON.parse(String(coord.model)) as { providerId: string; modelId: string; effort?: string };
-    const hash = requestHashOf({ runId: input.runId, planId, revisionId, objective: input.objective, brief: input.brief ?? "", nonce: input.nonce });
+    const hash = requestHashOf({ runId: input.runId, planId, revisionId, objective, brief: input.brief ?? "", nonce: input.nonce });
     const existing = await this.db.queryOne<{ id: string; status: string; reason: string | null }>(
       "SELECT id, status, reason FROM plannings WHERE run_id = ? AND plan_id = ? AND revision_id = ? AND request_hash = ?",
       [input.runId, planId, revisionId, hash],
@@ -125,7 +128,7 @@ export class TaskPlanner {
       throw new OctusError("invalid_state", `Planning was rejected: ${existing.reason ?? "no reason recorded"}. Re-plan explicitly with a nonce.`);
     }
 
-    const proposal = await this.generateProposal(model, run.session_id, plan.objective, revision.contentMarkdown, input.objective, input.brief ?? "");
+    const proposal = await this.generateProposal(model, run.session_id, plan.objective, revision.contentMarkdown, objective, input.brief ?? "");
     try {
       return await this.tasks.createDag({ runId: input.runId, planId, revisionId, requestHash: hash, tasks: proposal });
     } catch (error) {

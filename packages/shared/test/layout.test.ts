@@ -33,7 +33,7 @@ const VALID: WorkbenchLayout = {
   inspectorWidth: 260,
   bottomVisible: false,
   bottomHeight: 200,
-  bottomTab: "problems",
+  bottomTab: "terminal",
 };
 
 describe("workbench layout (Todo 8)", () => {
@@ -62,7 +62,8 @@ describe("workbench layout (Todo 8)", () => {
     expect(isWorkbenchLayout({ ...VALID, bottomTab: "chat" })).toBe(false);
     expect(isWorkbenchLayout({ ...VALID, sidebarWidth: Number.NaN })).toBe(false);
     expect(isWorkbenchLayout({ ...VALID, sidebarVisible: "si" })).toBe(false);
-    expect(isBottomTab("output")).toBe(true);
+    expect(isBottomTab("terminal")).toBe(true);
+    expect(isBottomTab("problems")).toBe(false);
     expect(isBottomTab("chat")).toBe(false);
   });
 
@@ -94,8 +95,8 @@ describe("workbench layout (Todo 8)", () => {
     expect(switched.activity).toBe("agents");
     expect(switched.sidebarVisible).toBe(true);
     expect(setActivity(switched, "x" as never)).toEqual(switched);
-    const tabbed = setBottomTab({ ...DEFAULT_LAYOUT, bottomVisible: false }, "output");
-    expect(tabbed.bottomTab).toBe("output");
+    const tabbed = setBottomTab({ ...DEFAULT_LAYOUT, bottomVisible: false }, "terminal");
+    expect(tabbed.bottomTab).toBe("terminal");
     expect(tabbed.bottomVisible).toBe(true);
     expect(setBottomTab(tabbed, "x" as never)).toEqual(tabbed);
   });
@@ -129,7 +130,7 @@ describe("workbench layout (Todo 8)", () => {
     }
     // Degradación por campo: lo válido sobrevive, lo corrupto cae al defecto.
     expect(
-      parseWorkbenchLayout({ activity: "plans", sidebarVisible: "si", sidebarWidth: 10_000, bottomTab: "output" }),
-    ).toEqual({ ...DEFAULT_LAYOUT, activity: "plans", sidebarWidth: SIDEBAR_MAX, bottomTab: "output" });
+      parseWorkbenchLayout({ activity: "plans", sidebarVisible: "si", sidebarWidth: 10_000, bottomTab: "terminal" }),
+    ).toEqual({ ...DEFAULT_LAYOUT, activity: "plans", sidebarWidth: SIDEBAR_MAX, bottomTab: "terminal" });
   });
 });

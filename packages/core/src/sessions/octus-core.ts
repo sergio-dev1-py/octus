@@ -43,8 +43,10 @@ import { DirectoryRegistry, type IsolatedDirectory } from "../orchestration/dire
 import { PersistenceService } from "../persistence/persistence-service.js";
 import { PermissionManager, type PermissionLayers } from "../permissions/permission-manager.js";
 import { SkillActivationStore } from "../skills/skill-activation.js";
+import { SkillInstaller } from "../skills/skill-installer.js";
+import { SKILL_AGENT_TOOLS } from "../skills/skill-agent-tools.js";
 import { SkillManager, type SkillDiscoveryOptions } from "../skills/skill-manager.js";
-import { SkillRuntime } from "../skills/skill-runtime.js";
+import { SkillRuntime, type SkillPromptInput } from "../skills/skill-runtime.js";
 import { listDirPage, projectRootReal, readFileCapped } from "../explorer/file-explorer.js";
 import { PlanManager } from "../plans/plan-manager.js";
 import { PLAN_TOOLS } from "../plans/plan-tools.js";
@@ -70,7 +72,7 @@ import { ModelRouter, selectCheapestToolCallModel } from "../providers/model-rou
 import { QuestionService } from "../questions/question-service.js";
 import { AgentRuntime, type RuntimeOptions } from "../runtime/agent-runtime.js";
 import { ContextBuilder, deserializeMessage } from "../runtime/context-builder.js";
-import { CompositeSecretStore, EnvSecretStore, secretRefForProvider, type SecretStore } from "../secrets/secret-store.js";
+import { CompositeSecretStore, EnvSecretStore, MemorySecretStore, envVarForProvider, secretRefForProvider, type SecretStore } from "../secrets/secret-store.js";
 import { ToolGateway } from "../tools/tool-gateway.js";
 import { STAGE1_TOOLS } from "../tools/tool-definitions.js";
 import { GIT_TOOLS } from "../tools/git-tools.js";
@@ -140,8 +142,8 @@ export class OctusCore {
   readonly schedules: ScheduledTasksManager;
   /** Todo workbench-chat-terminal/7: dir de usuario para la base auto. */
   private readonly dataDir: string;
-  /** Todo 23: runtime de skills (ausente si no se pasan `skillsDirs`). */
-  readonly skills?: SkillRuntime;
+  /** Todo 23: runtime de skills (siempre activo: global+managed+proyecto). */
+  readonly skills: SkillRuntime;
 
   private readonly activeRuns = new Map<string, Map<string, ActiveRun>>();
   /** Serializa la generación del coordinador por sesión (un turno cada vez). */
@@ -150,6 +152,8 @@ export class OctusCore {
   private readonly streamHandlers = new Map<string, (event: StreamEvent) => void>();
   private readonly meta: MetaAdapter | undefined;
   private readonly go: GoAdapter | undefined;
+  /** Bóveda primaria (SO) para distinguir origen de cada key. */
+  private primarySecrets?: SecretStore;
   private closed = false;
 
   private constructor(
@@ -168,13 +172,49 @@ export class OctusCore {
     this.router = new ModelRouter(db, this.events, this.bus);
     this.context = new ContextBuilder(db);
     this.registry = new AgentRegistry(db, options.definitionsDir ? { definitionsDir: options.definitionsDir } : {});
-    // Todo 23: runtime de skills (carga progresiva + registro por run). Solo
-    // existe si se configuran ámbitos; sin ellos, cero cambios de comportamiento.
-    if (options.skillsDirs) {
-      this.skills = new SkillRuntime(db, new SkillManager(options.skillsDirs), new SkillActivationStore(db));
-    }
+    // Skills siempre activas en el core: global+managed del dataDir y
+    // projectDir resuelto por proyecto (<root>/.octus/skills). Sin esto los
+    // agentes nunca ven skills y el @ del composer no adjunta nada.
+    const skillManager = new SkillManager({
+      globalDir: path.join(options.dataDir, "skills-global"),
+      managedDir: path.join(options.dataDir, "skills-managed"),
+      ...(options.skillsDirs?.globalDir ? { globalDir: options.skillsDirs.globalDir } : {}),
+      ...(options.skillsDirs?.managedDir ? { managedDir: options.skillsDirs.managedDir } : {}),
+      ...(options.skillsDirs?.projectDir ? { projectDir: options.skillsDirs.projectDir } : {}),
+    });
+    const skillActivation = new SkillActivationStore(db);
+    const skillInstaller = new SkillInstaller(path.join(options.dataDir, "skills-installed"));
+    this.skills = new SkillRuntime(
+      db,
+      skillManager,
+      skillActivation,
+      async (projectId: string) => {
+        try {
+          const found = (await this.listProjects()).find((p) => p.id === projectId);
+          return found ? path.join(found.rootPath, ".octus", "skills") : undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      () => skillInstaller.list(),
+    );
     const cfg = config.get();
     const toolServices: ToolServices = {};
+    toolServices.skills = {
+      install: async (input, context) => {
+        const scope = input.scope ?? "project";
+        const installed =
+          input.kind === "zip"
+            ? await skillInstaller.installFromZip(input.path, { scope })
+            : skillInstaller.installFromFolder(input.path, { scope });
+        let enabled = false;
+        if (context.enable ?? true) {
+          await skillActivation.enable(context.projectId, { name: installed.name, version: installed.version }, installed.scope);
+          enabled = true;
+        }
+        return { name: installed.name, version: installed.version, scope: installed.scope, enabled };
+      },
+    };
     this.gateway = new ToolGateway(
       db,
       this.events,
@@ -213,14 +253,16 @@ export class OctusCore {
             instanceRules = [];
           }
           const snapshot = row ? (JSON.parse(String(row.definition_snapshot ?? "{}")) as Partial<import("@octus/shared").AgentDefinitionSnapshot>) : undefined;
+          // Herencia: reglas del/los ancestros primero; las propias mandan.
+          const inherited = await this.inheritedRules(instanceId);
           if (snapshot && Array.isArray(snapshot.tools)) {
-            return { definitionTools: snapshot.tools, deniedTools: snapshot.deniedTools ?? [], definitionRules: snapshot.permissionRules ?? [], instanceRules };
+            return { definitionTools: snapshot.tools, deniedTools: snapshot.deniedTools ?? [], definitionRules: [...inherited, ...(snapshot.permissionRules ?? [])], instanceRules };
           }
           const def = await this.registry.get(definitionId);
-          return { definitionTools: def?.tools ?? [], deniedTools: def?.deniedTools ?? [], definitionRules: def?.permissionRules ?? [], instanceRules };
+          return { definitionTools: def?.tools ?? [], deniedTools: def?.deniedTools ?? [], definitionRules: [...inherited, ...(def?.permissionRules ?? [])], instanceRules };
         },
       },
-      STAGE1_TOOLS.concat(WEB_TOOLS, GIT_TOOLS, TEST_TOOLS, PLAN_TOOLS, AGENT_TOOLS, TASK_TOOLS, MEMORY_TOOLS),
+      STAGE1_TOOLS.concat(WEB_TOOLS, GIT_TOOLS, TEST_TOOLS, PLAN_TOOLS, AGENT_TOOLS, TASK_TOOLS, MEMORY_TOOLS, SKILL_AGENT_TOOLS),
     );
     this.plans = new PlanManager(db, this.events, this.bus);
     this.directories = new DirectoryRegistry(db);
@@ -244,7 +286,8 @@ export class OctusCore {
         deliveries: async (sessionId: string) => this.sessionDeliveries(sessionId),
         projectIdOf: async (sessionId: string) => (await this.requireSession(sessionId)).projectId,
         // Todo 23: secciones progresivas de skills (coordinador y workers).
-        skillSections: this.skills ? (input) => this.skills!.sectionsFor(input) : undefined,
+        // Las adjuntadas a mano con @ se suman a las auto-relevantes.
+        skillSections: this.skills ? (input) => this.skillSectionsWithManual(input) : undefined,
       },
     });
     this.agents = new AgentManager(
@@ -364,12 +407,11 @@ export class OctusCore {
 
   static async create(options: OctusCoreOptions): Promise<OctusCore> {
     const config = new ConfigStore(options.dataDir);
-    const secrets = new CompositeSecretStore(
-      options.primarySecrets ?? (await import("../secrets/secret-store.js").then((m) => new m.MemorySecretStore())),
-      new EnvSecretStore(),
-    );
+    const primary = options.primarySecrets ?? new MemorySecretStore();
+    const secrets = new CompositeSecretStore(primary, new EnvSecretStore());
     const db = await PersistenceService.open({ dbPath: `${options.dataDir}/octus.db`, workerUrl: options.workerUrl });
     const core = new OctusCore(options, db, config, secrets);
+    core.primarySecrets = primary;
     await core.registry.ensureSeeded(core.gateway.manifests().map((m) => m.name));
     await core.settleInterrupted();
     return core;
@@ -469,6 +511,202 @@ export class OctusCore {
   async renameSession(sessionId: string, title: string): Promise<void> {
     await this.requireSession(sessionId);
     await this.db.exec("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", [title.trim() || "Untitled", now(), sessionId]);
+  }
+
+  /** Skills adjuntadas a mano con @, por run (se limpian al terminar). */
+  private readonly manualSkills = new Map<string, { projectId: string; names: string[] }>();
+
+  /**
+   * Secciones auto + manuales: las pedidas con @ se cargan completas aunque
+   * el ranking automático no las elija, y quedan registradas en el run.
+   */
+  private async skillSectionsWithManual(input: SkillPromptInput) {
+    const base = this.skills ? await this.skills.sectionsFor(input) : undefined;
+    const manual = this.manualSkills.get(input.runId);
+    if (!manual?.names.length || !this.skills) return base ?? { metadata: "", full: "", used: [] as string[] };
+    const enabled = await this.skills.resolveForRun(manual.projectId);
+    const byName = new Map(enabled.map((s) => [s.name, s]));
+    const full: string[] = [];
+    const used: string[] = [];
+    for (const name of manual.names) {
+      const record = byName.get(name);
+      if (!record) continue;
+      try {
+        full.push(this.skills.loadFullInstructions(record));
+        used.push(record.name);
+      } catch {
+        // Skill ilegible: se omite sin romper el run.
+      }
+    }
+    if (used.length === 0) return base ?? { metadata: "", full: "", used: [] as string[] };
+    const previous = await this.skills.skillsForRun(input.runId);
+    await this.skills.recordRun(input.runId, [...previous, ...used]);
+    return {
+      metadata: base?.metadata ?? "",
+      full: [base?.full ?? "", ...full].filter(Boolean).join("\n\n"),
+      used: [...(base?.used ?? []), ...used],
+    };
+  }
+
+  /**
+   * Auto-aprobación al entrar en build: si la sesión tiene exactamente una
+   * revisión presentada y pendiente, se aprueba aquí (acción del usuario al
+   * cambiar de perfil y pedir «procede»). Con varias, no se toca nada.
+   * Queda auditada como plan.approved con actor "user-auto-build".
+   */
+  private async maybeAutoApprovePendingPlan(session: Session): Promise<void> {
+    try {
+      const rows = await this.db.query<{ id: string; plan_id: string }>(
+        `SELECT pr.id AS id, pr.plan_id AS plan_id FROM plan_revisions pr
+         JOIN plans p ON p.id = pr.plan_id
+         WHERE p.session_id = ? AND pr.lifecycle = 'presented' AND pr.approval = 'pending'`,
+        [session.id],
+      );
+      if (rows.length !== 1) return;
+      const revisionId = rows[0]!.id;
+      // Si existe solicitud pendiente, se decide; si no, se aprueba directo (app).
+      const pending = await this.db.queryOne<{ id: string }>(
+        "SELECT id FROM approval_requests WHERE revision_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+        [revisionId],
+      );
+      if (pending) {
+        await this.plans.decideApproval(pending.id, "approved");
+      } else {
+        await this.plans.approveRevision(rows[0]!.plan_id, revisionId);
+      }
+    } catch {
+      // Nunca rompe el envío del mensaje: sin auto-aprobación el usuario decide.
+    }
+  }
+
+  /**
+   * Fija el run a la única revisión aprobada de la sesión (si hay justo una).
+   * Con varias aprobadas no se toca nada: el coordinador pregunta cuál usar.
+   * Sin ancla, plan_tasks falla y el coordinador lo hace todo directo.
+   */
+  private async maybeAnchorApprovedRevision(sessionId: string, runId: string): Promise<void> {
+    try {
+      const rows = await this.db.query<{ plan_id: string; revision_id: string }>(
+        `SELECT pr.plan_id AS plan_id, pr.id AS revision_id FROM plan_revisions pr JOIN plans p ON p.id = pr.plan_id WHERE p.session_id = ? AND pr.approval = 'approved' ORDER BY pr.approved_at ASC`,
+        [sessionId],
+      );
+      if (rows.length !== 1) return;
+      const revisionId = rows[0]!.revision_id;
+      await this.db.exec("UPDATE runs SET plan_revision_id = ? WHERE id = ?", [revisionId, runId]);
+      await this.db.exec("INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", [
+        `plan.anchor.${sessionId}`,
+        JSON.stringify({ revisionId, planId: rows[0]!.plan_id }),
+        now(),
+      ]);
+    } catch {
+      // Nunca rompe la creación del run: sin ancla el coordinador decide.
+    }
+  }
+
+  /** Último checkpoint de compactación de la sesión (para mostrarlo en el chat). */
+  async compactionInfo(sessionId: string): Promise<{ summary?: string; createdAt?: number }> {
+    await this.requireSession(sessionId);
+    const row = await this.db.queryOne<{ value: string }>("SELECT value FROM kv WHERE key = ?", [`compaction.session.${sessionId}`]).catch(() => null);
+    if (!row) return {};
+    try {
+      const parsed = JSON.parse(row.value) as { checkpoint?: string; createdAt?: number };
+      return { summary: typeof parsed.checkpoint === "string" && parsed.checkpoint ? parsed.checkpoint : undefined, createdAt: parsed.createdAt };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Compactación manual (`/compactation`): mismo camino que la automática
+   * (prompt estructurado, corte de 15k). El aviso compact:start/done viaja
+   * por onStream igual que en la automática.
+   */
+  async compactSessionNow(sessionId: string, onStream: (event: StreamEvent) => void): Promise<{ compacted: boolean }> {
+    await this.requireSession(sessionId);
+    const controller = new AbortController();
+    const compacted = await this.runtime.compactSessionNow(sessionId, {
+      signal: controller.signal,
+      correlationId: createId("cor"),
+      onStream,
+    });
+    return { compacted };
+  }
+
+  /**
+   * Agente oculto de títulos (estilo OpenOrch): tras la primera pregunta del
+   * usuario refina el título con el modelo de la sesión en segundo plano. El
+   * recorte del texto queda como fallback si no hay modelo o falla.
+   */
+  private async refineSessionTitle(sessionId: string, runId: string, instanceId: string, definitionId: string, text: string): Promise<void> {
+    const fallback = text.trim().slice(0, 60);
+    const session = await this.requireSession(sessionId).catch(() => undefined);
+    if (!session) return;
+    if (session.title !== fallback) return;
+    const definition = await this.registry.forProfile(session.profile).catch(() => undefined);
+    if (!definition) return;
+    let resolution: ReturnType<ModelRouter["resolve"]>;
+    try {
+      resolution = this.router.resolve({
+        session: session.model,
+        profileDefault: definition.defaultModel,
+        globalDefault: definition.defaultModel,
+      });
+    } catch {
+      return;
+    }
+    // Los proveedores fake-* solo existen en tests: refinar el título con
+    // ellos consumiría sus respuestas guionizadas y su uso registrado.
+    if (resolution.provider.id.startsWith("fake-")) return;
+    const effort = resolution.model.capabilities.reasoningEfforts.includes("low" as never) ? ("low" as const) : undefined;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    try {
+      let out = "";
+      const stream = this.router.generateStream(
+        { ...resolution, effort },
+        {
+          providerId: resolution.provider.id,
+          modelId: resolution.model.modelId,
+          effort,
+          instructions: "You generate short chat titles. Reply with ONLY the title, at most 6 words, no quotes, no punctuation at the end.",
+          messages: [{ role: "user", blocks: [{ type: "text", text: `Title this request:\n${text.slice(0, 500)}` }] }],
+          conversationId: sessionId,
+          metadata: { sessionId, runId, instanceId },
+        },
+        {
+          sessionId,
+          runId,
+          agentInstanceId: instanceId,
+          agentDefinitionId: definitionId,
+          providerId: resolution.provider.id,
+          modelId: resolution.model.modelId,
+          correlationId: createId("cor"),
+        },
+        controller.signal,
+      );
+      for await (const event of stream) {
+        if (event.type === "text.delta") out += event.delta;
+        if (event.type === "error") return;
+        if (event.type === "completed") break;
+        if (out.length > 200) break;
+      }
+      const title = out.replace(/["“”'\n\r]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+      if (title.length < 3) return;
+      const current = await this.requireSession(sessionId).catch(() => undefined);
+      if (!current || current.title !== fallback) return;
+      await this.db.exec("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", [title, now(), sessionId]);
+      const event = await this.events.append({
+        type: "session.updated",
+        aggregate: { kind: "session", id: sessionId },
+        correlationId: createId("cor"),
+        payload: { projectId: session.projectId },
+      });
+      this.bus.publish(event);
+    } catch {
+      // Fallback (recorte) ya visible: nada que hacer.
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async setSessionProfile(sessionId: string, profile: "plan" | "build"): Promise<void> {
@@ -594,7 +832,7 @@ export class OctusCore {
     sessionId: string,
     text: string,
     onStream?: (event: StreamEvent) => void,
-    opts?: { asNewRequest?: boolean; runId?: string },
+    opts?: { asNewRequest?: boolean; runId?: string; skills?: string[] },
   ): Promise<{ runId: string }> {
     const session = await this.requireSession(sessionId);
     const active = this.activeRuns.get(sessionId);
@@ -614,14 +852,20 @@ export class OctusCore {
       // Steering: el mensaje persiste y el runtime lo recoge en la frontera del paso.
       const only = [...active.keys()][0]!;
       await this.appendUserMessage(session, only, text);
+      if (opts?.skills?.length) this.manualSkills.set(only, { projectId: session.projectId, names: opts.skills });
       return { runId: only };
     }
     // Nueva solicitud independiente: nuevo run_id en la misma sesión y cronología.
     // Aprobación por texto: solo con una solicitud pendiente inequívoca (ADR-022).
     await this.maybeApproveFromText(session, text);
+    // Regla del usuario: cambiar a build y decir «procede»/«adelante» equivale a
+    // aprobar el plan presentado. Solo se auto-aprueba si hay UNA revisión
+    // pendiente en la sesión (con varias, decide el usuario).
+    if (session.profile === "build") await this.maybeAutoApprovePendingPlan(session);
     const timestamp = now();
     const runId = createId("run");
     const correlationId = createId("cor");
+    if (opts?.skills?.length) this.manualSkills.set(runId, { projectId: session.projectId, names: opts.skills });
     await this.db.exec("INSERT INTO runs (id, session_id, prompt, status, mode, created_at, updated_at) VALUES (?, ?, ?, 'planning', ?, ?, ?)", [
       runId,
       sessionId,
@@ -630,6 +874,10 @@ export class OctusCore {
       timestamp,
       timestamp,
     ]);
+    // Ancla exacta (sin auto-elegir si hay varias): con una sola revisión
+    // aprobada en la sesión, el run queda fijado a ella y plan_tasks puede
+    // delegar a subagentes. Sin esto el coordinador trabaja todo directo.
+    await this.maybeAnchorApprovedRevision(sessionId, runId);
     const definition = await this.registry.forProfile(session.profile);
     const instanceId = createId("ins");
     const snapshot = snapshotOf(definition);
@@ -654,6 +902,10 @@ export class OctusCore {
     await this.appendUserMessage(session, runId, text, instanceId);
     if (session.title === "New session" && text.trim()) {
       await this.renameSession(sessionId, text.trim().slice(0, 60));
+      // Agente oculto de títulos (estilo OpenOrch): refina el título en
+      // segundo plano con el modelo de la sesión; el recorte queda como
+      // fallback si no hay modelo o falla. Nunca bloquea el run.
+      void this.refineSessionTitle(sessionId, runId, instanceId, definition.id, text.trim()).catch(() => undefined);
     }
 
     const controller = new AbortController();
@@ -678,6 +930,7 @@ export class OctusCore {
       } catch {
         // El resultado final lo fija finish(); aquí solo se libera el turno.
       } finally {
+        this.manualSkills.delete(runId);
         if (this.activeRuns.get(sessionId)?.get(runId)) this.activeRuns.get(sessionId)!.delete(runId);
         await this.plans.settleRunRevisions(runId).catch(() => undefined);
         releaseTurn();
@@ -793,6 +1046,12 @@ export class OctusCore {
     return deliveries
       .map((d) => `[delivery ${d.definitionId} ${d.instanceId} ${d.status}]\n${d.summary.slice(0, 20000)}${d.error ? `\nError: ${d.error}` : ""}`)
       .join("\n\n");
+  }
+
+  /** Resume qué definición corre cada perfil (diagnóstico de seed rancia). */
+  async definitionSummary(): Promise<Array<{ id: string; promptVersion: number; tools: number; rules: number }>> {
+    const defs = await this.registry.list();
+    return defs.map((d) => ({ id: d.id, promptVersion: d.promptVersion, tools: d.tools.length, rules: d.permissionRules?.length ?? 0 }));
   }
 
   // ------------------------------------------------------------------ planes (solo app/usuario)
@@ -994,6 +1253,37 @@ export class OctusCore {
   }
 
   // ------------------------------------------------------ programadas (Todo workbench-chat-terminal/7)
+  private async inheritedRules(instanceId: string): Promise<PermissionRule[]> {
+    // Cadena de ancestros (raíz → padre): las reglas del coordinador se
+    // heredan al subagente; su techo de herramientas sigue siendo el suyo,
+    // así un explorer nunca gana `write` aunque herede el allow del padre.
+    const chain: string[] = [];
+    let current: string | undefined = instanceId;
+    for (let depth = 0; depth < 10 && current; depth++) {
+      const found: { parent_instance_id: string | null } | null = await this.db
+        .queryOne<{ parent_instance_id: string | null }>("SELECT parent_instance_id FROM agent_instances WHERE id = ?", [current])
+        .catch(() => null);
+      const parentOf: string | undefined = found?.parent_instance_id ?? undefined;
+      if (!parentOf) break;
+      chain.unshift(parentOf);
+      current = parentOf;
+    }
+    const inherited: PermissionRule[] = [];
+    for (const ancestorId of chain) {
+      const row = await this.db
+        .queryOne<{ definition_snapshot: string }>("SELECT definition_snapshot FROM agent_instances WHERE id = ?", [ancestorId])
+        .catch(() => undefined);
+      if (!row) continue;
+      try {
+        const snapshot = JSON.parse(String(row.definition_snapshot ?? "{}")) as Partial<import("@octus/shared").AgentDefinitionSnapshot>;
+        inherited.push(...(snapshot.permissionRules ?? []));
+      } catch {
+        // Snapshot corrupto: se ignora ese ancestro.
+      }
+    }
+    return inherited;
+  }
+
   async listSchedules(): Promise<ScheduledTask[]> {
     return this.schedules.list();
   }
@@ -1002,8 +1292,12 @@ export class OctusCore {
     return this.schedules.get(id);
   }
 
-  async createSchedule(input: { name: string; prompt: string; profile?: ScheduleProfile; cron: string; timezone?: string }): Promise<ScheduledTask> {
+  async createSchedule(input: { name: string; prompt: string; profile?: ScheduleProfile; cron: string; timezone?: string; once?: boolean; maxRuns?: number | null }): Promise<ScheduledTask> {
     return this.schedules.create(input);
+  }
+
+  async updateSchedule(id: string, patch: { name?: string; prompt?: string; profile?: ScheduleProfile; cron?: string; timezone?: string; once?: boolean; maxRuns?: number | null }): Promise<ScheduledTask> {
+    return this.schedules.update(id, patch);
   }
 
   async setScheduleEnabled(id: string, enabled: boolean): Promise<ScheduledTask> {
@@ -1590,8 +1884,23 @@ export class OctusCore {
     const out: ProviderDescriptor[] = [];
     for (const provider of this.router.list()) {
       const ref = secretRefForProvider(provider.id);
-      const configured = ref ? (await this.secrets.get(ref)) !== undefined : false;
-      out.push({ id: provider.id, displayName: provider.displayName, configured, models: provider.models() });
+      let configured = false;
+      let keyOrigin: ProviderDescriptor["keyOrigin"] = null;
+      if (ref) {
+        // Origen exacto: bóveda del SO primero, variable de entorno después.
+        const vault = this.primarySecrets ? await this.primarySecrets.get(ref).catch(() => undefined) : undefined;
+        if (vault !== undefined) {
+          configured = true;
+          keyOrigin = "vault";
+        } else {
+          const envVar = envVarForProvider(provider.id);
+          if (envVar && process.env[envVar]) {
+            configured = true;
+            keyOrigin = "env";
+          }
+        }
+      }
+      out.push({ id: provider.id, displayName: provider.displayName, configured, keyOrigin, models: provider.models() });
     }
     return out;
   }
@@ -1603,6 +1912,16 @@ export class OctusCore {
     // Default barato único (todo 9): al cargar una key, todas las definitions
     // comparten el modelo toolCall más barato según pricing.ts.
     await this.applyCheapestDefaultModel();
+    // Catálogo vivo automático: con la key ya guardada se traen los modelos
+    // disponibles de la API (best-effort; el guardado no falla por esto).
+    await this.refreshProviderCatalog(providerId).catch(() => undefined);
+  }
+
+  /** Refresca el catálogo de modelos de un proveedor (Meta / Go). */
+  async refreshProviderCatalog(providerId: string): Promise<{ ok: boolean; count?: number; error?: string }> {
+    if (providerId === "meta" && this.meta) return this.meta.refreshCatalog();
+    if (providerId === "opencode-go" && this.go) return this.go.refreshCatalog();
+    return { ok: false, error: `Provider '${providerId}' has no refreshable catalog` };
   }
 
   /** El toolCall más barato se aplica igual a todas las definitions. Sin

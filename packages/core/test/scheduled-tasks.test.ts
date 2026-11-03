@@ -5,7 +5,7 @@ import path from "node:path";
 import { ScheduledTasksManager, type ScheduleHooks } from "../src/scheduled/scheduled-tasks-manager.js";
 import { isValidCron, nextCronRun, parseCron } from "../src/scheduled/cron.js";
 import { isOctusError } from "../src/errors.js";
-import { makeTestCore, workspaceOf } from "./helpers.js";
+import { expectRejects, makeTestCore, workspaceOf } from "./helpers.js";
 
 /** Reloj falso controlable para el manager (sin timers reales). */
 function fakeClock(startMs: number) {
@@ -140,6 +140,60 @@ describe("ScheduledTasksManager con reloj falso", () => {
       expect(runs).toHaveLength(1);
       expect(runs[0]!.status).toBe("fired");
       expect(runs[0]!.sessionId).toBe("ses_stub_1");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("update edita y reprograma desde ahora", async () => {
+    const start = new Date(2026, 5, 15, 10, 0, 0).getTime();
+    const { t, clock, manager } = await makeManager(start);
+    try {
+      const created = await manager.create({ name: "x", prompt: "p", cron: "0 9 * * *" });
+      clock.advance(3_600_000);
+      const updated = await manager.update(created.id, { name: "y", cron: "0 18 * * *", maxRuns: 3 });
+      expect(updated.name).toBe("y");
+      expect(updated.cron).toBe("0 18 * * *");
+      expect(updated.maxRuns).toBe(3);
+      expect(updated.nextRunAt).toBeGreaterThan(clock.now());
+      await expectRejects(manager.update(created.id, { cron: "nope" }), /cron/);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("once se auto-elimina tras disparar", async () => {
+    const start = new Date(2026, 5, 15, 10, 0, 0).getTime();
+    const { t, clock, hooks, manager } = await makeManager(start);
+    try {
+      const created = await manager.create({ name: "una", prompt: "p", cron: "* * * * *", once: true });
+      expect(created.once).toBe(true);
+      clock.advance(61_000);
+      const tick = await manager.tickDue();
+      expect(tick.fired).toBe(1);
+      expect(hooks.sessions).toHaveLength(1);
+      await expectRejects(manager.get(created.id), /Schedule not found/);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("maxRuns desactiva tras N disparos", async () => {
+    const start = new Date(2026, 5, 15, 10, 0, 0).getTime();
+    const { t, clock, hooks, manager } = await makeManager(start);
+    try {
+      const created = await manager.create({ name: "dos", prompt: "p", cron: "* * * * *", maxRuns: 2 });
+      for (let i = 0; i < 2; i++) {
+        clock.advance(61_000);
+        for (const id of hooks.activeRuns) hooks.activeRuns.delete(id);
+        const tick = await manager.tickDue();
+        expect(tick.fired).toBe(1);
+      }
+      const after = await manager.get(created.id);
+      expect(after.enabled).toBe(false);
+      clock.advance(61_000);
+      const idle = await manager.tickDue();
+      expect(idle.fired).toBe(0);
     } finally {
       await t.cleanup();
     }

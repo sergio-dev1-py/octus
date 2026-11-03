@@ -71,7 +71,7 @@ function pg(): Page {
 }
 
 describe("SettingsView modal real (todo 4)", () => {
-  test("shell: overlay, dialogo Ajustes, X y 2 secciones con Providers", async () => {
+  test("shell: overlay, dialogo Ajustes, X y 6 secciones con Providers", async () => {
     await pg().goto(baseUrl, { waitUntil: "load" });
     expect(await pg().textContent(".oc-settings-title")).toBe("Ajustes");
     expect(await pg().getAttribute("#settings-modal", "role")).toBe("dialog");
@@ -81,18 +81,18 @@ describe("SettingsView modal real (todo 4)", () => {
     const nav = await pg().evaluate(() =>
       [...document.querySelectorAll(".oc-settings-nav button")].map((el) => el.textContent?.trim())
     );
-    expect(nav).toEqual(["Proveedores", "Agentes"]);
+    expect(nav).toEqual(["Proveedores", "Agentes", "Atajos", "Skills", "MCP", "Programadas"]);
     expect(await pg().getAttribute("#settings-nav-providers", "aria-selected")).toBe("true");
     expect(await pg().getAttribute("#settings-nav-agents", "aria-selected")).toBe("false");
+    expect(await pg().getAttribute("#settings-nav-shortcuts", "aria-selected")).toBe("false");
     // Panel inicial: el ProviderSettings real con 3 proveedores semilla.
     expect(await pg().textContent("#settings-panel")).toContain("Proveedor 1");
-    const shell = await pg().textContent("#settings-overlay");
+    const shell = await pg().textContent("#settings-panel");
     expect(shell).not.toContain("Budget");
-    expect(shell).not.toContain("Skills");
     expect(shell).not.toContain("Appearance");
   }, STEP_TIMEOUT_MS);
 
-  test("nav alterna Proveedores/Agentes con el componente real", async () => {
+  test("nav alterna secciones con el componente real", async () => {
     await pg().goto(baseUrl, { waitUntil: "load" });
     await pg().click("#settings-nav-agents");
     expect(await pg().getAttribute("#settings-nav-agents", "aria-selected")).toBe("true");
@@ -104,6 +104,20 @@ describe("SettingsView modal real (todo 4)", () => {
     await pg().click("#settings-nav-providers");
     expect(await pg().getAttribute("#settings-nav-providers", "aria-selected")).toBe("true");
     expect(await pg().textContent("#settings-panel")).toContain("Proveedor 1");
+    await pg().click("#settings-nav-shortcuts");
+    expect(await pg().getAttribute("#settings-nav-shortcuts", "aria-selected")).toBe("true");
+    const shortcuts = await pg().textContent("#settings-panel");
+    expect(shortcuts).toContain("Atajos de teclado");
+    expect(shortcuts).toContain("Ctrl+J");
+    await pg().click("#settings-nav-skills");
+    expect(await pg().getAttribute("#settings-nav-skills", "aria-selected")).toBe("true");
+    expect(await pg().textContent("#settings-panel")).toContain("Skills");
+    await pg().click("#settings-nav-mcp");
+    expect(await pg().getAttribute("#settings-nav-mcp", "aria-selected")).toBe("true");
+    expect(await pg().textContent("#settings-panel")).toContain("MCP");
+    await pg().click("#settings-nav-schedules");
+    expect(await pg().getAttribute("#settings-nav-schedules", "aria-selected")).toBe("true");
+    expect(await pg().textContent("#settings-panel")).toContain("Programadas");
   }, STEP_TIMEOUT_MS);
 
   test("X cierra via onClose real y desmonta el overlay", async () => {

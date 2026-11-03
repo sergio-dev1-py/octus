@@ -33,8 +33,10 @@ export interface ModelDescriptor {
 export interface ProviderDescriptor {
   id: string;
   displayName: string;
-  /** La UI solo ve este booleano, jamás la clave (ADR-009). */
+  /** La UI solo ve booleanos y origen, jamás la clave (ADR-009). */
   configured: boolean;
+  /** Dónde vive la key: bóveda del SO, variable de entorno o ausente. */
+  keyOrigin?: "vault" | "env" | null;
   models: ModelDescriptor[];
 }
 

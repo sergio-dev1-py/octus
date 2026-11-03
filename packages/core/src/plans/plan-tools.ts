@@ -43,12 +43,12 @@ const updateSchema = z.object({
 
 const getSchema = z.object({
   planId: z.string().min(1),
-  revisionId: z.string().min(1).optional().describe("Defaults to the current presented revision"),
+  revisionId: z.string().min(1).optional().describe("Id interno, 'vN' o número de versión. Defaults to the current presented revision"),
 });
 
 const requestApprovalSchema = z.object({
   planId: z.string().min(1),
-  revisionId: z.string().min(1),
+  revisionId: z.string().min(1).describe("Id interno, 'vN' o número (p. ej. 'v1'). Pedirla la presenta automáticamente si aún no lo está."),
 });
 
 export const planCreateTool: ToolDefinition = {
@@ -86,7 +86,7 @@ export const planUpdateTool: ToolDefinition = {
 export const planGetTool: ToolDefinition = {
   manifest: {
     name: "plan.get",
-    description: "Read a plan revision (defaults to current). Use the exact approved revision for implementation.",
+    description: "Read a plan revision by id, 'vN' or version number (defaults to current). Use the exact approved revision for implementation.",
     inputJsonSchema: toJsonSchema(getSchema),
     permissionAction: "plan.get",
   },
@@ -117,7 +117,7 @@ export const planListTool: ToolDefinition = {
 export const planRequestApprovalTool: ToolDefinition = {
   manifest: {
     name: "plan.request_approval",
-    description: "Ask the user to approve an exact presented revision. You cannot approve it yourself.",
+    description: "Ask the user to approve an exact presented revision (id, 'vN' or number). Requesting presents it if needed. You cannot approve it yourself.",
     inputJsonSchema: toJsonSchema(requestApprovalSchema),
     permissionAction: "plan.request_approval",
   },

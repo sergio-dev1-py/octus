@@ -174,6 +174,28 @@ export class PlanManager implements PlanToolService {
     return row ? deserializeRevision(row) : undefined;
   }
 
+  /**
+   * Resuelve una revisión por id interno (`prev_…`), versión (`"v3"` o `"3"`).
+   * Los modelos razonan en versiones; rechazar `"v1"` rompía el flujo de
+   * aprobación. El error lista las versiones disponibles del plan.
+   */
+  async resolveRevision(planId: string, ref: string): Promise<PlanRevision> {
+    const trimmed = ref.trim();
+    if (trimmed) {
+      const direct = await this.getRevision(trimmed);
+      if (direct && direct.planId === planId) return direct;
+    }
+    const match = /^v?(\d+)$/i.exec(trimmed);
+    if (match) {
+      const version = Number(match[1]);
+      const row = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM plan_revisions WHERE plan_id = ? AND version = ?", [planId, version]);
+      if (row) return deserializeRevision(row);
+    }
+    const revisions = await this.listRevisions(planId).catch(() => []);
+    const available = revisions.map((r) => `v${r.version}`).join(", ") || "(sin revisiones)";
+    throw new OctusError("not_found", `Revision '${ref}' not found in plan ${planId} (disponibles: ${available}; usa el id o "vN")`);
+  }
+
   /** Vincula una revisión a su mensaje presentador; solo avanza current_revision_id. */
   async presentRevision(revisionId: string, messageId: string): Promise<PlanRevision> {
     const revision = await this.getRevision(revisionId);
@@ -218,11 +240,16 @@ export class PlanManager implements PlanToolService {
     return { presented, orphaned };
   }
 
-  /** Solicitud de aprobación (idempotente por revisión pendiente). */
-  async requestApproval(planId: string, revisionId: string, sessionId: string, runId: string): Promise<ApprovalRequest> {
-    const revision = await this.getRevision(revisionId);
-    if (!revision || revision.planId !== planId) throw new OctusError("not_found", `Revision ${revisionId} not found in plan ${planId}`);
-    if (revision.lifecycle !== "presented") throw new OctusError("invalid_state", "Only a presented revision can be approved");
+  /** Solicitud de aprobación (idempotente por revisión pendiente).
+   *  Acepta id interno o versión ("vN"/"N"). Pedir aprobación implica
+   *  presentar: si la revisión sigue sin presentar, se presenta aquí mismo
+   *  en vez de fallar (antes el flujo moría con "unpresented"). */
+  async requestApproval(planId: string, revisionRef: string, sessionId: string, runId: string): Promise<ApprovalRequest> {
+    const revision = await this.resolveRevision(planId, revisionRef);
+    const revisionId = revision.id;
+    if (revision.lifecycle === "unpresented") {
+      await this.presentRevision(revisionId, `request:${runId}`);
+    }
     if (revision.approval !== "pending") throw new OctusError("invalid_state", `Revision is already ${revision.approval}`);
     const existing = await this.db.queryOne<Record<string, string | number | null>>(
       "SELECT * FROM approval_requests WHERE revision_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
@@ -389,9 +416,10 @@ export class PlanManager implements PlanToolService {
   async get(planId: string, revisionId?: string): Promise<string> {
     const plan = await this.requirePlan(planId);
     const revisions = await this.listRevisions(planId);
-    const target = revisionId ? revisions.find((r) => r.id === revisionId) : revisions.find((r) => r.id === plan.currentRevisionId) ?? revisions[revisions.length - 1];
-    if (!target) throw new OctusError("not_found", `No revision available for plan ${planId}`);
-    return formatRevision(plan, target);
+    const target = revisionId ? await this.resolveRevision(planId, revisionId).catch(() => undefined) : undefined;
+    const resolved = target ?? revisions.find((r) => r.id === plan.currentRevisionId) ?? revisions[revisions.length - 1];
+    if (!resolved) throw new OctusError("not_found", `No revision available for plan ${planId}`);
+    return formatRevision(plan, resolved);
   }
 
   async list(sessionId: string): Promise<string> {

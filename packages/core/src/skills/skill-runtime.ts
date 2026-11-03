@@ -138,6 +138,10 @@ export class SkillRuntime implements SkillSpawnGate {
     private readonly db: PersistenceService,
     private readonly manager: SkillManager,
     private readonly activation: SkillActivationStore,
+    /** Directorio de skills del proyecto (<root>/.octus/skills); ausente = solo global+managed. */
+    private readonly projectDirOf?: (projectId: string) => Promise<string | undefined> | string | undefined,
+    /** Instaladas (installer.list): fuera del discovery, entran igual si están habilitadas. */
+    private readonly installedList?: () => SkillRecord[],
   ) {}
 
   /**
@@ -146,7 +150,25 @@ export class SkillRuntime implements SkillSpawnGate {
    */
   async resolveForRun(projectId: string): Promise<SkillRecord[]> {
     const { skills } = this.manager.discover();
-    return this.activation.selectForRun(projectId, skills);
+    const viaGlobal = new Map(skills.map((s) => [s.name, s]));
+    // Instaladas por el agente o la UI (viven en installRoot, fuera del
+    // discovery): entran igual si están habilitadas en el proyecto.
+    for (const installed of this.installedList?.() ?? []) {
+      viaGlobal.set(installed.name, installed);
+    }
+    // Ámbito de proyecto (si el harness lo resuelve): se une al global+managed.
+    let projectDir: string | undefined;
+    try {
+      projectDir = (await this.projectDirOf?.(projectId)) ?? undefined;
+    } catch {
+      projectDir = undefined;
+    }
+    if (projectDir) {
+      const { skills: projectSkills } = this.manager.discover({ projectDir });
+      for (const s of projectSkills) viaGlobal.set(s.name, s);
+    }
+    const all = [...viaGlobal.values()];
+    return this.activation.selectForRun(projectId, all);
   }
 
   /** Selección por tarea: top-N relevantes con puntuación > 0 (determinista). */

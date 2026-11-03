@@ -15,6 +15,7 @@ files:
     filter:
       - package.json
 win:
+  icon: build/icons/icon.ico
   target:
     - nsis
     - portable

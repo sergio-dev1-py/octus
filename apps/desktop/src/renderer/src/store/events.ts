@@ -9,7 +9,7 @@ import {
   cancelReasonOf,
   purgeRunFrames,
 } from "../timeline.js";
-import { refreshSessions, refreshMessages, refreshPending, refreshUsage } from "./projects.js";
+import { refreshSessions, refreshMessages, refreshPending, refreshUsage, refreshCompactionSummary } from "./projects.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
 import { refreshRunDetail } from "./runs.js";
 import { refreshTasks } from "./tasks.js";
@@ -30,6 +30,19 @@ export function applyEvent(event: CoreEvent): void {
     return;
   }
   if (event.kind === "step.retry") {
+    if (typeof event.reason === "string" && event.reason.startsWith("compact:")) {
+      if (event.reason === "compact:start") {
+        setState("compactionNotice", "Compactando contexto… los agentes esperan a que termine (ventana reciente de 15k tokens)");
+        setState("compactionSummary", undefined);
+      } else if (event.reason === "compact:done") {
+        setState("compactionNotice", "Contexto compactado ✓ (ventana reciente de 15k tokens)");
+        void refreshCompactionSummary();
+      } else if (event.reason === "compact:failed") setState("compactionNotice", "La compactación falló; se continúa con la ventana actual");
+      return;
+    }
+    if (typeof event.reason === "string" && event.reason.includes("compact")) {
+      setState("compactionNotice", "Compactando contexto… (se conserva la ventana reciente de 15k tokens)");
+    }
     setState("live", applyStepRetry(state.live, event));
     return;
   }
@@ -73,6 +86,7 @@ export function applyEvent(event: CoreEvent): void {
     case "run.created":
     case "run.started":
       setState("busy", true);
+      setState("compactionNotice", undefined);
       break;
     case "run.status_changed":
       setState("busy", true);

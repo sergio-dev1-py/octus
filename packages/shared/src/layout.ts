@@ -14,7 +14,7 @@
 
 export type ActivityId = "explorer" | "chat" | "plans" | "agents" | "skills-mcp" | "settings";
 
-export type BottomTab = "terminal" | "problems" | "output" | "tests";
+export type BottomTab = "terminal";
 
 export interface WorkbenchLayout {
   activity: ActivityId;
@@ -33,7 +33,7 @@ export interface WorkbenchLayout {
 /** Clave `kv` del layout (mecanismo existente, clave nueva del Todo 8). */
 export const UI_LAYOUT_KEY = "ui.layout.v1";
 
-export const SIDEBAR_MIN = 200;
+export const SIDEBAR_MIN = 240;
 export const SIDEBAR_MAX = 480;
 export const INSPECTOR_MIN = 220;
 export const INSPECTOR_MAX = 480;
@@ -52,7 +52,7 @@ export const DEFAULT_LAYOUT: WorkbenchLayout = {
 };
 
 const ACTIVITIES: readonly ActivityId[] = ["explorer", "chat", "plans", "agents", "skills-mcp", "settings"];
-const BOTTOM_TABS: readonly BottomTab[] = ["terminal", "problems", "output", "tests"];
+const BOTTOM_TABS: readonly BottomTab[] = ["terminal"];
 
 export function isActivityId(value: unknown): value is ActivityId {
   return typeof value === "string" && (ACTIVITIES as readonly string[]).includes(value);

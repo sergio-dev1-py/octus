@@ -99,8 +99,9 @@ describe("agent runtime (end to end with fakes)", () => {
   });
 
   test("declined permission ends the run as failed with a clear error", async () => {
+    // Build auto-permite escritura normal; lo destructivo fuera del workspace pregunta.
     const t = await makeTestCore({
-      metaTurns: [{ toolCalls: [{ name: "write", args: { path: "x.txt", content: "x" } }] }],
+      metaTurns: [{ toolCalls: [{ name: "shell", args: { command: "del C:\\x.txt" } }] }],
     });
     try {
       const stop = autoAllow(t.core, "reject");
@@ -190,7 +191,7 @@ describe("agent runtime (end to end with fakes)", () => {
       }
       const { AgentRuntime } = await import("../src/runtime/agent-runtime.js");
       const runtime = new AgentRuntime(t.core.db, t.core.events, t.core.bus, t.core.router, t.core.gateway, t.core.context, {
-        compactionThresholdRatio: 0.004, // techo ~4200 tokens: base (~2700) cabe, base+historial (~5600) no
+        compactionThresholdRatio: 0.006, // techo ~6300 tokens: base (~5100) cabe, base+historial (~10700) no
         compactionKeepTokens: 120,
       });
       const result = await runtime.runInstance(instanceId, { signal: new AbortController().signal, correlationId: "cor_compact", onStream: () => undefined });

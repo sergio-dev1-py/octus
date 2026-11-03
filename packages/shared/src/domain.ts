@@ -776,6 +776,10 @@ export interface ScheduledTask {
   cron: string;
   /** Zona IANA o 'local'. */
   timezone: string;
+  /** Una sola ejecución: se elimina tras disparar. */
+  once: boolean;
+  /** Se desactiva sola tras N disparos (null = sin límite). */
+  maxRuns?: number | null;
   enabled: boolean;
   consecutiveFailures: number;
   nextRunAt: Milliseconds;

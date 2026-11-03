@@ -9,11 +9,11 @@ import type { ToolDefinition } from "../tools/tool-definitions.js";
 import { requireTasks } from "../tools/tool-services.js";
 
 const planTasksSchema = z.object({
-  runId: z.string().min(1).describe("Active run requesting the decomposition"),
-  objective: z.string().min(1).max(2000).describe("Goal to decompose (must stay within the approved revision)"),
+  runId: z.string().min(1).optional().describe("Active run id. Omit it: defaults to the current run."),
+  objective: z.string().min(1).max(2000).optional().describe("Goal to decompose. Omit it: defaults to the approved plan objective."),
   brief: z.string().max(8000).optional().describe("Extra context for the planner"),
-  planId: z.string().min(1).optional().describe("Explicit approved plan (required if the run is not pinned)"),
-  revisionId: z.string().min(1).optional().describe("Exact approved revision (required if the run is not pinned)"),
+  planId: z.string().min(1).optional().describe("Approved plan id. Omit it: resolved from the run anchor."),
+  revisionId: z.string().min(1).optional().describe("Exact approved revision. Omit it: resolved from the run anchor."),
   nonce: z.string().min(1).max(64).optional().describe("Explicit re-plan after a rejected planning"),
 });
 
@@ -38,10 +38,18 @@ export const planTasksTool: ToolDefinition = {
   },
   schema: planTasksSchema,
   async run(args, ctx) {
-    const parsed = args as { runId: string; objective: string; brief?: string; planId?: string; revisionId?: string; nonce?: string };
+    const parsed = args as { runId?: string; objective?: string; brief?: string; planId?: string; revisionId?: string; nonce?: string };
     const tasks = requireTasks(ctx.services);
-    const result = await tasks.plan({ runId: parsed.runId, objective: parsed.objective, brief: parsed.brief, planId: parsed.planId, revisionId: parsed.revisionId, nonce: parsed.nonce, coordinatorInstanceId: ctx.instanceId });
-    return { text: `Task DAG ${result.created ? "created" : "reused (idempotent)"}: planning ${result.planningId} with tasks ${result.taskIds.join(", ")}` };
+    const result = await tasks.plan({
+      runId: parsed.runId ?? ctx.runId,
+      objective: parsed.objective,
+      brief: parsed.brief,
+      planId: parsed.planId,
+      revisionId: parsed.revisionId,
+      nonce: parsed.nonce,
+      coordinatorInstanceId: ctx.instanceId,
+    });
+    return { text: `Task DAG ${result.created ? "created" : "reused (idempotent)"}: planning ${result.planningId} with tasks ${result.taskIds.join(", ")}. The scheduler now provisions worktrees and spawns the workers; supervise with agent_status/agent_wait.` };
   },
 };
 

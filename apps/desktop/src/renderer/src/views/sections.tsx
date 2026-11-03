@@ -33,6 +33,7 @@ import {
   rejectRevision,
   reloadIntegrations,
   reloadProviders,
+  reloadProviderModels,
   reloadWorktrees,
   requestConflictResolution,
   resolveMemoryConflict,
@@ -43,6 +44,7 @@ import {
   reconcileRecovery,
   reloadMemory,
   setError,
+  setState,
   spawnIntegrationReviewer,
   startPreview,
   state,
@@ -51,77 +53,132 @@ import {
 } from "../store.js";
 
 export function ProviderSettings() {
-  // Seccion Proveedores (plan octus-welcome-settings-theme, todo 5): titulo
-  // en espanol sin parentesis, fila compacta de botones en una sola fila,
-  // details Models(n). Al guardar, reloadProviders es el punto de enganche
-  // donde el todo 9 recalculara el default barato (aqui solo recarga).
+  // Activos (con key: punto verde, sin formulario de carga) y Disponibles
+  // (sin key: punto rojo + cargar key). El catálogo se actualiza solo al
+  // arrancar y al guardar cada key.
   const keys: Record<string, HTMLInputElement | undefined> = {};
+  const [notice, setNotice] = createSignal<string | undefined>(undefined);
+  const active = () => state.providers.filter((p) => p.configured);
+  const available = () => state.providers.filter((p) => !p.configured);
+  const dot = (on: boolean): string =>
+    on
+      ? "display:inline-block;flex-shrink:0;width:10px;height:10px;border-radius:9999px;background:var(--oc-success);"
+      : "display:inline-block;flex-shrink:0;width:10px;height:10px;border-radius:9999px;background:var(--oc-danger);";
+  const afterKeyChange = async (providerId: string) => {
+    const result = await invoke("providers.refreshCatalog", { providerId });
+    await reloadProviders();
+    const count = await reloadProviderModels(providerId);
+    setNotice(
+      result.ok
+        ? `${count ?? result.count ?? 0} modelos disponibles`
+        : (result.error ?? "No se pudo traer el catálogo"),
+    );
+  };
+  const removeKey = async (providerId: string) => {
+    await invoke("providers.removeKey", { providerId });
+    const next = { ...state.modelsByProvider };
+    delete next[providerId];
+    setState("modelsByProvider", next);
+    await reloadProviders();
+  };
+  const modelsOf = (providerId: string) =>
+    state.modelsByProvider[providerId] ?? state.providers.find((p) => p.id === providerId)?.models ?? [];
   return (
     <section>
       <h2>Proveedores</h2>
-      <For each={state.providers}>
-        {(provider) => (
-          <div class="card">
-            <h3>
-              {provider.displayName} {provider.configured ? <span class="pill ok">key saved</span> : <span class="pill warn">no key</span>}
-            </h3>
-            <div class="row oc-provider-actions">
-              <input ref={(el) => (keys[provider.id] = el)} type="password" placeholder="Paste API key" autocomplete="off" />
-              <button
-                class="primary"
-                onClick={() => {
-                  const value = keys[provider.id]?.value ?? "";
-                  if (!value.trim()) return;
-                  void (async () => {
-                    const result = await invoke("providers.setKey", { providerId: provider.id, apiKey: value });
-                    if (!result.ok) setError(result.error ?? "Could not save key");
-                    if (keys[provider.id]) keys[provider.id]!.value = "";
-                    await reloadProviders();
-                    // Hook point (todo 9): el recalculo del default barato corre
-                    // tras este reloadProviders; aqui no se implementa logica.
-                  })();
-                }}
-              >
-                Save key
-              </button>
-              <button
-                onClick={() => {
-                  void (async () => {
-                    await invoke("providers.removeKey", { providerId: provider.id });
-                    await reloadProviders();
-                  })();
-                }}
-              >
-                Remove
-              </button>
-              <button
-                onClick={() => {
-                  void (async () => {
-                    const result = await invoke("providers.test", { providerId: provider.id });
-                    setError(result.ok ? undefined : (result.error ?? "Connection failed"));
-                    if (result.ok) setError("Connection OK" as never);
-                  })();
-                }}
-              >
-                Test
-              </button>
+      <Show when={notice()}>
+        <p class="muted" role="status">{notice()}</p>
+      </Show>
+      <h3>Activos</h3>
+      <Show when={active().length > 0} fallback={<p class="muted">Sin proveedores activos. Carga una API abajo.</p>}>
+        <For each={active()}>
+          {(provider) => (
+            <div class="card">
+              <h3>
+                <span aria-hidden="true" style={dot(true)} title="Activo" /> {provider.displayName}
+              </h3>
+              <p class="muted">
+                {provider.keyOrigin === "env" ? "Key desde variable de entorno" : "Key guardada en este equipo"}
+              </p>
+              <Show when={provider.keyOrigin !== "env"}>
+                <div class="row">
+                  <button type="button" class="danger" title="Quitar la key (pasa a Disponibles)" onClick={() => void removeKey(provider.id)}>
+                    Quitar key
+                  </button>
+                </div>
+              </Show>
+              <details>
+                <summary>Models ({modelsOf(provider.id).length})</summary>
+                <ul>
+                  <For each={modelsOf(provider.id)}>
+                    {(model) => (
+                      <li>
+                        <code>{model.modelId}</code> — ctx {model.capabilities.maxContextTokens.toLocaleString()}, efforts:{" "}
+                        {model.capabilities.reasoningEfforts.join(", ") || "—"}
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
             </div>
-            <details>
-              <summary>Models ({provider.models.length})</summary>
-              <ul>
-                <For each={provider.models}>
-                  {(model) => (
-                    <li>
-                      <code>{model.modelId}</code> — ctx {model.capabilities.maxContextTokens.toLocaleString()}, efforts:{" "}
-                      {model.capabilities.reasoningEfforts.join(", ") || "—"}
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </details>
-          </div>
-        )}
-      </For>
+          )}
+        </For>
+      </Show>
+      <h3>Disponibles</h3>
+      <Show when={available().length > 0} fallback={<p class="muted">Todos los proveedores están activos.</p>}>
+        <For each={available()}>
+          {(provider) => (
+            <div class="card">
+              <h3>
+                <span aria-hidden="true" style={dot(false)} title="Sin key" /> {provider.displayName}
+              </h3>
+              <div class="row oc-provider-actions">
+                <input ref={(el) => (keys[provider.id] = el)} type="password" placeholder="Paste API key" autocomplete="off" />
+                <button
+                  class="primary"
+                  onClick={() => {
+                    const value = keys[provider.id]?.value ?? "";
+                    if (!value.trim()) return;
+                    void (async () => {
+                      const result = await invoke("providers.setKey", { providerId: provider.id, apiKey: value });
+                      if (!result.ok) setError(result.error ?? "Could not save key");
+                      if (keys[provider.id]) keys[provider.id]!.value = "";
+                      await reloadProviders();
+                      await afterKeyChange(provider.id);
+                    })();
+                  }}
+                >
+                  Save key
+                </button>
+                <button
+                  onClick={() => {
+                    void (async () => {
+                      const result = await invoke("providers.test", { providerId: provider.id });
+                      setError(result.ok ? undefined : (result.error ?? "Connection failed"));
+                      if (result.ok) setError("Connection OK" as never);
+                    })();
+                  }}
+                >
+                  Test
+                </button>
+              </div>
+              <details>
+                <summary>Models ({modelsOf(provider.id).length})</summary>
+                <ul>
+                  <For each={modelsOf(provider.id)}>
+                    {(model) => (
+                      <li>
+                        <code>{model.modelId}</code> — ctx {model.capabilities.maxContextTokens.toLocaleString()}, efforts:{" "}
+                        {model.capabilities.reasoningEfforts.join(", ") || "—"}
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </div>
+          )}
+        </For>
+      </Show>
     </section>
   );
 }

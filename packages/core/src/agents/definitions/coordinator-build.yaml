@@ -28,12 +28,60 @@ tools:
   - agent_cancel
   - plan.get
   - plan.list
+  - plan.create
+  - plan.update
+  - plan.request_approval
   - plan_tasks
   - record_review
   - memory_propose
   - memory_validate
+  - skill_install
 deniedTools: []
-permissionRules: []
+permissionRules:
+  # Perfil build: todo permitido dentro de su ámbito salvo lo destructivo
+  # (que siempre pregunta) y lo crítico (denegado en duro por shell-guard).
+  # La última regla que coincida gana; el deny de implementer sin asignación
+  # y los guardados del usuario siguen por encima al ir en capas posteriores.
+  - { action: write, resource: "*", effect: allow }
+  - { action: edit, resource: "*", effect: allow }
+  - { action: shell, resource: "*", effect: allow }
+  - { action: git_stage, resource: "*", effect: allow }
+  - { action: git_commit, resource: "*", effect: allow }
+  - { action: test_run, resource: "*", effect: allow }
+  - { action: skill_install, resource: "*", effect: allow }
+  # Borrados por shell: preguntan solo si salen del workspace (ruta absoluta,
+  # ".." o unidad). El borrado relativo dentro del proyecto va directo;
+  # lo crítico del sistema se deniega en duro por shell-guard.
+  - { action: shell, resource: "*del C:*", effect: ask }
+  - { action: shell, resource: "*DEL C:*", effect: ask }
+  - { action: shell, resource: "*del /*", effect: ask }
+  - { action: shell, resource: "*DEL /*", effect: ask }
+  - { action: shell, resource: "*del \\*", effect: ask }
+  - { action: shell, resource: "*del *..*", effect: ask }
+  - { action: shell, resource: "*DEL *..*", effect: ask }
+  - { action: shell, resource: "*erase *", effect: ask }
+  - { action: shell, resource: "*rmdir*", effect: ask }
+  - { action: shell, resource: "*RMDIR*", effect: ask }
+  - { action: shell, resource: "*rd /s*", effect: ask }
+  - { action: shell, resource: "*rm -rf*", effect: ask }
+  - { action: shell, resource: "*rm -r *", effect: ask }
+  - { action: shell, resource: "*Remove-Item*", effect: ask }
+  - { action: shell, resource: "*remove-item*", effect: ask }
+  - { action: shell, resource: "*format *", effect: ask }
+  - { action: shell, resource: "*FORMAT *", effect: ask }
+  - { action: shell, resource: "*diskpart*", effect: ask }
+  - { action: shell, resource: "*taskkill*", effect: ask }
+  - { action: shell, resource: "*TASKKILL*", effect: ask }
+  - { action: shell, resource: "*shutdown*", effect: ask }
+  - { action: shell, resource: "*restart-computer*", effect: ask }
+  - { action: shell, resource: "*Stop-Process*", effect: ask }
+  # Matar procesos propios del harness: denegado (shell-guard lo aplica en duro).
+  - { action: shell, resource: "*taskkill*node*", effect: deny }
+  - { action: shell, resource: "*taskkill*electron*", effect: deny }
+  - { action: shell, resource: "*taskkill*bun*", effect: deny }
+  - { action: shell, resource: "*pkill*node*", effect: deny }
+  - { action: shell, resource: "*killall*node*", effect: deny }
+  - { action: shell, resource: "*Stop-Process*node*", effect: deny }
 deliveryFormat: |
   What changed, what was verified with real output, and what remains.
   Never report success without verification.
@@ -42,16 +90,28 @@ canDelegateTo:
   - researcher
   - implementer
   - reviewer
-promptVersion: 2
+promptVersion: 7
 systemPrompt: |
   You are the session coordinator in BUILD profile.
   You execute the user's request: directly for small tasks, by delegating to
   specialized workers for larger or parallelizable work.
 
   Behavior:
-  - Prefer delegating independent units of work to subagents over doing everything yourself.
-  - Supervise workers: check their status, read their structured deliveries, ask for fixes.
+  - IF THIS RUN IS PINNED TO AN APPROVED PLAN REVISION (plan.list / plan.get show
+    approval=approved and your run is anchored), your FIRST action MUST be
+    plan_tasks with no arguments (runId/objective/planId/revisionId default to this
+    run and the approved plan). It creates the task DAG; the scheduler then provisions
+    one worktree per implementer task and spawns explorer/implementer/reviewer workers.
+    After that you ONLY supervise with agent_status/agent_wait/agent_result and report.
+    Do NOT edit or write files yourself in this run.
+  - If NO approved revision exists in this session, do NOT implement: call plan.create
+    with a concise structured plan (objective, steps, acceptance criteria), then
+    plan.request_approval, and STOP. The user approves it and sends the go-ahead.
+  - Parallel delegation: when you delegate directly, launch several background workers
+    in the SAME step (e.g. 2-3 explorers and 1 researcher) with non-overlapping briefs,
+    then agent_wait for all and consolidate once. Never repeat a brief already answered.
+  - Small single-file read-only checks may be done directly with read/glob/grep.
   - When implementing an approved plan, use exactly the approved revision the user selected.
   - If a request is ambiguous, ask the user with the question tool instead of guessing.
-  - After each change, verify it (read the file, run the relevant check) before reporting success.
+  - After a change, verify it (read the file, run the relevant check) before reporting success.
   - Report what changed, what was verified with real output, and what remains.

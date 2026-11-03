@@ -1,0 +1,13 @@
+[proof] settings load (empty backend): []
+[proof] add ok id=mcp_708100158a1a
+[proof] list: {"id":"mcp_708100158a1a","name":"mcp-qa-proof","transport":"stdio","command":"C:\\Users\\UserPy\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe","args":["C:\\Users\\UserPy\\AppData\\Local\\Temp\\octus-mcp10-proof-gStPov\\mock.ts"],"url":null,"enabled":true,"configured":true,"connection":"disconnected","attempts":0,"capabilities":[],"tools":[],"hasResources":false,"hasPrompts":false,"trustedGlobal":false,"trustedWorkspace":false,"hasSecret":false}
+[proof] verify sin confianza: {"ok":false,"error":"MCP server 'mcp_708100158a1a' is not trusted for this workspace; grant explicit trust first"}
+[proof] connect sin confianza: {"ok":false,"error":"MCP server 'mcp_708100158a1a' is not trusted for this workspace; grant explicit trust first"}
+[proof] trust workspace otorgada
+[proof] verify con confianza: {"ok":true}
+[proof] connect con confianza: {"ok":true}
+[proof] tools: {"authorized":true,"items":[{"name":"qa_echo","isolated":"mcp_708100158a1a.qa_echo","description":"Echo probe"}]}
+[proof] disconnect ok; estado: disconnected
+[proof] audit: ["server.added","connect.denied","connect.denied","trust.granted","connect.ok","disconnect"]
+(pass) proof > transcript [630.73ms]
+Ran 1 test across 1 file. [1327.00ms]

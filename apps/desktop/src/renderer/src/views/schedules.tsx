@@ -97,9 +97,7 @@ export function ScheduleHistory(props: { taskId: string }) {
   );
 }
 
-/** Ventana de configuración: crear una tarea programada (los canales del
- * todo 7 no tienen update: editar es eliminar + crear, así que el modal
- * solo crea; el toggle y el borrado viven en la lista). */
+/** Ventana de configuración rápida (la gestión completa vive en Ajustes › Programadas). */
 export function SchedulesModal() {
   const [name, setName] = createSignal("");
   const [prompt, setPrompt] = createSignal("");
@@ -116,6 +114,8 @@ export function SchedulesModal() {
       cron: cron(),
       timezone: timezone(),
       enabled: enabled(),
+      once: false,
+      maxRuns: null,
     };
     void createSchedule(input).then((ok) => {
       if (ok) {

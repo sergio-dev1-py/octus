@@ -57,6 +57,8 @@ interface ScheduleRow {
   profile: string;
   cron: string;
   timezone: string;
+  once: number;
+  max_runs: number | null;
   enabled: number;
   consecutive_failures: number;
   next_run_at: number;
@@ -74,6 +76,8 @@ function deserializeSchedule(row: ScheduleRow): ScheduledTask {
     profile: row.profile === "plan" ? "plan" : "build",
     cron: String(row.cron),
     timezone: String(row.timezone),
+    once: Number(row.once ?? 0) === 1,
+    ...(row.max_runs === null || row.max_runs === undefined ? {} : { maxRuns: Number(row.max_runs) }),
     enabled: Number(row.enabled) === 1,
     consecutiveFailures: Number(row.consecutive_failures),
     nextRunAt: Number(row.next_run_at),
@@ -135,7 +139,7 @@ export class ScheduledTasksManager {
     return deserializeSchedule(row);
   }
 
-  async create(input: { name: string; prompt: string; profile?: "plan" | "build"; cron: string; timezone?: string }): Promise<ScheduledTask> {
+  async create(input: { name: string; prompt: string; profile?: "plan" | "build"; cron: string; timezone?: string; once?: boolean; maxRuns?: number | null }): Promise<ScheduledTask> {
     const name = input.name?.trim() ?? "";
     const prompt = input.prompt?.trim() ?? "";
     if (!name) throw new OctusError("invalid_schedule", "schedule name is required");
@@ -145,6 +149,11 @@ export class ScheduledTasksManager {
     // El cron inválido se rechaza aquí (sintaxis y zona); también el que nunca dispara.
     parseCron(input.cron);
     const timezone = (input.timezone ?? "local").trim() || "local";
+    const once = input.once === true;
+    const maxRuns = input.maxRuns ?? null;
+    if (maxRuns !== null && (!Number.isInteger(maxRuns) || maxRuns < 1)) {
+      throw new OctusError("invalid_schedule", "maxRuns must be a positive integer");
+    }
     const ts = this.clock();
     const next = nextCronRun(input.cron, ts, timezone);
     if (next === null) throw new OctusError("invalid_cron", "cron never fires within a year");
@@ -152,10 +161,39 @@ export class ScheduledTasksManager {
     await this.hooks.ensureBase();
     const id = createId("sch");
     await this.db.exec(
-      "INSERT INTO scheduled_tasks (id, name, prompt, profile, cron, timezone, enabled, consecutive_failures, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)",
-      [id, name, prompt, profile, input.cron, timezone, next, ts, ts],
+      "INSERT INTO scheduled_tasks (id, name, prompt, profile, cron, timezone, once, max_runs, enabled, consecutive_failures, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)",
+      [id, name, prompt, profile, input.cron, timezone, once ? 1 : 0, maxRuns, next, ts, ts],
     );
     await this.publish("schedule.created", id, { name, cron: input.cron, timezone, nextRunAt: next });
+    return this.get(id);
+  }
+
+  /** Edita una tarea (nombre, prompt, perfil, cron, zona, once, maxRuns).
+   *  Revalida el cron y recalcula la próxima ejecución desde ahora. */
+  async update(id: string, patch: { name?: string; prompt?: string; profile?: "plan" | "build"; cron?: string; timezone?: string; once?: boolean; maxRuns?: number | null }): Promise<ScheduledTask> {
+    const current = await this.get(id);
+    const name = patch.name !== undefined ? patch.name.trim() : current.name;
+    const prompt = patch.prompt !== undefined ? patch.prompt.trim() : current.prompt;
+    if (!name) throw new OctusError("invalid_schedule", "schedule name is required");
+    if (!prompt) throw new OctusError("invalid_schedule", "schedule prompt is required");
+    const profile = patch.profile ?? current.profile;
+    if (profile !== "plan" && profile !== "build") throw new OctusError("invalid_schedule", "schedule profile must be 'plan' or 'build'");
+    const cron = patch.cron ?? current.cron;
+    const timezone = (patch.timezone ?? current.timezone).trim() || "local";
+    parseCron(cron);
+    const once = patch.once ?? current.once;
+    const maxRuns = patch.maxRuns !== undefined ? patch.maxRuns : (current.maxRuns ?? null);
+    if (maxRuns !== null && (!Number.isInteger(maxRuns) || maxRuns < 1)) {
+      throw new OctusError("invalid_schedule", "maxRuns must be a positive integer");
+    }
+    const ts = this.clock();
+    const next = nextCronRun(cron, ts, timezone);
+    if (next === null) throw new OctusError("invalid_cron", "cron never fires within a year");
+    await this.db.exec(
+      "UPDATE scheduled_tasks SET name = ?, prompt = ?, profile = ?, cron = ?, timezone = ?, once = ?, max_runs = ?, next_run_at = ?, updated_at = ? WHERE id = ?",
+      [name, prompt, profile, cron, timezone, once ? 1 : 0, maxRuns, next, ts, id],
+    );
+    await this.publish("schedule.updated", id, { name, cron });
     return this.get(id);
   }
 
@@ -266,7 +304,26 @@ export class ScheduledTasksManager {
       [id, task.id, opened.sessionId, started.runId, task.nextRunAt, ts, ts],
     );
     await this.advance(task, ts, { lastStatus: "fired", failures: 0 });
+    await this.enforceRunLimits(task.id);
     await this.publish("schedule.fired", task.id, { runId: started.runId, sessionId: opened.sessionId });
+  }
+
+  /** once → se elimina tras disparar; maxRuns → se desactiva al agotarse. */
+  private async enforceRunLimits(taskId: string): Promise<void> {
+    const task = await this.get(taskId).catch(() => undefined);
+    if (!task) return;
+    if (task.once) {
+      await this.db.exec("DELETE FROM scheduled_tasks WHERE id = ?", [taskId]);
+      await this.publish("schedule.removed", taskId, { reason: "once-fired" });
+      return;
+    }
+    if (task.maxRuns !== null && task.maxRuns !== undefined) {
+      const row = await this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM scheduled_runs WHERE task_id = ? AND status = 'fired'", [taskId]);
+      if ((row?.n ?? 0) >= task.maxRuns) {
+        await this.db.exec("UPDATE scheduled_tasks SET enabled = 0, updated_at = ? WHERE id = ?", [this.clock(), taskId]);
+        await this.publish("schedule.updated", taskId, { enabled: false, reason: "max-runs" });
+      }
+    }
   }
 
   private async recordSkip(task: ScheduledTask, ts: number): Promise<void> {

@@ -830,6 +830,11 @@ ALTER TABLE usage_records ADD COLUMN message_id TEXT;
 CREATE INDEX idx_usage_message ON usage_records(message_id);
 `;
 
+const MIGRATION_0011 = `
+-- Programadas editables + una-sola-vez + parar-tras-N.
+ALTER TABLE scheduled_tasks ADD COLUMN once INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE scheduled_tasks ADD COLUMN max_runs INTEGER;
+`;
 const MIGRATION_0010 = `
 -- Todo workbench-chat-terminal/7: tareas programadas (concepto aparte del DAG interno).
 -- next_run_at es solo-escritura del ScheduledTasksManager; el resto solo lee.
@@ -876,4 +881,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 8, name: "mcp-servers-trust-ux13", sql: MIGRATION_0008 },
   { version: 9, name: "usage-message-id-wbct4", sql: MIGRATION_0009 },
   { version: 10, name: "scheduled-tasks-wbct7", sql: MIGRATION_0010 },
+  { version: 11, name: "schedules-edit-once-maxruns", sql: MIGRATION_0011 },
 ];

@@ -76,13 +76,24 @@ export function footerForMessage(messageId: string, records: UsageRecord[]): Mes
   };
 }
 
-/** Linea del footer estilo screenshot: "7.3s 224.2k tok · $0.0123" o "unpriced". */
-export function formatMessageFooter(footer: MessageUsageFooter): string {
-  const seconds = (footer.durationMs / 1000).toFixed(1);
+/** Duración legible: "7.3s", "12m" o "1h 9m" (estilo opencode). */
+export function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  if (totalSeconds < 60) return `${(durationMs / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+/** Linea del footer por mensaje: "7.3s · 2 tools · 224.2k tok · $0.0123".
+ *  Sin toolCalls se conserva el formato anterior (compat con tests viejos). */
+export function formatMessageFooter(footer: MessageUsageFooter, toolCalls?: number): string {
   const total = footer.inputTokens + footer.outputTokens;
   const tokens = total >= 1000 ? `${(total / 1000).toFixed(1)}k tok` : `${total} tok`;
   const cost = footer.costMicroUsd === null ? "unpriced" : `$${(footer.costMicroUsd / 1_000_000).toFixed(4)}`;
-  return `${seconds}s ${tokens} · ${cost}`;
+  const tools = toolCalls === undefined ? "" : ` · ${toolCalls} tool${toolCalls === 1 ? "" : "s"}`;
+  return `${formatDuration(footer.durationMs)}${tools} · ${tokens} · ${cost}`;
 }
 
 

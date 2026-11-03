@@ -431,6 +431,27 @@ describe("skills runtime integration (Todo 23)", () => {
     }
   });
 
+  test("manual (@): las pedidas entran completas aunque el ranking no las elija", async () => {
+    const fx = fixtureDirs();
+    const t = await makeSkillsCore(fx.projectDir, [{ text: "ok manual" }]);
+    try {
+      const project = await t.core.createProject("P", t.workspace);
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      await t.core.skills!.enable(project.id, { name: "qa-skill", version: "1.0.0" });
+      await t.core.skills!.enable(project.id, { name: "other-skill", version: "2.0.0" });
+      // Texto irrelevante para las skills: el ranking automático no las elige.
+      const { runId } = await t.core.prompt(session.id, "hola mundo", undefined, { skills: ["other-skill", "ghost-skill"] });
+      await t.core.waitForIdle(session.id);
+      const instructions = String(t.fakeMeta.seen[0]?.instructions ?? "");
+      expect(instructions).toContain(OTHER_BODY_MARK);
+      expect(await t.core.skills!.skillsForRun(runId)).toContain("other-skill");
+    } finally {
+      await t.cleanup();
+      fx.cleanup();
+    }
+  });
+
   test("activar/seleccionar/registrar nunca otorga permisos de herramientas", async () => {
     const fx = fixtureDirs();
     const tmp = mkdtempSync(path.join(tmpdir(), "octus-qa-23-t7-"));
@@ -458,11 +479,13 @@ describe("skills runtime integration (Todo 23)", () => {
     }
   });
 
-  test("sin skillsDirs el núcleo no cambia (skills ausente, spawn con skills se niega)", async () => {
+  test("sin skills habilitadas el spawn con skills se niega", async () => {
     const { makeTestCore, workspaceOf } = await import("./helpers.js");
     const t = await makeTestCore();
     try {
-      expect(t.core.skills).toBeUndefined();
+      // El runtime existe siempre (global+managed), pero sin habilidades
+      // habilitadas el spawn con skills se niega.
+      expect(t.core.skills).toBeDefined();
       const project = await t.core.createProject("P", workspaceOf(t));
       const session = await t.core.createSession({ projectId: project.id });
       const { makeRun } = await import("./helpers.js");
@@ -476,7 +499,7 @@ describe("skills runtime integration (Todo 23)", () => {
           model: { providerId: "fake-meta", modelId: "muse-wonder-1.0" },
           skillNames: ["qa-skill"],
         }),
-        "sin puerta de autorización",
+        "no habilitada",
       );
     } finally {
       await t.cleanup();

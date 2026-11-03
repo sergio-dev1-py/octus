@@ -100,6 +100,36 @@ describe("continuous plan/build conversation (scenario C)", () => {
     }
   });
 
+  test("run nuevo hereda la única revisión aprobada (ancla para plan_tasks)", async () => {
+    const t = await makeTestCore({ metaTurns: [{ text: "ok" }] });
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const structured = { objective: "X", steps: [{ title: "S1" }], acceptanceCriteria: ["done"] };
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "X", structured, runId: "r", createdBy: "t" });
+      const v1 = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(v1.id, "msg_seed");
+      await t.core.plans.approveRevision(plan.id, v1.id);
+      const { runId } = await t.core.prompt(session.id, "implements");
+      await t.core.waitForIdle(session.id);
+      const { run } = await t.core.getRun(runId);
+      expect(run.planRevisionId).toBe(v1.id);
+      // Con dos aprobadas no se ancla: el coordinador debe preguntar.
+      const structured2 = { objective: "Y", steps: [{ title: "S2" }], acceptanceCriteria: ["done"] };
+      const second = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "Y", structured: structured2, runId: "r2", createdBy: "t" });
+      const w1 = (await t.core.plans.listRevisions(second.plan.id))[0]!;
+      await t.core.plans.presentRevision(w1.id, "msg_seed");
+      await t.core.plans.approveRevision(second.plan.id, w1.id);
+      const next = await t.core.prompt(session.id, "sigue");
+      await t.core.waitForIdle(session.id);
+      const { run: run2 } = await t.core.getRun(next.runId);
+      expect(run2.planRevisionId ?? null).toBe(null);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("only explicitly approved project files become trusted instructions", async () => {
     const t = await makeTestCore();
     try {

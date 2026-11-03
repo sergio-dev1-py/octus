@@ -1,19 +1,24 @@
-/** Renderer/views — panel de terminal persistente (Todo 6, workbench-chat-terminal):
- *  xterm.js + FitAddon como superficie interactiva, contrato IPC BYTE-IDENTICO
- *  al pre+botones anterior (create/list/write/read/resize/kill/close/select +
- *  TERMINAL_DATA_CHANNEL, seq-gap resync append-only, resize con debounce,
- *  scrollback 2000). Entrada directa de teclado via term.onData: sin botones
- *  Enviar/Cancelar. Nota: el render <pre> previo se elimina (sin fallback);
- *  el historial completo se recupera por terminal.read al (re)montar. */
+/** Renderer/views — terminal persistente estilo VSCode (una sola pestaña
+ *  "Terminal" + selector de shell + acciones). Shells detectadas del sistema
+ *  vía terminal.shells; el CWD se fija al directorio de la sesión activa al
+ *  crearla (cambiar de proyecto no mueve las abiertas, solo las nuevas).
+ *  xterm.js + FitAddon, IPC BYTE-IDENTICO al anterior (create/list/write/
+ *  read/resize/kill/close/select + TERMINAL_DATA_CHANNEL, seq-gap resync
+ *  append-only, resize con debounce, scrollback 2000). Entrada directa de
+ *  teclado via term.onData.
+ */
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
-import type { TerminalChunk, TerminalInfo } from "@octus/shared";
+import type { TerminalChunk, TerminalInfo, TerminalShell } from "@octus/shared";
 import { invoke } from "../api.js";
+import { OcIcon } from "../components/oc.jsx";
+import { state, toggleBottomPanel } from "../store.js";
 
 const SCROLLBACK_LINES = 2000;
 const RESIZE_DEBOUNCE_MS = 150;
+const SHELL_PREF_KEY = "octus.terminal.shell";
 
 /** Lee un token de diseno para tematizar xterm sin literales propios. */
 function cssToken(name: string, fallback: string): string {
@@ -25,11 +30,20 @@ function cssToken(name: string, fallback: string): string {
   }
 }
 
+function storedShell(): string | undefined {
+  try {
+    return localStorage.getItem(SHELL_PREF_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function TerminalPanel(props: { projectId: string | undefined; projectRoot: string }) {
   const [terminals, setTerminals] = createSignal<TerminalInfo[]>([]);
   const [activeId, setActiveId] = createSignal<string | undefined>(undefined);
   const [notice, setNotice] = createSignal<string | undefined>(undefined);
-  const [name, setName] = createSignal("terminal");
+  const [shells, setShells] = createSignal<TerminalShell[]>([]);
+  const [shellId, setShellId] = createSignal<string | undefined>(storedShell());
   let hostRef: HTMLDivElement | undefined;
   let term: Terminal | undefined;
   let fit: FitAddon | undefined;
@@ -54,6 +68,7 @@ export function TerminalPanel(props: { projectId: string | undefined; projectRoo
   }
 
   const active = () => terminals().find((t) => t.id === activeId()) ?? terminals().find((t) => t.active);
+  const sessionDir = () => state.sessions.find((s) => s.id === state.activeSessionId)?.directory ?? props.projectRoot;
 
   function appendChunk(chunk: TerminalChunk): void {
     // Dedup streaming vs polling: sin este filtro un chunk puede pintarse
@@ -112,9 +127,12 @@ export function TerminalPanel(props: { projectId: string | undefined; projectRoo
     if (!props.projectId) return;
     try {
       const proposed = fit?.proposeDimensions();
+      const shell = shells().find((s) => s.id === shellId()) ?? shells()[0];
       const out = await invoke("terminal.create", {
         projectId: props.projectId,
-        name: name().trim() || "terminal",
+        name: shell?.name ?? "terminal",
+        shellId: shell?.id,
+        cwd: sessionDir(),
         ...(proposed ? { cols: proposed.cols, rows: proposed.rows } : {}),
       });
       if (!out.ok || !out.terminal) {
@@ -187,6 +205,16 @@ export function TerminalPanel(props: { projectId: string | undefined; projectRoo
     }
   }
 
+  function chooseShell(id: string): void {
+    setShellId(id || undefined);
+    try {
+      if (id) localStorage.setItem(SHELL_PREF_KEY, id);
+      else localStorage.removeItem(SHELL_PREF_KEY);
+    } catch {
+      // Sin almacenamiento: la preferencia solo vive en memoria.
+    }
+  }
+
   function scheduleResize(): void {
     if (resizeTimer !== undefined) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
@@ -220,6 +248,11 @@ export function TerminalPanel(props: { projectId: string | undefined; projectRoo
   }
 
   onMount(() => {
+    void invoke("terminal.shells", {}).then(({ shells: list }) => {
+      if (disposed) return;
+      setShells(list);
+      if (!shellId() && list[0]) setShellId(list[0].id);
+    }).catch(() => undefined);
     const host = hostRef;
     if (!host) {
       setNotice("terminal host missing");
@@ -228,7 +261,7 @@ export function TerminalPanel(props: { projectId: string | undefined; projectRoo
     const addon = new FitAddon();
     const instance = new Terminal({
       scrollback: SCROLLBACK_LINES,
-      convertEol: false,
+      convertEol: true,
       cursorBlink: true,
       fontFamily: cssToken("--oc-font-mono", "Consolas, monospace"),
       fontSize: Number.parseFloat(cssToken("--oc-text-sm", "13px")) || 13,
@@ -289,31 +322,61 @@ export function TerminalPanel(props: { projectId: string | undefined; projectRoo
   });
 
   return (
-    <div id="terminal-panel" aria-label="Terminal persistente">
-      <div class="row" role="tablist" aria-label="Terminales">
-        <For each={terminals()}>{(t) => <button type="button" data-terminal-id={t.id} aria-selected={t.id === active()?.id} class={t.id === active()?.id ? "active" : ""} onClick={() => void pick(t.id)}>{t.name} ({t.status})</button>}</For>
-        <input id="terminal-name" value={name()} onInput={(e) => setName(e.currentTarget.value)} placeholder="nombre" aria-label="Nombre de la terminal" />
-        <button type="button" id="terminal-create" class="primary" disabled={!props.projectId} onClick={() => void createTerminal()}>
-          Nueva terminal
+    <div id="terminal-panel" aria-label="Terminal">
+      <div class="term-bar" role="tablist" aria-label="Terminal">
+        <span class="term-tab active" role="tab" aria-selected="true">Terminal</span>
+        <select
+          id="terminal-shell"
+          class="term-shell"
+          aria-label="Tipo de terminal"
+          title="Tipo de terminal"
+          value={shellId() ?? ""}
+          onChange={(event) => chooseShell(event.currentTarget.value)}
+        >
+          <Show when={shells().length > 0} fallback={<option value="">shell…</option>}>
+            <For each={shells()}>{(shell) => <option value={shell.id}>{shell.name}</option>}</For>
+          </Show>
+        </select>
+        <span class="ab-spacer" />
+        <Show when={terminals().length > 1}>
+          <div class="term-tabs" aria-label="Terminales abiertas">
+            <For each={terminals()}>
+              {(t) => (
+                <button
+                  type="button"
+                  data-terminal-id={t.id}
+                  aria-selected={t.id === active()?.id}
+                  class={t.id === active()?.id ? "term-chip active" : "term-chip"}
+                  title={`${t.name} · ${t.status}`}
+                  onClick={() => void pick(t.id)}
+                >
+                  {t.name}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+        <button type="button" id="terminal-create" class="icon-button" title="Nueva terminal" aria-label="Nueva terminal" disabled={!props.projectId} onClick={() => void createTerminal()}>
+          +
+        </button>
+        <button type="button" id="terminal-close" class="icon-button" title="Cerrar terminal" aria-label="Cerrar terminal" disabled={!active()} onClick={() => void closeActive()}>
+          <OcIcon name="trash" />
+        </button>
+        <Show when={active()?.status === "exited"}>
+          <button type="button" id="terminal-restart" class="term-restart" title="Reiniciar shell" onClick={() => void killActive()}>
+            Reiniciar
+          </button>
+        </Show>
+        <button type="button" id="terminal-hide" class="icon-button" title="Ocultar terminal" aria-label="Ocultar terminal" onClick={() => void toggleBottomPanel()}>
+          ×
         </button>
       </div>
       <Show when={notice()}>
         <p class="error" role="alert">{notice()}</p>
       </Show>
       <div id="terminal-xterm-host" ref={(el) => (hostRef = el)} hidden={!active()} aria-label="Terminal interactiva" onClick={() => term?.focus()} />
-      <Show when={active()} fallback={<p class="muted">Sin terminales. Crea una para trabajar en <code>{props.projectRoot}</code>.</p>}>
-        <p class="muted" aria-live="polite">
-          {active()?.name} · {active()?.status}
-          <Show when={active()?.status === "exited"}> · exit {active()?.exitCode ?? "?"} — pulsa Reiniciar para reabrir el shell</Show>
-        </p>
-        <div class="row">
-          <button type="button" id="terminal-kill" onClick={() => void killActive()}>
-            Reiniciar
-          </button>
-          <button type="button" id="terminal-close" onClick={() => void closeActive()}>
-            Cerrar terminal
-          </button>
-        </div>
+      <Show when={!active()}>
+        <p class="muted">Sin terminales. Elige el tipo y pulsa + para abrir una en <code>{sessionDir()}</code>.</p>
       </Show>
     </div>
   );

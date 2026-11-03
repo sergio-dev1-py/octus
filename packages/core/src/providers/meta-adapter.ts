@@ -51,6 +51,12 @@ const SPARK: ModelDescriptor = {
   },
 };
 
+/** Niveles de razonamiento verificados por modelo (la API no siempre los declara).
+ *  Sin entrada aquí y sin metadatos de la API se ofrece el set completo. */
+const KNOWN_MODEL_EFFORTS: Record<string, ReasoningEffort[]> = {
+  "muse-spark-1.3-contributor": ["minimal", "low", "medium", "high", "xhigh"],
+};
+
 export interface MetaAdapterOptions {
   baseURL?: string;
   getApiKey: () => Promise<string | undefined>;
@@ -64,6 +70,8 @@ export class MetaAdapter implements ModelProvider {
   private readonly transport: ResponsesTransport;
   private readonly baseURL: string;
   private readonly getApiKey: () => Promise<string | undefined>;
+  /** Catálogo vivo de la API (refreshCatalog); sin él, los 2 fijos. */
+  private table: ModelDescriptor[] | undefined;
 
   constructor(options: MetaAdapterOptions) {
     this.baseURL = options.baseURL ?? META_BASE_URL;
@@ -77,7 +85,54 @@ export class MetaAdapter implements ModelProvider {
   }
 
   models(): ModelDescriptor[] {
-    return [WONDER, SPARK];
+    return this.table ?? [WONDER, SPARK];
+  }
+
+  /**
+   * Catálogo vivo: GET /models con la key guardada (estilo OpenAI
+   * `{data:[...]}`). Entradas defensivas: los conocidos WONDER/SPARK se
+   * conservan con sus capacidades verificadas; el resto entra con valores
+   * conservadores y el set completo de esfuerzos salvo que la API declare
+   * otros. Sin key o sin red, se conserva lo anterior (nunca se vacía).
+   */
+  async refreshCatalog(): Promise<{ ok: boolean; count?: number; error?: string }> {
+    try {
+      const apiKey = await this.getApiKey();
+      if (!apiKey) return { ok: false, error: "No API key saved" };
+      const res = await fetch(`${this.baseURL}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+      const body = (await res.json()) as { data?: Array<Record<string, unknown>> };
+      const entries: ModelDescriptor[] = [];
+      for (const item of body.data ?? []) {
+        if (typeof item.id !== "string" || !item.id) continue;
+        if (item.id === WONDER.modelId) {
+          entries.push(WONDER);
+          continue;
+        }
+        if (item.id === SPARK.modelId) {
+          entries.push(SPARK);
+          continue;
+        }
+        entries.push({
+          providerId: "meta",
+          modelId: item.id,
+          displayName: typeof item.name === "string" ? item.name : item.id,
+          capabilities: {
+            toolCall: (item.capabilities as { tools?: { supported?: boolean } } | undefined)?.tools?.supported ?? true,
+            reasoningEfforts: parseEfforts(item),
+            maxContextTokens: num(item.limit, item.context_window, item.max_context_length, item.context_length) ?? 131_072,
+            maxOutputTokens: num(item.limit, item.max_output_tokens, item.output_length) ?? 8192,
+            supportsImages: modalitiesIncludeImage(item.modalities),
+            pricingSource: `${this.baseURL}/models`,
+            pricingDate: new Date().toISOString().slice(0, 10),
+          },
+        });
+      }
+      if (entries.length > 0) this.table = entries;
+      return { ok: true, count: entries.length };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   capabilitiesOf(modelId: string): ModelCapabilities | undefined {
@@ -115,19 +170,48 @@ export class MetaAdapter implements ModelProvider {
     yield* this.transport.generateStream(input, signal);
   }
 
-  /** Prueba de conexión: lista modelos con la clave (no genera coste de generación). */
+  /** Prueba de conexión: lista modelos con la clave (refresca el catálogo). */
   async test(): Promise<{ ok: boolean; error?: string; models?: number }> {
-    const apiKey = await this.getApiKey();
-    if (!apiKey) return { ok: false, error: "no API key configured" };
-    try {
-      const res = await fetch(`${this.baseURL}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
-      if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-      const body = (await res.json()) as { data?: unknown[] };
-      return { ok: true, models: body.data?.length ?? 0 };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    const refreshed = await this.refreshCatalog();
+    if (!refreshed.ok) return { ok: false, error: refreshed.error };
+    return { ok: true, models: refreshed.count ?? 0 };
+  }
+}
+
+const KNOWN_EFFORTS: ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+function num(...candidates: unknown[]): number | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) return Math.floor(candidate);
+    if (candidate !== null && typeof candidate === "object") {
+      const nested = candidate as Record<string, unknown>;
+      for (const key of ["context", "output", "input"]) {
+        const value = nested[key];
+        if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.floor(value);
+      }
     }
   }
+  return undefined;
+}
+
+function parseEfforts(item: Record<string, unknown>): ReasoningEffort[] {
+  const caps = item.capabilities as { reasoning?: { supported?: boolean; effort?: unknown }; effort?: unknown } | undefined;
+  const raw = caps?.reasoning?.effort ?? caps?.effort ?? item.reasoning_options ?? item.effort_options;
+  if (Array.isArray(raw)) {
+    const efforts = raw.filter((e): e is ReasoningEffort => typeof e === "string" && (KNOWN_EFFORTS as string[]).includes(e));
+    if (efforts.length > 0) return efforts;
+  }
+  const curated = typeof item.id === "string" ? KNOWN_MODEL_EFFORTS[item.id] : undefined;
+  if (curated) return [...curated];
+  return [...KNOWN_EFFORTS];
+}
+
+function modalitiesIncludeImage(modalities: unknown): boolean {
+  if (modalities !== null && typeof modalities === "object") {
+    const values = Object.values(modalities as Record<string, unknown>).flat();
+    if (values.some((m) => typeof m === "string" && m.toLowerCase().includes("image"))) return true;
+  }
+  return false;
 }
 
 function effortAllowed(caps: ModelCapabilities, effort: ReasoningEffort | undefined): boolean {

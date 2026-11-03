@@ -37,6 +37,7 @@ Behavior:
 
 export const COMPACTION_PROMPT = `Summarize the older part of this coding-assistant conversation into a compact checkpoint
 so work can continue without the original messages. Write like a handoff note between engineers.
+Target: the checkpoint plus the kept recent window (~15k tokens) must let the next model continue with zero re-reads.
 
 Structure (use exactly these headers, skip empty ones):
 ## Objective
@@ -47,6 +48,8 @@ Structure (use exactly these headers, skip empty ones):
 ## Next move
 
 Rules:
-- Preserve exact file paths, symbol names, commands and pending questions verbatim.
+- Preserve exact file paths, symbol names, commands, test outputs, error text and pending questions verbatim.
+- Preserve acceptance criteria, plan revision ids, task ids, worktree paths/branches and commit hashes when present.
 - Describe state, not process. No new questions, no offers, no preamble.
+- No invented facts: if something is unknown, say so under Important context.
 - Keep it dense: every sentence must carry information needed to continue the work.`;

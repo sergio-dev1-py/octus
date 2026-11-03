@@ -1,6 +1,6 @@
 /** Todo workbench-chat-terminal/4: footer puro por mensaje (helper + flujo). */
 import { describe, expect, test } from "bun:test";
-import { footerForMessage, formatMessageFooter, type UsageRecord } from "../src/costs.js";
+import { footerForMessage, formatDuration, formatMessageFooter, type UsageRecord } from "../src/costs.js";
 
 function record(overrides: Partial<UsageRecord> & { id: string }): UsageRecord {
   return {
@@ -65,8 +65,16 @@ describe("footerForMessage", () => {
     const priced = footerForMessage("msg_a", [
       record({ id: "u1", messageId: "msg_a", inputTokens: 200000, outputTokens: 24200, durationMs: 7300, costMicroUsd: 12300 }),
     ])!;
-    expect(formatMessageFooter(priced)).toBe("7.3s 224.2k tok · $0.0123");
+    expect(formatMessageFooter(priced)).toBe("7.3s · 224.2k tok · $0.0123");
+    expect(formatMessageFooter(priced, 2)).toBe("7.3s · 2 tools · 224.2k tok · $0.0123");
+    expect(formatMessageFooter(priced, 1)).toBe("7.3s · 1 tool · 224.2k tok · $0.0123");
     const unpriced = footerForMessage("msg_a", [record({ id: "u2", messageId: "msg_a", costMicroUsd: null, pricingMissing: true })])!;
     expect(formatMessageFooter(unpriced)).toContain("unpriced");
+  });
+
+  test("formats long durations like opencode (minutes and hours)", () => {
+    expect(formatDuration(7300)).toBe("7.3s");
+    expect(formatDuration(12 * 60 * 1000)).toBe("12m");
+    expect(formatDuration((69 * 60 + 24) * 1000)).toBe("1h 9m");
   });
 });

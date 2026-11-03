@@ -87,6 +87,8 @@ export interface ScheduleFormInput {
   cron: string;
   timezone: string;
   enabled: boolean;
+  once: boolean;
+  maxRuns?: number | null;
 }
 
 /** null si el formulario puede enviarse; motivo visible (primer fallo) si no. */
@@ -161,12 +163,15 @@ export async function createSchedule(input: ScheduleFormInput): Promise<boolean>
   setSchedulesState("saving", true);
   try {
     const timezone = input.timezone.trim() === "" ? undefined : input.timezone.trim();
+    const maxRuns = input.maxRuns ?? null;
     const result = await invoke("schedules.create", {
       name: input.name.trim(),
       prompt: input.prompt.trim(),
       profile: input.profile,
       cron: input.cron.trim(),
       timezone,
+      once: input.once,
+      maxRuns,
     });
     if (!result.ok) {
       setSchedulesState("formError", result.error ?? "No se pudo crear la tarea programada.");
@@ -202,6 +207,25 @@ export async function setScheduleEnabled(id: string, enabled: boolean): Promise<
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error));
     return false;
+  }
+}
+
+export async function updateSchedule(id: string, patch: { name?: string; prompt?: string; profile?: ScheduleProfile; cron?: string; timezone?: string; once?: boolean; maxRuns?: number | null }): Promise<boolean> {
+  setSchedulesState("saving", true);
+  try {
+    const result = await invoke("schedules.update", { id, ...patch });
+    if (!result.ok) {
+      setSchedulesState("formError", result.error ?? "No se pudo guardar la tarea.");
+      return false;
+    }
+    setSchedulesState("formError", undefined);
+    await refreshSchedules();
+    return true;
+  } catch (error) {
+    setSchedulesState("formError", error instanceof Error ? error.message : String(error));
+    return false;
+  } finally {
+    setSchedulesState("saving", false);
   }
 }
 

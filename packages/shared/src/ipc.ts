@@ -56,6 +56,8 @@ export const IPC_EVENT_CHANNEL = "octus:event";
 export interface PromptRequest {
   sessionId: string;
   text: string;
+  /** Skills adjuntadas a mano con @ (nombres del catálogo, ya habilitadas). */
+  skills?: string[];
 }
 
 export interface CreateSessionRequest {
@@ -87,6 +89,8 @@ export interface OctusIPC {
   "app.validateDirectory": { request: { path: string }; response: { ok: boolean; error?: string; realPath?: string } };
   "projects.list": { request: Record<string, never>; response: { projects: Project[] } };
   "projects.create": { request: { name: string; rootPath: string }; response: { project: Project } };
+  "projects.hide": { request: { projectId: string }; response: { ok: boolean } };
+  "projects.unhide": { request: { projectId: string }; response: { ok: boolean } };
   "sessions.list": { request: { projectId?: string }; response: { sessions: Session[] } };
   "sessions.create": { request: CreateSessionRequest; response: { session: Session } };
   "sessions.get": { request: { sessionId: string }; response: { session: Session; runs: Run[] } };
@@ -100,12 +104,15 @@ export interface OctusIPC {
   };
   "sessions.recover": { request: { sessionId: string }; response: { session: Session; messages: Message[]; recovered: boolean; skippedMessages: string[]; skippedEvents: number } };
   "sessions.prompt": { request: PromptRequest; response: { runId: string } };
+  "sessions.compact": { request: { sessionId: string }; response: { ok: boolean; compacted?: boolean; error?: string } };
+  "sessions.compaction": { request: { sessionId: string }; response: { ok: boolean; summary?: string; createdAt?: number; error?: string } };
   "sessions.interrupt": { request: { sessionId: string }; response: { ok: boolean } };
   "runs.get": { request: { runId: string }; response: { run: Run; instances: AgentInstance[]; toolCalls: ToolCallRecord[] } };
   "runs.usage": { request: { runId: string }; response: { records: UsageRecord[] } };
   "providers.list": { request: Record<string, never>; response: { providers: ProviderDescriptor[] } };
   "providers.models": { request: { providerId: string }; response: { models: ModelDescriptor[] } };
   "providers.setKey": { request: SetKeyRequest; response: { ok: boolean; error?: string } };
+  "providers.refreshCatalog": { request: { providerId: string }; response: { ok: boolean; count?: number; error?: string } };
   "providers.removeKey": { request: { providerId: string }; response: { ok: boolean } };
   "providers.test": { request: { providerId: string }; response: ProviderTestResult };
   "permissions.pending": { request: { sessionId?: string }; response: { requests: PermissionRequest[] } };
@@ -144,7 +151,8 @@ export interface OctusIPC {
   "tasks.scheduler": { request: { sessionId: string }; response: { lastRunId?: string; active: { tasks: number; reservations: number }; scheduled?: { due: number; enabled: number } } };
   /* Todo workbench-chat-terminal/7 — tareas programadas (core nuevo; sin DAG). */
   "schedules.list": { request: Record<string, never>; response: { schedules: ScheduledTask[] } };
-  "schedules.create": { request: { name: string; prompt: string; profile?: ScheduleProfile; cron: string; timezone?: string }; response: { ok: boolean; schedule?: ScheduledTask; error?: string } };
+  "schedules.create": { request: { name: string; prompt: string; profile?: ScheduleProfile; cron: string; timezone?: string; once?: boolean; maxRuns?: number | null }; response: { ok: boolean; schedule?: ScheduledTask; error?: string } };
+  "schedules.update": { request: { id: string; name?: string; prompt?: string; profile?: ScheduleProfile; cron?: string; timezone?: string; once?: boolean; maxRuns?: number | null }; response: { ok: boolean; schedule?: ScheduledTask; error?: string } };
   "schedules.setEnabled": { request: { id: string; enabled: boolean }; response: { ok: boolean; error?: string } };
   "schedules.remove": { request: { id: string }; response: { ok: boolean; error?: string } };
   "schedules.runs": { request: { taskId: string; limit?: number }; response: { runs: ScheduledRun[] } };
@@ -211,7 +219,8 @@ export interface OctusIPC {
   "repos.modified": { request: { projectId: string }; response: { ok: boolean; rootPath?: string; isGit?: boolean; files?: Array<{ path: string; x: string; y: string }>; error?: string } };
   "tests.run": { request: { projectId: string; entryId: string }; response: { ok: boolean; entryId?: string; exitCode?: number; output?: string; truncated?: boolean; durationMs?: number; error?: string } };
   "diagnostics.list": { request: { projectId: string }; response: { ok: boolean; problems?: DiagnosticProblem[]; error?: string } };
-  "terminal.create": { request: { projectId: string; name?: string; cols?: number; rows?: number }; response: { ok: boolean; terminal?: TerminalInfo; error?: string } };
+  "terminal.create": { request: { projectId: string; name?: string; cols?: number; rows?: number; shellId?: string; cwd?: string }; response: { ok: boolean; terminal?: TerminalInfo; error?: string } };
+  "terminal.shells": { request: Record<string, never>; response: { shells: TerminalShell[] } };
   "terminal.list": { request: { projectId: string }; response: { terminals: TerminalInfo[] } };
   "terminal.write": { request: { id: string; data: string }; response: { ok: boolean; error?: string } };
   "terminal.read": { request: { id: string; sinceSeq?: number }; response: { ok: boolean; chunks?: TerminalChunk[]; nextSeq?: number; status?: TerminalStatus; exitCode?: number; error?: string } };
@@ -392,15 +401,25 @@ export interface TerminalInfo {
   id: string;
   name: string;
   projectId: string;
-  /** CWD fijado al crearla: raíz validada del proyecto. */
+  /** CWD fijado al crearla: directorio de la sesión o raíz validada del proyecto. */
   cwd: string;
   cols: number;
   rows: number;
   status: TerminalStatus;
   exitCode?: number;
+  /** Shell con la que se abrió (id de terminal.shells). */
+  shellId: string;
+  shellName: string;
   /** Elegida entre varias (terminal.select). */
   active: boolean;
   createdAt: number;
+}
+
+/** Shell disponible en el equipo (terminal.shells). */
+export interface TerminalShell {
+  id: string;
+  name: string;
+  path: string;
 }
 
 /** Fragmento de salida con secuencia monótona por terminal (streaming + polling de respaldo). */

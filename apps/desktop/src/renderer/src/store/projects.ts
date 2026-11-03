@@ -190,6 +190,22 @@ export async function createProject(name: string, rootPath: string): Promise<voi
   await selectProject(project.id);
 }
 
+/** Papelera de workspaces: solo oculta de la interfaz (la BD conserva todo). */
+export async function hideProject(projectId: string): Promise<void> {
+  await invoke("projects.hide", { projectId });
+  const wasActive = projectId === state.activeProjectId;
+  if (wasActive) {
+    setState("activeProjectId", undefined);
+    setState("activeSessionId", undefined);
+    setState("sessions", []);
+    setState("messages", []);
+  }
+  await refreshProjects();
+  if (wasActive && state.projects.length > 0) {
+    await selectProject(state.projects[0]!.id);
+  }
+}
+
 export async function createSession(): Promise<void> {
   if (!state.activeProjectId) return;
   const { session } = await invoke("sessions.create", { projectId: state.activeProjectId });
@@ -315,6 +331,37 @@ export async function loadModels(providerId: string): Promise<void> {
   }
 }
 
+/** Invalida la caché y recarga los modelos vivos de un proveedor. */
+export async function reloadProviderModels(providerId: string): Promise<number | undefined> {
+  const next = { ...state.modelsByProvider };
+  delete next[providerId];
+  setState("modelsByProvider", next);
+  try {
+    const { models } = await invoke("providers.models", { providerId });
+    setState("modelsByProvider", { ...state.modelsByProvider, [providerId]: models });
+    return models.length;
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+}
+
+/** Actualiza al arrancar el catálogo ofrecido por cada API con key (sin bloquear). */
+export async function refreshProviderCatalogs(): Promise<void> {
+  const configured = state.providers.filter((p) => p.configured);
+  for (const provider of configured) {
+    try {
+      await invoke("providers.refreshCatalog", { providerId: provider.id });
+    } catch {
+      // Sin red o API caída: se conserva el catálogo anterior.
+    }
+  }
+  await refreshProviders();
+  for (const provider of configured) {
+    await reloadProviderModels(provider.id).catch(() => undefined);
+  }
+}
+
 export async function setSessionModel(model: { providerId: string; modelId: string; effort?: string }): Promise<void> {
   if (!state.activeSessionId) return;
   setError(undefined);
@@ -327,17 +374,46 @@ export async function setSessionModel(model: { providerId: string; modelId: stri
   }
 }
 
-export async function sendPrompt(text: string): Promise<void> {
+export async function sendPrompt(text: string, skills?: string[]): Promise<void> {
   if (!state.activeSessionId || !text.trim()) return;
+  // Comando manual de compactación (el automático va al 87% solo).
+  if (text.trim() === "/compactation") {
+    await compactSession();
+    return;
+  }
   setError(undefined);
   setState("busy", true);
   setState("cancelReason", undefined);
   const full = buildPromptText(text, state.attachments);
   try {
-    await invoke("sessions.prompt", { sessionId: state.activeSessionId, text: full });
+    await invoke("sessions.prompt", skills?.length ? { sessionId: state.activeSessionId, text: full, skills } : { sessionId: state.activeSessionId, text: full });
     setState("attachments", []);
   } catch (error) {
     setState("busy", false);
+    setError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** Trae el resumen del último checkpoint para mostrarlo en el banner. */
+export async function refreshCompactionSummary(): Promise<void> {
+  if (!state.activeSessionId) return;
+  try {
+    const result = await invoke("sessions.compaction", { sessionId: state.activeSessionId });
+    if (result.ok && result.summary) setState("compactionSummary", result.summary);
+  } catch {
+    // Sin resumen: el banner sigue informando sin detalle.
+  }
+}
+
+/** Compactación manual: reutiliza el camino de la automática (15k recientes). */
+export async function compactSession(): Promise<void> {
+  if (!state.activeSessionId) return;
+  setError(undefined);
+  try {
+    const result = await invoke("sessions.compact", { sessionId: state.activeSessionId });
+    if (!result.ok) setError(result.error ?? "Compactación fallida");
+    else if (!result.compacted) setState("compactionNotice", "Nada que compactar todavía.");
+  } catch (error) {
     setError(error instanceof Error ? error.message : String(error));
   }
 }
