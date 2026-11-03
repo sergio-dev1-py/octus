@@ -15,6 +15,7 @@ const planTasksSchema = z.object({
   planId: z.string().min(1).optional().describe("Plan id. Omit it: resolved from the run anchor."),
   revisionId: z.string().min(1).optional().describe("Exact plan revision (id, 'vN' or number). Omit it: resolved from the run anchor."),
   nonce: z.string().min(1).max(64).optional().describe("Explicit re-plan after a rejected planning"),
+  replan: z.boolean().optional().describe("Force a new DAG and cancel open tasks of this run (use when blocked or after a new plan revision)"),
 });
 
 const reviewSchema = z.object({
@@ -38,7 +39,7 @@ export const planTasksTool: ToolDefinition = {
   },
   schema: planTasksSchema,
   async run(args, ctx) {
-    const parsed = args as { runId?: string; objective?: string; brief?: string; planId?: string; revisionId?: string; nonce?: string };
+    const parsed = args as { runId?: string; objective?: string; brief?: string; planId?: string; revisionId?: string; nonce?: string; replan?: boolean };
     const tasks = requireTasks(ctx.services);
     const result = await tasks.plan({
       runId: parsed.runId ?? ctx.runId,
@@ -47,6 +48,7 @@ export const planTasksTool: ToolDefinition = {
       planId: parsed.planId,
       revisionId: parsed.revisionId,
       nonce: parsed.nonce,
+      replan: parsed.replan,
       coordinatorInstanceId: ctx.instanceId,
     });
     return { text: `Task DAG ${result.created ? "created" : "reused (idempotent)"}: planning ${result.planningId} with tasks ${result.taskIds.join(", ")}. The scheduler provisions the workspaces and spawns the workers. Call agent_wait with {all:true} to wait for every worker and collect deliveries; agent_status without instanceId lists them. Task/planning ids are NOT agent instance ids.` };

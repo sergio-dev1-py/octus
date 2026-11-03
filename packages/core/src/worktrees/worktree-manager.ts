@@ -174,7 +174,25 @@ export class WorktreeManager implements WorktreePort {
     try {
       repoRoot = await this.repoRootOf(String(project.root_path));
     } catch {
-      return { ok: false, blockedReason: "no-repository", details: { reason: "project is not inside a git repository; register an isolated directory (legacy path)" } };
+      // Greenfield / proyecto sin git: preparar repo automaticamente para
+      // que el scheduler pueda aislar a los implementers en worktrees.
+      try {
+        await this.notifySession(input.runId, "Git no detectado: preparando repositorio y worktrees…");
+        const init = await this.repos.ensureInitialized(input.projectId);
+        await this.notifySession(
+          input.runId,
+          init.installedGit
+            ? "Git instalado automáticamente y repositorio inicializado. Los implementers usarán worktrees."
+            : "Repositorio Git inicializado. Los implementers usarán worktrees.",
+        );
+        repoRoot = await this.repoRootOf(String(project.root_path));
+      } catch (error) {
+        return {
+          ok: false,
+          blockedReason: "no-repository",
+          details: { reason: error instanceof Error ? error.message.slice(0, 800) : String(error) },
+        };
+      }
     }
     try {
       await this.repos.validateRepository(repoRoot);
@@ -666,6 +684,18 @@ export class WorktreeManager implements WorktreePort {
     } catch {
       return undefined;
     }
+  }
+
+  private async notifySession(runId: string, message: string): Promise<void> {
+    const row = await this.db.queryOne<{ session_id: string }>("SELECT session_id FROM runs WHERE id = ?", [runId]).catch(() => undefined);
+    if (!row) return;
+    const event = await this.events.append({
+      type: "session.notice",
+      aggregate: { kind: "session", id: String(row.session_id) },
+      correlationId: createId("cor"),
+      payload: { message },
+    });
+    this.bus.publish(event);
   }
 
   private async repoRootOf(projectRoot: string): Promise<string> {

@@ -29,6 +29,8 @@ interface UIState {
   questions: QuestionRequest[];
   providers: ProviderDescriptor[];
   usage: UsageRecord[];
+  /** Usage completo por run (footer de cada petición, todos los agentes). */
+  usageByRun: Record<string, UsageRecord[]>;
   /** Todo 16 — run seleccionado en la vista de agentes y su ficha (runs.get). */
   selectedRunId?: string;
   runDetail?: { run: Run; instances: AgentInstance[]; toolCalls: ToolCallRecord[] };
@@ -121,6 +123,7 @@ const [state, setState] = createStore<UIState>({
   questions: [],
   providers: [],
   usage: [],
+  usageByRun: {},
   selectedRunId: undefined,
   runDetail: undefined,
   cancelReason: undefined,

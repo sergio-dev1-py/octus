@@ -101,6 +101,23 @@ export async function refreshUsage(): Promise<void> {
   if (last) {
     const { records } = await invoke("runs.usage", { runId: last.id });
     setState("usage", records);
+    setState("usageByRun", last.id, records);
+  }
+}
+
+const usageInflight = new Set<string>();
+
+/** Carga bajo demanda el usage de un run (footer de peticiones antiguas). */
+export async function loadRunUsage(runId: string): Promise<void> {
+  if (state.usageByRun[runId] || usageInflight.has(runId)) return;
+  usageInflight.add(runId);
+  try {
+    const { records } = await invoke("runs.usage", { runId });
+    setState("usageByRun", runId, records);
+  } catch {
+    // Footer opcional: un fallo de usage no rompe el chat.
+  } finally {
+    usageInflight.delete(runId);
   }
 }
 

@@ -1,8 +1,9 @@
 /** Renderer/views — conversación: mensajes, composer, diálogos y vista de chat. */
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import type { Message, MessagePart, ModelDescriptor, PairedToolCall } from "@octus/shared";
-import { footerForMessage, formatDuration, formatMessageFooter, messageRenderItems } from "@octus/shared";
+import { footerForMessage, formatDuration, indexToolResults, messageRenderItems } from "@octus/shared";
 import { invoke } from "../api.js";
+import { DiffCard } from "../diff-view.jsx";
 import { renderMarkdown } from "../markdown.js";
 import { CHAT_DOM_WINDOW } from "../perf.js";
 import { windowMessages } from "../timeline.js";
@@ -19,6 +20,7 @@ import {
   interrupt,
   loadModels,
   loadOlderMessages,
+  loadRunUsage,
   reloadProviderModels,
   reloadProviders,
   removeAttachment,
@@ -56,10 +58,140 @@ export function PartView(props: { part: MessagePart }) {
   );
 }
 
+const ACTIVE_AGENT = ["created", "running", "waiting_permission", "waiting_input"];
+const TERMINAL_RUN = ["done", "failed", "cancelled"];
+
+function formatRunClock(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes < 60) return `${minutes}m ${seconds}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M tok`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k tok`;
+  return `${value} tok`;
+}
+
+function modelDisplay(providerId: string, modelId: string): string {
+  const model = (state.modelsByProvider[providerId] ?? []).find((entry) => entry.modelId === modelId);
+  return model?.displayName ?? modelId;
+}
+
+function ActivityGroups(props: { items: PairedToolCall[] }) {
+  interface Group {
+    label: string;
+    status: "completed" | "running" | "failed";
+  }
+  const groups = (): Group[] => {
+    let reads = 0;
+    let searches = 0;
+    let edits = 0;
+    let commands = 0;
+    let agents = 0;
+    const other = new Set<string>();
+    let failed = false;
+    let running = false;
+    for (const item of props.items) {
+      const name = item.call.name;
+      if (name === "read") reads++;
+      else if (name === "glob" || name === "grep") searches++;
+      else if (name === "write" || name === "edit") edits++;
+      else if (name === "shell") commands++;
+      else if (name === "delegate" || name.startsWith("agent_")) agents++;
+      else other.add(name);
+      if (!item.result) running = true;
+      else if (!item.result.ok) failed = true;
+    }
+    const status: Group["status"] = failed ? "failed" : running ? "running" : "completed";
+    const out: Group[] = [];
+    const explored = [reads > 0 ? `${reads} read${reads === 1 ? "" : "s"}` : "", searches > 0 ? `${searches} search${searches === 1 ? "" : "es"}` : ""].filter(Boolean);
+    if (explored.length > 0) out.push({ label: `Explored: ${explored.join(", ")}`, status });
+    if (edits > 0) out.push({ label: `Edited: ${edits} file${edits === 1 ? "" : "s"}`, status });
+    if (commands > 0) out.push({ label: `Ran: ${commands} command${commands === 1 ? "" : "s"}`, status });
+    if (agents > 0) out.push({ label: `Delegated: ${agents} agent${agents === 1 ? "" : "s"}`, status });
+    if (other.size > 0) out.push({ label: `Used: ${[...other].join(", ")}`, status });
+    return out;
+  };
+  return (
+    <For each={groups()}>
+      {(group) => (
+        <div class="activity-group" data-tool-status={group.status}>
+          <span class="activity-caret" aria-hidden="true">→</span>
+          <span class="activity-name">{group.label}</span>
+          <Show when={group.status !== "completed"}>
+            <span class="activity-meta">{group.status}</span>
+          </Show>
+        </div>
+      )}
+    </For>
+  );
+}
+
+export function RunFooter(props: { runId: string }) {
+  const run = () => state.runs.find((entry) => entry.id === props.runId);
+  const blocked = () => {
+    const current = run();
+    if (!current || TERMINAL_RUN.includes(current.status)) return false;
+    const active =
+      state.agentInstances.some((instance) => instance.runId === props.runId && ACTIVE_AGENT.includes(instance.status)) ||
+      state.tasks.some((task) => task.runId === props.runId && (task.status === "assigned" || task.status === "running"));
+    return !active && state.tasks.some((task) => task.runId === props.runId && !["completed", "reviewed", "integrated", "failed", "cancelled", "interrupted"].includes(task.status));
+  };
+  createEffect(() => {
+    const current = run();
+    if (current && (TERMINAL_RUN.includes(current.status) || blocked()) && !state.usageByRun[props.runId]) void loadRunUsage(props.runId);
+  });
+  const usage = () => state.usageByRun[props.runId] ?? [];
+  const coordinator = () => state.agentInstances.find((instance) => instance.runId === props.runId && !instance.parentInstanceId);
+  const model = () => {
+    const own = coordinator()?.model;
+    if (own) return own;
+    const row = usage()[0];
+    return row ? { providerId: row.providerId, modelId: row.modelId } : undefined;
+  };
+  const duration = () => {
+    const current = run();
+    if (!current) return 0;
+    return Math.max(0, (current.completedAt ?? current.updatedAt) - current.createdAt);
+  };
+  const totals = () => {
+    let input = 0;
+    let output = 0;
+    for (const row of usage()) {
+      input += row.inputTokens;
+      output += row.outputTokens;
+    }
+    return { input, output, total: input + output };
+  };
+  return (
+    <Show when={run() && (TERMINAL_RUN.includes(run()!.status) || blocked())}>
+      <div class={`run-footer run-${blocked() ? "blocked" : run()!.status}`} data-run-footer={props.runId}>
+        <span class="run-model">
+          {run()!.mode === "build" ? "Build" : "Plan"}
+          {model() ? ` · ${modelDisplay(model()!.providerId, model()!.modelId)}` : ""}
+        </span>
+        <span>{formatRunClock(duration())}</span>
+        <Show when={totals().total > 0}>
+          <span>{formatTokens(totals().total)}</span>
+          <span>{duration() > 0 ? `${(totals().output / (duration() / 1000)).toFixed(1)} tok/s` : ""}</span>
+        </Show>
+        <Show when={blocked()}>
+          <span class="run-status">blocked</span>
+        </Show>
+        <Show when={!blocked() && run()!.status !== "done"}>
+          <span class="run-status">{run()!.status}</span>
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
 export function MessageView(props: { message: Message }) {
   const message = () => props.message;
-  // Todo workbench-chat-terminal/3: textos directos; los tool calls se agrupan
-  // por subagente en un details colapsable (aparecen SOLO mientras hay trabajo).
   const textParts = (): MessagePart[] => {
     const out: MessagePart[] = [];
     for (const part of message().parts) {
@@ -68,95 +200,79 @@ export function MessageView(props: { message: Message }) {
     return out;
   };
   const toolItems = (): PairedToolCall[] => {
+    const results = indexToolResults(state.messages.filter((m) => m.runId === message().runId));
     const out: PairedToolCall[] = [];
     for (const item of messageRenderItems(message().parts)) {
-      if (item.kind === "tool") out.push(item);
+      if (item.kind === "tool") out.push({ ...item, result: item.result ?? results.get(item.call.toolCallId) });
     }
     return out;
   };
-  // Todo workbench-chat-terminal/4: footer fuera de la burbuja, solo con
-  // filas del mensaje exacto (runs.usage ya cargado); legacy NULL = sin footer.
   const footer = () => (message().role === "assistant" ? footerForMessage(message().id, state.usage) : undefined);
-  // Chat todo en uno (estilo opencode): sin cabeceras de rol/modo y sin
-  // burbujas vacías (un mensaje sin texto ni tool calls no pinta nada).
-  // El trabajo del asistente se agrupa colapsable: "Worked for X · Used N tools".
-  const isEmpty = () => textParts().length === 0 && toolItems().length === 0;
-  const running = () => {
-    const run = state.runs.find((r) => r.id === message().runId);
-    if (!run) return false;
-    return ["planning", "executing", "integrating", "promoting"].includes(run.status);
-  };
-  const workLabel = () => {
-    const parts: string[] = [];
-    const footerValue = footer();
-    if (running()) parts.push("Working");
-    else if (footerValue) parts.push(`Worked for ${formatDuration(footerValue.durationMs)}`);
-    else if (toolItems().length > 0) parts.push("Worked");
-    if (toolItems().length > 0) parts.push(`${toolItems().length} tool${toolItems().length === 1 ? "" : "s"}`);
-    return parts.join(" · ");
-  };
-  // El árbol de subagentes se cuelga una sola vez por run: bajo su último
-  // mensaje del coordinador (los pasos intermedios comparten instanceId).
+  const isAssistant = () => message().role === "assistant";
+  const hasChildren = () => state.agentInstances.some((instance) => instance.parentInstanceId === message().instanceId);
   const isLastAssistantOfRun = () => {
     const peers = state.messages.filter((m) => m.runId === message().runId && m.instanceId === message().instanceId && m.role === "assistant");
     return peers.length === 0 || peers[peers.length - 1]!.id === message().id;
   };
+  const active = () => {
+    const runId = message().runId;
+    return (
+      state.agentInstances.some((instance) => instance.runId === runId && ACTIVE_AGENT.includes(instance.status)) ||
+      state.tasks.some((task) => task.runId === runId && (task.status === "assigned" || task.status === "running")) ||
+      Object.values(state.live).some((frame) => frame.runId === runId)
+    );
+  };
+  const [tick, setTick] = createSignal(0);
+  createEffect(() => {
+    if (!isLastAssistantOfRun() || !active()) return;
+    const timer = setInterval(() => setTick((value) => value + 1), 500);
+    onCleanup(() => clearInterval(timer));
+  });
+  const hasDiff = () => state.messages.some((m) => m.runId === message().runId && m.parts.some((part) => part.type === "tool_result" && part.diff));
+  const hasActivity = () => toolItems().length > 0 || (isAssistant() && isLastAssistantOfRun() && hasChildren());
+  const workLabel = () => {
+    if (isLastAssistantOfRun() && active()) {
+      const value = footer();
+      const elapsed = value?.durationMs ?? (tick(), Date.now() - message().createdAt);
+      return `Working · ${formatDuration(elapsed)}`;
+    }
+    const value = footer();
+    return value ? `Worked · ${formatDuration(value.durationMs)}` : "Worked";
+  };
+  const isEmpty = () => textParts().length === 0 && toolItems().length === 0 && !(isAssistant() && isLastAssistantOfRun() && hasChildren());
   return (
     <Show when={!isEmpty()}>
-      <Show when={message().role === "assistant" && workLabel()} fallback={
-        <div class={`message ${message().role}`} data-message-id={message().id}>
-          <For each={textParts()}>{(part) => <PartView part={part} />}</For>
-          <Show when={toolItems().length > 0}>
+      <div class={`message ${message().role}`} data-message-id={message().id}>
+        <Show when={isAssistant() && hasActivity()}>
+          <details class="work" open={(isLastAssistantOfRun() && active()) || hasDiff()} data-message-id={message().id}>
+            <summary>{workLabel()}</summary>
             <div class="activity-body">
-              <For each={toolItems()}>
-                {(item) => (
-                  <div class="activity-tool" data-tool-status={item.result ? (item.result.ok ? "completed" : "failed") : "running"}>
-                    <span class="activity-dot" aria-hidden="true" />
-                    <span class="activity-tool-name">{item.call.name}</span>
-                    <span class="activity-meta">{item.result ? (item.result.ok ? "ok" : "failed") : "running"}</span>
-                  </div>
-                )}
-              </For>
+              <Show when={message().parts.some((part) => part.type === "reasoning_summary")}>
+                <div class="activity-group">
+                  <span class="activity-caret" aria-hidden="true">+</span>
+                  <span class="activity-name">Thought</span>
+                  <Show when={footer()}>
+                    <span class="activity-meta">{formatDuration(footer()!.durationMs)}</span>
+                  </Show>
+                </div>
+              </Show>
+              <ActivityGroups items={toolItems()} />
+              <For each={toolItems().filter((item) => item.result?.diff)}>{(item) => <DiffCard diff={item.result!.diff!} />}</For>
+              <Show when={isLastAssistantOfRun()}>
+                <ChildAgents parentInstanceId={message().instanceId} />
+              </Show>
             </div>
-          </Show>
-          {/* Los subagentes solo cuelgan del mensaje del coordinador (no del usuario:
-              ambos comparten instanceId y se duplicaría el árbol). */}
-          <Show when={message().role === "assistant" && isLastAssistantOfRun()}>
-            <ChildAgents parentInstanceId={message().instanceId} />
-          </Show>
-        </div>
-      }>
-        <details class="work" open={running()} data-message-id={message().id}>
-          <summary>{workLabel()}</summary>
-          <div class={`message ${message().role}`}>
-            <For each={textParts()}>{(part) => <PartView part={part} />}</For>
-            <Show when={toolItems().length > 0}>
-              <div class="activity-body">
-                <For each={toolItems()}>
-                  {(item) => (
-                    <div class="activity-tool" data-tool-status={item.result ? (item.result.ok ? "completed" : "failed") : "running"}>
-                      <span class="activity-dot" aria-hidden="true" />
-                      <span class="activity-tool-name">{item.call.name}</span>
-                      <span class="activity-meta">{item.result ? (item.result.ok ? "ok" : "failed") : "running"}</span>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </Show>
-            <Show when={isLastAssistantOfRun()}>
-              <ChildAgents parentInstanceId={message().instanceId} />
-            </Show>
-          </div>
-        </details>
-      </Show>
-      <Show when={footer()}>
-        <div class="message-footer" data-message-footer={message().id} data-footer-status={footer()!.status} title={`${toolItems().length} herramienta(s) · in ${footer()!.inputTokens.toLocaleString()} / out ${footer()!.outputTokens.toLocaleString()}`}>
-          {formatMessageFooter(footer()!, toolItems().length)}
-        </div>
-      </Show>
+          </details>
+        </Show>
+        <For each={textParts()}>{(part) => <PartView part={part} />}</For>
+        <Show when={isAssistant() && isLastAssistantOfRun()}>
+          <RunFooter runId={message().runId} />
+        </Show>
+      </div>
     </Show>
   );
 }
+
 
 /** Marco de streaming con estado visible por marco (N-C-12a/12b). */
 export function LiveView(props: { live: LiveMessage }) {

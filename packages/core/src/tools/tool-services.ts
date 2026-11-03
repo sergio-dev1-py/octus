@@ -157,6 +157,7 @@ export interface PlanTasksInput {
   planId?: string;
   revisionId?: string;
   nonce?: string;
+  replan?: boolean;
   coordinatorInstanceId: string;
 }
 

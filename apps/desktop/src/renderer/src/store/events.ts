@@ -110,6 +110,11 @@ export function applyEvent(event: CoreEvent): void {
     case "session.updated":
       void refreshSessions();
       break;
+    case "session.notice": {
+      const message = persisted.payload.message;
+      if (typeof message === "string" && message.length > 0) setState("sessionNotice", message);
+      break;
+    }
     case "permission.asked":
     case "permission.replied":
       void refreshPending();

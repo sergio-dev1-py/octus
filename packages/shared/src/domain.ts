@@ -179,6 +179,8 @@ export interface ToolResultPart {
   /** Resumen truncado; el contenido completo vive en Artifact si excede el tope. */
   text: string;
   artifactId?: string;
+  /** Diff antes/después de un archivo existente modificado (nunca para archivos nuevos). */
+  diff?: import("./tools.js").FileDiff;
 }
 
 export type MessagePart = TextPart | ReasoningSummaryPart | ToolCallPart | ToolResultPart;

@@ -314,7 +314,7 @@ describe("etapa 4 — worktree manager: creación e idempotencia", () => {
     }
   });
 
-  test("7: proyecto no-git → no-repository y camino legacy intacto", async () => {
+  test("7: proyecto no-git se inicializa automáticamente y usa worktree", async () => {
     const t = await makeTestCore();
     try {
       await useFakeModels(t.core);
@@ -324,20 +324,14 @@ describe("etapa 4 — worktree manager: creación e idempotencia", () => {
       const { runId } = await makeRun(t, session.id);
       const dag = await approvedDag(t, session.id, project.id, runId, "h-wt4", [IMPL("w")]);
       const out = await t.core.worktrees.ensureForTask({ projectId: project.id, runId, taskId: dag.taskIds[0]!, attempt: 1 });
-      expect(out.ok).toBe(false);
-      if (out.ok) return;
-      expect(out.blockedReason).toBe("no-repository");
-      await t.core.registerIsolatedDirectory(project.id, workspaceOf(t), "directory");
-      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
-      try {
-        const assigned = await t.core.scheduler.tick({ sessionId: session.id });
-        expect(assigned.length).toBe(1);
-        const inst = (await t.core.agentInstances(session.id)).find((i) => i.id === assigned[0]!.instanceId)!;
-        expect(inst.definitionId).toBe("implementer");
-        expect(inst.worktreeId).toBeUndefined();
-      } finally {
-        stop();
-      }
+      expect(out.ok).toBe(true);
+      if (!out.ok) return;
+      expect(existsSync(path.join(workspaceOf(t), ".git"))).toBe(true);
+      expect(out.worktreeId).toBeDefined();
+      expect(out.path).toBeDefined();
+      expect(out.reused).toBe(false);
+      const repos = await t.core.db.query("SELECT * FROM repositories WHERE project_id = ?", [project.id]);
+      expect(repos).toHaveLength(1);
     } finally {
       await t.cleanup();
     }

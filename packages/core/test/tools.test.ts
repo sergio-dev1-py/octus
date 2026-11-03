@@ -152,4 +152,22 @@ describe("tool gateway", () => {
       await t.t.cleanup();
     }
   });
+
+  test("write/edit devuelven diff solo para archivos existentes", async () => {
+    const t = await setup();
+    try {
+      writeFileSync(path.join(workspaceOf(t.t), "a.txt"), "one\n");
+      const write = await t.t.core.gateway.execute(baseRequest(t, "write", { path: "a.txt", content: "two\n" }, "tool_diff_write"));
+      expect(write.ok).toBe(true);
+      expect(write.diff).toEqual({ path: "a.txt", before: "one\n", after: "two\n" });
+      const created = await t.t.core.gateway.execute(baseRequest(t, "write", { path: "new.txt", content: "brand new\n" }, "tool_diff_new"));
+      expect(created.ok).toBe(true);
+      expect(created.diff).toBeUndefined();
+      const edit = await t.t.core.gateway.execute(baseRequest(t, "edit", { path: "a.txt", oldString: "two", newString: "three" }, "tool_diff_edit"));
+      expect(edit.ok).toBe(true);
+      expect(edit.diff).toEqual({ path: "a.txt", before: "two\n", after: "three\n" });
+    } finally {
+      await t.t.cleanup();
+    }
+  });
 });

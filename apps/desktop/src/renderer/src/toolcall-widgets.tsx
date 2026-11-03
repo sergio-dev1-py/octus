@@ -27,7 +27,8 @@ import {
   type SubagentNode,
 } from "@octus/shared";
 import { invoke, onEvent } from "./api.js";
-import { retryTask, setError, state } from "./store.js";
+import { DiffCard } from "./diff-view.jsx";
+import { loadRunUsage, retryTask, setError, state } from "./store.js";
 
 // ---------------------------------------------------------------- caché propia
 interface WidgetCache {
@@ -197,12 +198,24 @@ export function ToolCallCard(props: { call: ToolCallPart; result?: ToolResultPar
 export function ChildAgents(props: { parentInstanceId: string; depth?: number }) {
   const depth = () => props.depth ?? 1;
   const children = () => state.agentInstances.filter((i) => i.parentInstanceId === props.parentInstanceId);
+  const fmtClock = (ms: number): string => {
+    const total = Math.max(0, Math.round(ms / 1000));
+    if (total < 60) return `${(ms / 1000).toFixed(1)}s`;
+    return `${Math.floor(total / 60)}m ${total % 60}s`;
+  };
+  const fmtTokens = (value: number): string => (value >= 1000 ? `${(value / 1000).toFixed(1)}k tok` : `${value} tok`);
   return (
     <For each={children()}>
       {(child) => {
         const messages = () => state.messages.filter((m) => m.instanceId === child.id);
-        const tools = () =>
-          messages().flatMap((m) => messageRenderItems(m.parts).filter((item) => item.kind === "tool"));
+        const tools = () => {
+          const results = indexToolResults(messages());
+          return messages().flatMap((m) =>
+            messageRenderItems(m.parts)
+              .filter((item) => item.kind === "tool")
+              .map((item) => (item.kind === "tool" ? { ...item, result: item.result ?? results.get(item.call.toolCallId) } : item)),
+          );
+        };
         const def = () => state.definitions.find((d) => d.id === child.definitionId);
         const task = () => (child.taskId ? state.tasks.find((t) => t.id === child.taskId) : undefined);
         const label = () => {
@@ -211,13 +224,33 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
         };
         const active = () => ["created", "running", "waiting_permission", "waiting_input"].includes(child.status);
         const status = () => (active() ? "working" : child.status);
+        const elapsed = () => (active() ? "" : formatToolDurationMs(child.createdAt, child.updatedAt));
+        createEffect(() => {
+          if (!active()) void loadRunUsage(child.runId);
+        });
+        const usage = () => (state.usageByRun[child.runId] ?? []).filter((row) => row.agentInstanceId === child.id);
+        const hasDiff = () => tools().some((item) => item.result?.diff);
+        const model = () => {
+          const own = child.model ?? usage()[0];
+          if (!own) return "";
+          const catalog = state.modelsByProvider[own.providerId] ?? [];
+          return catalog.find((entry) => entry.modelId === own.modelId)?.displayName ?? own.modelId;
+        };
+        const agentFooter = () => {
+          if (active()) return "working";
+          const output = usage().reduce((sum, row) => sum + row.outputTokens, 0);
+          const wall = Math.max(0, child.updatedAt - child.createdAt);
+          const speed = wall > 0 ? `${(output / (wall / 1000)).toFixed(1)} tok/s` : "";
+          return [model(), fmtClock(wall), output > 0 ? fmtTokens(output) : "", speed].filter(Boolean).join(" · ");
+        };
         return (
-          <details class="activity-node" data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
+          <details class="activity-node" open={hasDiff()} data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
             <summary>
               <span class="activity-caret" aria-hidden="true">›</span>
               <span class="activity-name">{label()}</span>
               <span class="activity-meta">
                 {status()}
+                {elapsed() ? ` · ${elapsed()}` : ""}
                 {tools().length > 0 ? ` · ${tools().length} tool${tools().length === 1 ? "" : "s"}` : ""}
               </span>
             </summary>
@@ -231,7 +264,11 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
                   </div>
                 )}
               </For>
+              <For each={tools().filter((item) => item.result?.diff)}>{(item) => <DiffCard diff={item.result!.diff!} />}</For>
               <ChildAgents parentInstanceId={child.id} depth={depth() + 1} />
+              <Show when={!active() && agentFooter()}>
+                <div class="agent-footer" data-agent-footer={child.id}>{agentFooter()}</div>
+              </Show>
             </div>
           </details>
         );

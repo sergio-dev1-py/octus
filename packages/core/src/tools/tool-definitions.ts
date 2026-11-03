@@ -35,7 +35,7 @@ export interface ToolDefinition {
   schema: z.ZodType<unknown>;
   /** Detalle opcional para la solicitud de aprobación (origen, alcance). */
   permissionDetail?: (args: unknown) => string | undefined;
-  run: (args: any, ctx: ToolRunContext) => Promise<{ text: string; fullText?: string; detail?: string }>;
+  run: (args: any, ctx: ToolRunContext) => Promise<{ text: string; fullText?: string; detail?: string; diff?: import("@octus/shared").FileDiff }>;
 }
 
 const MAX_GLOB_RESULTS = 500;
@@ -242,9 +242,16 @@ export const writeTool: ToolDefinition = {
   async run(args, ctx) {
     const file = resolveInScope(ctx.directory, args.path as string, { protectedRoots: ctx.protectedRoots });
     const content = args.content as string;
+    const existed = existsSync(file) && statSync(file).isFile();
+    const before = existed ? readFileSync(file, "utf8") : undefined;
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, content, "utf8");
-    return { text: `Wrote ${content.length} chars to ${scopeRelative(ctx.directory, file)}` };
+    const relative = scopeRelative(ctx.directory, file);
+    return {
+      text: `Wrote ${content.length} chars to ${relative}`,
+      // Solo archivos existentes: los nuevos no muestran "todo añadido".
+      diff: existed && before !== undefined && before.length <= 200_000 && content.length <= 200_000 ? { path: relative, before, after: content } : undefined,
+    };
   },
 };
 
@@ -282,7 +289,11 @@ export const editTool: ToolDefinition = {
     const next = (args.replaceAll as boolean | undefined) ? content.split(oldString).join(newString) : content.replace(oldString, newString);
     writeFileSync(file, next, "utf8");
     const count = (args.replaceAll as boolean | undefined) ? occurrences : 1;
-    return { text: `Replaced ${count} occurrence(s) in ${scopeRelative(ctx.directory, file)}` };
+    const relative = scopeRelative(ctx.directory, file);
+    return {
+      text: `Replaced ${count} occurrence(s) in ${relative}`,
+      diff: content.length <= 200_000 && next.length <= 200_000 ? { path: relative, before: content, after: next } : undefined,
+    };
   },
 };
 

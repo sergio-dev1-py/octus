@@ -4,7 +4,9 @@
  * git-common-dir, main vs secundarios y operaciones incompletas. Cero operaciones
  * destructivas: solo comandos de lectura con argv por array.
  */
-import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { createId, type RepositorySummary } from "@octus/shared";
 import { OctusError } from "../errors.js";
 import type { PersistenceService } from "../persistence/persistence-service.js";
@@ -187,6 +189,121 @@ export class RepositoryManager {
     });
     return { rootPath: toplevel, branch, head };
   }
+
+  /**
+   * Deja el proyecto listo para worktrees: comprueba Git, lo instala si falta
+   * (Windows/winget), inicializa el repo y crea un commit base si no hay HEAD.
+   * Solo se invoca cuando el scheduler va a necesitar worktrees.
+   */
+  async ensureInitialized(projectId: string): Promise<{ initialized: boolean; installedGit: boolean; head: string; rootPath: string }> {
+    const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]);
+    if (!project) throw new OctusError("not_found", `Project not found: ${projectId}`);
+    const rootPath = String(project.root_path);
+    let installedGit = false;
+    if (!(await this.gitAvailable(rootPath))) {
+      await this.installGit();
+      installedGit = true;
+      if (!(await this.gitAvailable(rootPath))) {
+        throw new OctusError("invalid_state", "Git is not available after installation; install it manually and reopen the project");
+      }
+    }
+    let isRepo = false;
+    try {
+      await runGit(rootPath, ["rev-parse", "--show-toplevel"]);
+      isRepo = true;
+    } catch {
+      isRepo = false;
+    }
+    let initialized = false;
+    if (!isRepo) {
+      await runGit(rootPath, ["init", "-b", "main"]);
+      initialized = true;
+    }
+    const ignoreFile = path.join(rootPath, ".gitignore");
+    if (!existsSync(ignoreFile)) {
+      writeFileSync(
+        ignoreFile,
+        [
+          "node_modules/",
+          "dist/",
+          ".astro/",
+          ".next/",
+          "coverage/",
+          "*.log",
+          "*.sqlite",
+          "*.sqlite-*",
+          "*.db",
+          "*.db-*",
+          ".env",
+          ".env.*",
+          "!.env.example",
+          ".DS_Store",
+          "Thumbs.db",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      initialized = true;
+    }
+    const status = await runGit(rootPath, ["status", "--porcelain"]).catch(() => ({ stdout: "" }));
+    if (status.stdout.trim()) {
+      await runGit(rootPath, ["add", "-A"]);
+      await runGit(rootPath, ["-c", "user.name=Octus", "-c", "user.email=octus@localhost", "commit", "-m", "chore: initial snapshot (Octus)"]);
+      initialized = true;
+    }
+    const head = await runGit(rootPath, ["rev-parse", "HEAD"]).then(
+      (result) => result.stdout.trim(),
+      () => "",
+    );
+    if (!head) throw new OctusError("invalid_state", "Git repository has no HEAD commit after initialization");
+    return { initialized, installedGit, head, rootPath };
+  }
+
+  private async gitAvailable(cwd: string): Promise<boolean> {
+    try {
+      await runGit(cwd, ["--version"], { timeoutMs: 10_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async installGit(): Promise<void> {
+    if (process.platform !== "win32") {
+      throw new OctusError("invalid_state", "Git is not installed; install it with your system package manager and retry");
+    }
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        "winget",
+        ["install", "--id", "Git.Git", "-e", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements", "--silent"],
+        { timeout: 10 * 60_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+        (error, _stdout, stderr) => {
+          if (!error) {
+            resolve();
+            return;
+          }
+          const reason = (stderr || error.message).slice(0, 600);
+          if (/winget/i.test(reason) && /not recognized|no se reconoce|ENOENT/i.test(reason)) {
+            reject(new OctusError("invalid_state", "Git is not installed and winget is not available; install Git from https://git-scm.com/download/win and retry"));
+            return;
+          }
+          reject(new OctusError("tool_failed", `Git installation failed: ${reason}`));
+        },
+      );
+    });
+    // winget deja Git en una ruta nueva; el proceso actual no refresca PATH solo.
+    const candidates = [
+      process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Git", "cmd") : "",
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "Git", "cmd") : "",
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      if (existsSync(path.join(candidate, "git.exe"))) {
+        process.env.PATH = `${candidate};${process.env.PATH ?? ""}`;
+        break;
+      }
+    }
+  }
+
 
   /** Detecta MERGE_HEAD / CHERRY_PICK_HEAD / rebase en curso bajo git-common-dir. */
   async detectIncompleteOperation(toplevel: string, commonDir?: string): Promise<{ kind: "merge" | "cherry-pick" | "rebase" | "rebase-merge" | "rebase-apply"; detail: string } | undefined> {

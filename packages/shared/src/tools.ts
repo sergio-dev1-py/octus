@@ -33,5 +33,13 @@ export interface ToolExecuteResult {
   text: string;
   /** Contenido completo cuando excede el tope (se persiste como Artifact). */
   fullText?: string;
+  /** Cambio antes/después para mostrar diff en el chat (solo archivos modificados). */
+  diff?: FileDiff;
   error?: string;
+}
+
+export interface FileDiff {
+  path: string;
+  before: string;
+  after: string;
 }

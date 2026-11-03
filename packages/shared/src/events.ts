@@ -27,6 +27,7 @@ export type AggregateKind =
 export type PersistedEventType =
   | "session.created"
   | "session.updated"
+  | "session.notice"
   | "user_message.received"
   | "run.created"
   | "run.started"

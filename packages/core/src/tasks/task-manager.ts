@@ -588,10 +588,62 @@ export class TaskManager {
         { sql: "UPDATE tasks SET status = 'reviewed', reviewed_by_task_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?", params: [reviewerTaskId, timestamp, timestamp, targetTaskId] },
       ]);
     } else {
-      await this.db.batch([
-        { sql: "INSERT INTO task_review_verdicts (reviewer_task_id, target_task_id, verdict, detail, created_at) VALUES (?, ?, 'request-changes', ?, ?)", params: [reviewerTaskId, targetTaskId, detail ? JSON.stringify(detail).slice(0, 8000) : null, timestamp] },
-        { sql: "UPDATE tasks SET status = 'failed', error = 'changes-requested', reviewed_by_task_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?", params: [reviewerTaskId, timestamp, timestamp, targetTaskId] },
-      ]);
+      const reviewerRow = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM tasks WHERE id = ?", [reviewerTaskId]);
+      const rounds = await this.db.queryOne<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM tasks WHERE agent_role = 'reviewer' AND review_target_task_id = ?",
+        [targetTaskId],
+      );
+      const nextRound = Number(rounds?.n ?? 0) + 1;
+      const maxAttempts = this.getSchedulerConfig().maxAttemptsPerTask;
+      const canRetry = target.attempt < maxAttempts && nextRound <= 3;
+      const statements = [
+        {
+          sql: "INSERT INTO task_review_verdicts (reviewer_task_id, target_task_id, verdict, detail, created_at) VALUES (?, ?, 'request-changes', ?, ?)",
+          params: [reviewerTaskId, targetTaskId, detail ? JSON.stringify(detail).slice(0, 8000) : null, timestamp],
+        },
+        canRetry
+          ? {
+              sql: "UPDATE tasks SET status = 'ready', error = NULL, reviewed_by_task_id = NULL, reviewed_at = NULL, updated_at = ? WHERE id = ?",
+              params: [timestamp, targetTaskId],
+            }
+          : {
+              sql: "UPDATE tasks SET status = 'failed', error = 'review-rounds-exhausted', reviewed_by_task_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?",
+              params: [reviewerTaskId, timestamp, timestamp, targetTaskId],
+            },
+      ];
+      let newReviewerId: string | undefined;
+      if (canRetry && reviewerRow) {
+        newReviewerId = createId("tsk");
+        statements.push({
+          sql: `INSERT INTO tasks (id, run_id, planning_id, plan_id, revision_id, title, description, agent_role, priority, acceptance_criteria, required_tools, write_scope, validation_commands, review_target_task_id, needs_review, status, attempt, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'reviewer', ?, ?, ?, '[]', '[]', ?, 0, 'draft', 0, ?, ?)`,
+          params: [
+            newReviewerId,
+            String(reviewerRow.run_id),
+            String(reviewerRow.planning_id),
+            String(reviewerRow.plan_id),
+            String(reviewerRow.revision_id),
+            `${String(reviewerRow.title)} · ronda ${nextRound}`.slice(0, 500),
+            String(reviewerRow.description),
+            Number(reviewerRow.priority ?? 1),
+            String(reviewerRow.acceptance_criteria ?? "[]"),
+            String(reviewerRow.required_tools ?? "[]"),
+            targetTaskId,
+            timestamp,
+            timestamp,
+          ],
+        });
+      }
+      await this.db.batch(statements);
+      if (newReviewerId) {
+        const created = await this.events.append({
+          type: "task.created",
+          aggregate: { kind: "task", id: newReviewerId },
+          correlationId: createId("cor"),
+          payload: { runId: String(reviewerRow!.run_id), role: "reviewer", round: nextRound, targetTaskId },
+        });
+        this.bus.publish(created);
+      }
     }
     const event = await this.events.append({ type: "review.recorded", aggregate: { kind: "task", id: targetTaskId }, correlationId: createId("cor"), payload: { reviewerTaskId, verdict } });
     this.bus.publish(event);

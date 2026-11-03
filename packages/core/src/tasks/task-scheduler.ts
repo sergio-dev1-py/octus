@@ -458,7 +458,7 @@ export class TaskScheduler {
     } catch {
       inheritedModel = undefined;
     }
-    const brief = this.renderBrief(task);
+    const brief = await this.renderBrief(task);
     try {
       const spawned = await this.agents().spawn({
         parentInstanceId: coord,
@@ -539,8 +539,15 @@ export class TaskScheduler {
     return best?.id;
   }
 
-  private renderBrief(task: Task): string {
-    return `Task: ${task.title}\n${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}${task.writeScope.length > 0 ? `\nWrite only inside: ${task.writeScope.join(", ")}` : ""}${task.validationCommands.length > 0 ? `\nValidate with allowlisted commands: ${task.validationCommands.join(", ")}` : ""}`;
+  private async renderBrief(task: Task): Promise<string> {
+    const feedback = await this.db
+      .queryOne<{ detail: string | null }>(
+        "SELECT detail FROM task_review_verdicts WHERE target_task_id = ? AND verdict = 'request-changes' ORDER BY created_at DESC LIMIT 1",
+        [task.id],
+      )
+      .catch(() => undefined);
+    const base = `Task: ${task.title}\n${task.description}\nAcceptance criteria:\n${task.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}${task.writeScope.length > 0 ? `\nWrite only inside: ${task.writeScope.join(", ")}` : ""}${task.validationCommands.length > 0 ? `\nValidate with allowlisted commands: ${task.validationCommands.join(", ")}` : ""}`;
+    return feedback?.detail ? `${base}\n\nPrevious review requested changes (address every point):\n${feedback.detail.slice(0, 6000)}` : base;
   }
 
   private async requireCoordinatorInstance(runId: string): Promise<string> {

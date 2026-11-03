@@ -1749,6 +1749,135 @@ details.work .message {
   background: var(--oc-danger);
 }
 
+.activity-group {
+  display: flex;
+  align-items: baseline;
+  gap: var(--oc-space-2);
+  padding: 2px 0;
+  font-size: var(--oc-text-sm);
+  color: var(--oc-text);
+  min-width: 0;
+}
+
+.activity-group[data-tool-status="failed"] .activity-caret {
+  color: var(--oc-danger);
+}
+
+.agent-footer {
+  padding: 2px 0 2px var(--oc-space-3);
+  color: var(--oc-text-muted);
+  font-size: var(--oc-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Diff de archivos modificados --- */
+details.diff-card {
+  margin: var(--oc-space-1) 0;
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-md);
+  background: var(--oc-panel-sunken);
+  min-width: 0;
+}
+
+details.diff-card > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-space-2);
+  padding: var(--oc-space-1) var(--oc-space-2);
+  font-size: var(--oc-text-xs);
+  color: var(--oc-text-muted);
+}
+
+details.diff-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.diff-path {
+  font-family: var(--oc-font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-stat {
+  display: inline-flex;
+  gap: var(--oc-space-2);
+  flex-shrink: 0;
+}
+
+.diff-added {
+  color: var(--oc-success);
+}
+
+.diff-removed {
+  color: var(--oc-danger);
+}
+
+.diff-grid {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr);
+  font-family: var(--oc-font-mono);
+  font-size: var(--oc-text-xs);
+  line-height: 1.45;
+  max-height: 420px;
+  overflow: auto;
+  border-top: 1px solid var(--oc-border);
+}
+
+.diff-cell {
+  padding: 0 var(--oc-space-2);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.diff-no {
+  color: var(--oc-text-muted);
+  text-align: right;
+  background: var(--oc-bg-raised);
+  user-select: none;
+}
+
+.diff-code.diff-add {
+  background: color-mix(in srgb, var(--oc-success) 14%, transparent);
+}
+
+.diff-code.diff-del {
+  background: color-mix(in srgb, var(--oc-danger) 14%, transparent);
+}
+
+.diff-code.diff-change {
+  background: color-mix(in srgb, var(--oc-warning, var(--oc-accent)) 12%, transparent);
+}
+
+/* --- Footer de la petición completa --- */
+.run-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--oc-space-2);
+  margin-top: var(--oc-space-2);
+  padding-top: var(--oc-space-1);
+  border-top: 1px solid var(--oc-border);
+  color: var(--oc-text-muted);
+  font-size: var(--oc-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-model {
+  color: var(--oc-text);
+}
+
+.run-status,
+.run-failed .run-status,
+.run-blocked .run-status {
+  color: var(--oc-danger);
+}
+
 /* --- Terminal estilo VSCode: una tab + selector + acciones --- */
 .term-bar {
   display: flex;

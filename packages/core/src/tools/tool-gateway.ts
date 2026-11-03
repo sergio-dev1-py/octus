@@ -226,7 +226,7 @@ export class ToolGateway {
         request.toolCallId,
       ]);
       await this.publishToolEvent("tool_call.completed", request, correlationId, { artifactId, ...skillPayload(request.skillName) });
-      return { ok: true, text: outcome.text, fullText: outcome.fullText };
+      return { ok: true, text: outcome.text, fullText: outcome.fullText, diff: outcome.diff };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = isOctusError(error) ? error.code : "tool_failed";

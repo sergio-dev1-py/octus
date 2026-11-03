@@ -367,7 +367,7 @@ export class AgentRuntime {
           args,
           signal: opts.signal,
         });
-        parts.push({ type: "tool_result", toolCallId, providerCallId, ok: result.ok, text: result.text });
+        parts.push({ type: "tool_result", toolCallId, providerCallId, ok: result.ok, text: result.text, diff: result.diff });
       } catch (error) {
         if (isOctusError(error, "aborted") || opts.signal.aborted) return "cancelled";
         if (isOctusError(error, "tool_denied")) return "declined";

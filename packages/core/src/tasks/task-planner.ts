@@ -80,6 +80,8 @@ export interface PlanTasksInput {
   revisionId?: string;
   /** Nonce para re-planificación explícita tras un rechazo (nuevo request_hash). */
   nonce?: string;
+  /** Fuerza un DAG nuevo y cancela las tasks abiertas del run. */
+  replan?: boolean;
 }
 
 const PLANNER_SYSTEM = `You decompose an implementation plan into concrete executable tasks.
@@ -92,6 +94,7 @@ Rules:
 - validationCommands must name project test commands (leave empty when unknown).
 - Every task needs concrete acceptance criteria with verifiable evidence.
 - Keep descriptions and acceptance criteria concise (max 2 sentences / 3 criteria per task) so the JSON stays complete.
+- Maximize parallelism: only add a dependency when the task truly consumes another task's output. After a base scaffold, independent feature areas (DB/schema, API, UI components/pages) must be siblings, not a chain. Aim for 2-4 parallel implementer tasks with disjoint writeScope.
 - Do not include approvals, merges, branches or worktrees: those do not exist for workers.`;
 
 export class TaskPlanner {
@@ -122,15 +125,6 @@ export class TaskPlanner {
     if (String(coord.session_id) !== run.session_id) {
       throw new OctusError("invalid_state", "Coordinator instance does not belong to the run session");
     }
-    // Un run tiene un único DAG. Si ya existen tasks (auto-plan o llamada
-    // previa), devolverlas en vez de crear un DAG duplicado con otro brief.
-    const existingTasks = await this.db.query<{ id: string; planning_id: string }>(
-      "SELECT id, planning_id FROM tasks WHERE run_id = ? ORDER BY created_at ASC, id ASC",
-      [input.runId],
-    );
-    if (existingTasks.length > 0) {
-      return { planningId: existingTasks[0]!.planning_id, taskIds: existingTasks.map((task) => task.id), created: false };
-    }
     // Anclaje exacto a la revisión elegida: explícito o el del run; jamás auto-selección.
     let planId = input.planId;
     let revisionId = input.revisionId;
@@ -159,6 +153,25 @@ export class TaskPlanner {
     if (plan.sessionId !== run.session_id) throw new OctusError("invalid_state", "Plan does not belong to the run session");
     // Sin objetivo explícito se usa el del plan aprobado (llamada sin fricción).
     const objective = input.objective?.trim() || plan.objective;
+
+    // Idempotencia por revisión: un DAG viejo de otra revisión no bloquea el
+    // plan actual. `replan` fuerza un DAG nuevo y cancela las tasks abiertas.
+    const existingTasks = await this.db.query<{ id: string; planning_id: string; revision_id: string; status: string }>(
+      "SELECT id, planning_id, revision_id, status FROM tasks WHERE run_id = ? ORDER BY created_at ASC, id ASC",
+      [input.runId],
+    );
+    const activeChildren = await this.db.queryOne<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM agent_instances WHERE run_id = ? AND parent_instance_id IS NOT NULL AND status IN ('created','running','waiting_permission','waiting_input')`,
+      [input.runId],
+    );
+    if (input.replan && Number(activeChildren?.n ?? 0) > 0) {
+      throw new OctusError("invalid_state", "Cannot replan while worker subagents are active; cancel them first");
+    }
+    const terminalTask = ["completed", "reviewed", "integrated", "failed", "cancelled", "interrupted"];
+    const supersedeIds = existingTasks.filter((task) => !terminalTask.includes(task.status)).map((task) => task.id);
+    if (!input.replan && existingTasks.length > 0 && existingTasks.every((task) => task.revision_id === revisionId)) {
+      return { planningId: existingTasks[0]!.planning_id, taskIds: existingTasks.map((task) => task.id), created: false };
+    }
 
     const model = JSON.parse(String(coord.model)) as { providerId: string; modelId: string; effort?: string };
     const hash = requestHashOf({ runId: input.runId, planId, revisionId, objective, brief: input.brief ?? "", nonce: input.nonce });
@@ -190,7 +203,20 @@ export class TaskPlanner {
       validationCommands: task.validationCommands.filter((cmd) => allowlist.has(cmd)),
     }));
     try {
-      return await this.tasks.createDag({ runId: input.runId, planId, revisionId, requestHash: hash, tasks: normalized });
+      const result = await this.tasks.createDag({ runId: input.runId, planId, revisionId, requestHash: hash, tasks: normalized });
+      if (supersedeIds.length > 0) {
+        const marks = supersedeIds.map(() => "?").join(", ");
+        const timestamp = Date.now();
+        await this.db.batch([
+          { sql: `UPDATE tasks SET status = 'cancelled', error = 'superseded by replan', updated_at = ? WHERE id IN (${marks})`, params: [timestamp, ...supersedeIds] },
+          {
+            sql: `UPDATE task_attempts SET status = 'cancelled', completed_at = ? WHERE task_id IN (${marks}) AND status IN ('pending','running')`,
+            params: [timestamp, ...supersedeIds],
+          },
+          { sql: `DELETE FROM scheduler_reservations WHERE task_id IN (${marks})`, params: supersedeIds },
+        ]);
+      }
+      return result;
     } catch (error) {
       if (error instanceof OctusError && (error.code === "invalid_tool_args" || error.code === "invalid_state" || error.code === "plan_conflict")) {
         await this.tasks.recordPlanningRejected({ runId: input.runId, planId, revisionId, requestHash: hash, reason: error.message });

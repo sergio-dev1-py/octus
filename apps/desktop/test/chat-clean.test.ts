@@ -104,6 +104,23 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     await pg().screenshot({ path: join(EVIDENCE_DIR, "task-3.png") });
   }, STEP_TIMEOUT_MS);
 
+  test("completed: resultado fuera de Working y footer total del run", async () => {
+    await pg().goto(`${baseUrl}?state=completed`, { waitUntil: "load" });
+    await pg().waitForSelector(".run-footer", { timeout: 15000 });
+    const assistant = pg().locator(".message.assistant").first();
+    expect(await assistant.locator(":scope > .md").textContent()).toContain("Delego");
+    expect(await assistant.locator("details.work .md").count()).toBe(0);
+    expect(await assistant.locator(".diff-card").count()).toBe(1);
+    expect(await assistant.locator(".diff-card summary").textContent()).toContain("components/Header.tsx");
+    const summary = await assistant.locator("details.work > summary").textContent();
+    expect(summary).toContain("Worked");
+    const footer = await pg().textContent(".run-footer");
+    expect(footer).toContain("Build");
+    expect(footer).toContain("muse-spark-1.3");
+    expect(footer).toContain("tok/s");
+    await pg().screenshot({ path: join(EVIDENCE_DIR, "task-3-completed.png") });
+  }, STEP_TIMEOUT_MS);
+
   test("failure: run fallido muestra el grupo en tono error sin romper", async () => {
     await pg().goto(`${baseUrl}?state=failed`, { waitUntil: "load" });
     expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group]").length)).toBe(1);
