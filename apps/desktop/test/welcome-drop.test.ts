@@ -101,4 +101,12 @@ describe("pathsFromDrop (todo 1: empty-drop vs empty-folder)", () => {
     const good = { getAsFile: () => ({ path: dir }) };
     expect(pathsFromDrop(dragEvent({ files: [], items: [bad, good] }))).toEqual([dir]);
   });
+
+  test("usa pathForFile (webUtils) cuando File.path no existe", () => {
+    const dir = mkEmptyDir();
+    const file = {};
+    expect(pathsFromDrop(dragEvent({ files: [file], items: [] }), () => dir)).toEqual([dir]);
+    const item = { getAsFile: () => file };
+    expect(pathsFromDrop(dragEvent({ files: [], items: [item] }), () => dir)).toEqual([dir]);
+  });
 });

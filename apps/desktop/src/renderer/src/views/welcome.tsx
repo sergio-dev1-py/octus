@@ -205,7 +205,7 @@ export function WelcomeView() {
                     onDrop={(event: DragEvent) => {
                       event.preventDefault();
                       setDragging(false);
-                      const paths = pathsFromDrop(event);
+                      const paths = pathsFromDrop(event, (file) => window.octus.pathForFile(file));
                       if (paths.length === 0) {
                         setWelcomeError("No se recibió ninguna carpeta (soltado vacío).");
                         return;

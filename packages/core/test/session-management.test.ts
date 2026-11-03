@@ -143,4 +143,63 @@ describe("project and session management with recovery (Todo 11)", () => {
       await t.cleanup();
     }
   });
+
+  test("borrar sesión con reviewer no falla por review_target_task_id inmutable", async () => {
+    const t = await makeTestCore();
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      const { runId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({
+        sessionId: session.id,
+        projectId: project.id,
+        objective: "X",
+        structured: { objective: "X", steps: [{ title: "S1" }], acceptanceCriteria: ["done"] },
+        runId,
+        createdBy: "t",
+      });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_seed");
+      const dag = await t.core.tasks.createDag({
+        runId,
+        planId: plan.id,
+        revisionId: rev.id,
+        requestHash: "h-delete-session",
+        tasks: [
+          {
+            tempId: "w1",
+            title: "Implement feature",
+            description: "Implement the feature and leave it ready for review.",
+            agentRole: "implementer",
+            priority: 1,
+            dependencies: [],
+            acceptanceCriteria: ["feature implemented"],
+            requiredTools: ["read", "write"],
+            writeScope: ["."],
+            validationCommands: [],
+            needsReview: true,
+          },
+          {
+            tempId: "r1",
+            title: "Review feature",
+            description: "Review the implemented feature and report findings.",
+            agentRole: "reviewer",
+            priority: 1,
+            dependencies: [],
+            acceptanceCriteria: ["review report written"],
+            requiredTools: ["read"],
+            writeScope: [],
+            validationCommands: [],
+            needsReview: false,
+            reviewTargetTempId: "w1",
+          },
+        ],
+      });
+      expect(dag.taskIds).toHaveLength(2);
+      await t.core.deleteSession(session.id);
+      expect(await t.core.listSessions(project.id)).toHaveLength(0);
+    } finally {
+      await t.cleanup();
+    }
+  });
 });

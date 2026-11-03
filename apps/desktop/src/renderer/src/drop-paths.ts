@@ -3,9 +3,9 @@
  * vacias llegan con dataTransfer.files vacio en Chromium/Electron y se
  * aceptan via los items (getAsFile conserva el path absoluto,
  * webkitGetAsEntry confirma directorios). "soltado vacio" solo cuando de
- * verdad no hay ruta.
- */
-export function pathsFromDrop(event: DragEvent): string[] {
+ * verdad no hay ruta. Electron >=32 eliminó File.path: el caller pasa
+ * `pathForFile` (webUtils) para resolver la ruta real del File. */
+export function pathsFromDrop(event: DragEvent, pathForFile?: (file: File) => string | undefined): string[] {
   const seen = new Set<string>();
   const paths: string[] = [];
   const pushPath = (candidate: unknown): void => {
@@ -14,17 +14,28 @@ export function pathsFromDrop(event: DragEvent): string[] {
       paths.push(candidate);
     }
   };
+  const pathOf = (file: File | null | undefined): unknown => {
+    if (!file) return undefined;
+    if (pathForFile) {
+      try {
+        const resolved = pathForFile(file);
+        if (typeof resolved === "string" && resolved.length > 0) return resolved;
+      } catch {
+        // Sin webUtils: cae al path legacy.
+      }
+    }
+    return (file as unknown as { path?: unknown }).path;
+  };
   for (const file of Array.from(event.dataTransfer?.files ?? [])) {
-    pushPath((file as unknown as { path?: unknown }).path);
+    pushPath(pathOf(file));
   }
   if (paths.length > 0) return paths;
   for (const item of Array.from(event.dataTransfer?.items ?? [])) {
     try {
-      const fromFile = (typeof item.getAsFile === "function" ? item.getAsFile() : null) as unknown as {
-        path?: unknown;
-      } | null;
-      if (fromFile && typeof fromFile.path === "string" && fromFile.path.length > 0) {
-        pushPath(fromFile.path);
+      const fromFile = (typeof item.getAsFile === "function" ? item.getAsFile() : null) as File | null;
+      const fromFilePath = pathOf(fromFile);
+      if (fromFilePath) {
+        pushPath(fromFilePath);
         continue;
       }
     } catch {

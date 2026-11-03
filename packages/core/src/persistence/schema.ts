@@ -405,7 +405,7 @@ END;
 CREATE TRIGGER trg_task_review_target_upd BEFORE UPDATE OF review_target_task_id ON tasks
 BEGIN
   SELECT CASE
-    WHEN NEW.review_target_task_id IS NOT OLD.review_target_task_id THEN RAISE(ABORT, 'review_target_task_id is immutable')
+    WHEN NEW.review_target_task_id IS NOT NULL AND NEW.review_target_task_id IS NOT OLD.review_target_task_id THEN RAISE(ABORT, 'review_target_task_id is immutable')
   END;
 END;
 
@@ -870,6 +870,18 @@ CREATE TABLE scheduled_runs (
 CREATE INDEX idx_scheduled_runs_task ON scheduled_runs(task_id, created_at);
 `;
 
+const MIGRATION_0012 = `
+-- El FK ON DELETE SET NULL necesita poder limpiar review_target_task_id al
+-- borrar el target o la sesión. Solo se prohíbe cambiar a otro target.
+DROP TRIGGER IF EXISTS trg_task_review_target_upd;
+CREATE TRIGGER trg_task_review_target_upd BEFORE UPDATE OF review_target_task_id ON tasks
+BEGIN
+  SELECT CASE
+    WHEN NEW.review_target_task_id IS NOT NULL AND NEW.review_target_task_id IS NOT OLD.review_target_task_id THEN RAISE(ABORT, 'review_target_task_id is immutable')
+  END;
+END;
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "core-etapa1", sql: MIGRATION_0001 },
   { version: 2, name: "agents-plans-etapa2", sql: MIGRATION_0002 },
@@ -882,4 +894,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 9, name: "usage-message-id-wbct4", sql: MIGRATION_0009 },
   { version: 10, name: "scheduled-tasks-wbct7", sql: MIGRATION_0010 },
   { version: 11, name: "schedules-edit-once-maxruns", sql: MIGRATION_0011 },
+  { version: 12, name: "task-review-target-cascade", sql: MIGRATION_0012 },
 ];
