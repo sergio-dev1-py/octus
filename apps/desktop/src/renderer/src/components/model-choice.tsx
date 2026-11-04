@@ -1,5 +1,5 @@
 /** Selector de modelo/effort reutilizable (Ajustes › Agentes). */
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import type { ModelSelection } from "@octus/shared";
 import { loadModels, state } from "../store.js";
 
@@ -11,9 +11,38 @@ export function ModelChoice(props: {
 }) {
   const [open, setOpen] = createSignal(false);
   const [query, setQuery] = createSignal("");
+  const [coords, setCoords] = createSignal({ top: 8, left: 8, width: 420 });
+  let anchor: HTMLButtonElement | undefined;
+  let popoverEl: HTMLDivElement | undefined;
   const current = () =>
     (state.modelsByProvider[props.value.providerId] ?? []).find((model) => model.modelId === props.value.modelId);
   const efforts = () => current()?.capabilities.reasoningEfforts ?? [];
+  const place = () => {
+    const rect = anchor?.getBoundingClientRect();
+    const width = Math.min(420, Math.max(280, window.innerWidth - 16));
+    const height = Math.min(320, window.innerHeight - 16);
+    let top = (rect?.bottom ?? 8) + 8;
+    if (top + height > window.innerHeight - 8) top = Math.max(8, (rect?.top ?? 8) - height - 8);
+    let left = (rect?.right ?? width + 8) - width;
+    left = Math.min(Math.max(8, left), window.innerWidth - width - 8);
+    setCoords({ top, left, width });
+  };
+  // Un modal con scroll o un resize invalidan la posición fija: se cierra.
+  createEffect(() => {
+    if (!open()) return;
+    place();
+    const closeOnViewportChange = (event?: Event) => {
+      const target = event?.target;
+      if (target instanceof Node && popoverEl?.contains(target)) return;
+      setOpen(false);
+    };
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+    onCleanup(() => {
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    });
+  });
   const groups = () => {
     const needle = query().trim().toLowerCase();
     return state.providers
@@ -54,6 +83,7 @@ export function ModelChoice(props: {
   return (
     <div class="model-choice" id={props.label}>
       <button
+        ref={anchor}
         type="button"
         class="composer-chip composer-model-button"
         title="Elegir modelo"
@@ -85,7 +115,21 @@ export function ModelChoice(props: {
       </Show>
       <Show when={open()}>
         <div class="model-popover-backdrop" onClick={() => setOpen(false)} />
-        <div class="model-popover" role="listbox" aria-label="Modelos disponibles">
+        <div
+          ref={popoverEl}
+          class="model-popover"
+          role="listbox"
+          aria-label="Modelos disponibles"
+          style={{
+            position: "fixed",
+            top: `${coords().top}px`,
+            left: `${coords().left}px`,
+            width: `${coords().width}px`,
+            bottom: "auto",
+            right: "auto",
+            "max-height": "min(320px, calc(100vh - 16px))",
+          }}
+        >
           <input
             type="text"
             placeholder="Buscar modelo…"

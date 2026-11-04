@@ -1273,6 +1273,13 @@ code.muted {
   cursor: default;
 }
 
+.message-provisional {
+  margin: var(--oc-space-2) 0 0;
+  font-size: var(--oc-text-xs);
+  color: var(--oc-text-muted);
+  font-style: italic;
+}
+
 .agent-models-head {
   justify-content: space-between;
   align-items: flex-start;

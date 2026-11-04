@@ -91,6 +91,8 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     expect(userBg).toBe("rgb(217, 222, 233)");
     // El subagente vive dentro del Working del mensaje, no en un panel inferior.
     expect(await pg().textContent(".message.assistant details.work [data-subagent-group] summary")).toContain("working");
+    // El texto del coordinador es provisional mientras quedan agentes activos.
+    expect(await pg().textContent(".message-provisional")).toContain("provisional");
     expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group]").length)).toBe(1);
     // Los subagentes activos se expanden solos para mostrar su trabajo.
     expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(true);

@@ -33,7 +33,7 @@ const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   running: ["completed", "failed", "blocked", "cancelled", "interrupted"],
   blocked: ["ready", "blocked", "cancelled"],
   failed: ["assigned", "cancelled"],
-  completed: ["cancelled", "integrated"],
+  completed: ["blocked", "cancelled", "integrated"],
   reviewed: ["cancelled", "integrated"],
   integrated: ["cancelled"],
   cancelled: [],
@@ -480,7 +480,7 @@ export class TaskManager {
    */
   async retryTask(taskId: string, opts?: { directoryId?: string; briefSuffix?: string }): Promise<{ attempt: number; instanceId: string }> {
     const task = await this.getTask(taskId);
-    const retryableBlocked = task.status === "blocked" && (task.blockedReason === "review-rounds-exhausted" || task.blockedReason === "needs-approval");
+    const retryableBlocked = task.status === "blocked" && (task.blockedReason === "review-rounds-exhausted" || task.blockedReason === "needs-approval" || task.blockedReason === "review-verdict-missing");
     if (task.status !== "failed" && task.status !== "interrupted" && !retryableBlocked) {
       throw new OctusError("invalid_state", `Only failed or interrupted tasks can be retried; user-blocked tasks are also allowed (task is ${task.status})`);
     }

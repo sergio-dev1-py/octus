@@ -671,4 +671,32 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
       await t.cleanup();
     }
   });
+
+  test("H8: coordinador termina sin veredicto → run failed y task blocked (no queda working)", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const s = await approvedRun(t);
+      const dag = await t.core.tasks.createDag({
+        runId: s.runId,
+        planId: s.plan.id,
+        revisionId: s.revision.id,
+        requestHash: "h-verdict-missing",
+        tasks: [IMPL_TASK("w", "work")],
+      });
+      await t.core.scheduler.tick({ sessionId: s.session.id });
+      await until(async () => (await t.core.tasks.getTask(dag.taskIds[0]!)).status === "completed");
+      // El coordinador ya terminó y nadie registrará el veredicto.
+      await t.core.db.exec("UPDATE agent_instances SET status = 'completed' WHERE run_id = ? AND parent_instance_id IS NULL", [s.runId]);
+      await t.core.scheduler.finalizeRun(s.runId);
+      const writer = await t.core.tasks.getTask(dag.taskIds[0]!);
+      expect(writer.status).toBe("blocked");
+      expect(writer.blockedReason).toBe("review-verdict-missing");
+      const run = (await t.core.getRun(s.runId)).run;
+      expect(run.status).toBe("failed");
+      expect(run.error).toMatch(/without review verdict/);
+    } finally {
+      await t.cleanup();
+    }
+  });
 });

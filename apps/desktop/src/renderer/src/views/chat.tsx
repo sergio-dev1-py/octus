@@ -261,6 +261,11 @@ export function MessageView(props: { message: Message }) {
     return value ? `Worked · ${formatDuration(value.durationMs)}` : "Worked";
   };
   const showChildren = () => isLastAssistantOfRun() && hasChildren();
+  const provisional = () =>
+    isAssistant() &&
+    isLastAssistantOfRun() &&
+    active() &&
+    textParts().some((part) => part.type === "text");
   const isEmpty = () => textParts().length === 0 && visibleTools().length === 0 && !showChildren();
   return (
     <Show when={!isEmpty()}>
@@ -293,6 +298,11 @@ export function MessageView(props: { message: Message }) {
           </details>
         </Show>
         <For each={textParts()}>{(part) => <PartView part={part} />}</For>
+        <Show when={provisional()}>
+          <p class="message-provisional" role="status">
+            El run sigue trabajando; esta respuesta puede ser provisional.
+          </p>
+        </Show>
         <Show when={isAssistant() && isLastAssistantOfRun()}>
           <RunFooter runId={message().runId} />
         </Show>

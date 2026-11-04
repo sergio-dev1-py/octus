@@ -1083,7 +1083,7 @@ export class OctusCore {
     this.bus.publish(appended);
   }
 
-  async interrupt(sessionId: string): Promise<void> {
+  async interrupt(sessionId: string, reason = "Cancelled by user"): Promise<void> {
     const active = this.activeRuns.get(sessionId);
     this.permissions.cancelSession(sessionId);
     this.questions.cancelSession(sessionId);
@@ -1093,6 +1093,31 @@ export class OctusCore {
     if (active) {
       for (const run of active.values()) run.controller.abort();
       await Promise.all([...active.values()].map((run) => run.finished));
+    }
+    // Un run con el coordinador ya terminado pero tasks en background no está en
+    // `activeRuns`: sin esto se quedaría en `executing` para siempre tras Stop.
+    await this.cancelRunsForSession(sessionId, reason).catch(() => undefined);
+  }
+
+  private async cancelRunsForSession(sessionId: string, reason: string): Promise<void> {
+    const rows = await this.db.query<{ id: string }>(
+      "SELECT id FROM runs WHERE session_id = ? AND status IN ('planning','executing','awaiting_approval','promoting')",
+      [sessionId],
+    );
+    const timestamp = now();
+    for (const row of rows) {
+      const changed = await this.db.exec(
+        "UPDATE runs SET status = 'cancelled', error = ?, updated_at = ?, completed_at = ? WHERE id = ? AND status IN ('planning','executing','awaiting_approval','promoting')",
+        [reason, timestamp, timestamp, row.id],
+      );
+      if (changed.changes === 0) continue;
+      const event = await this.events.append({
+        type: "run.cancelled",
+        aggregate: { kind: "run", id: row.id },
+        correlationId: createId("cor"),
+        payload: { reason },
+      });
+      this.bus.publish(event);
     }
   }
 
@@ -2227,7 +2252,7 @@ export class OctusCore {
     if (this.closed) return;
     this.closed = true;
     for (const [sessionId] of this.activeRuns) {
-      await this.interrupt(sessionId);
+      await this.interrupt(sessionId, "Interrupted by shutdown");
     }
     await this.db.checkpoint().catch(() => undefined);
     await this.db.close();

@@ -339,7 +339,9 @@ export type TaskBlockedReason =
   | "repo-blocked"
   | "deps-unavailable"
   /** El reviewer pidió cambios hasta agotar las rondas; requiere decisión del usuario. */
-  | "review-rounds-exhausted";
+  | "review-rounds-exhausted"
+  /** El coordinador terminó sin registrar veredicto para un writer completado. */
+  | "review-verdict-missing";
 
 export type AttemptStatus =
   | "pending"

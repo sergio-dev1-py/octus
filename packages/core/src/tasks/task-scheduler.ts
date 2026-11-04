@@ -665,7 +665,10 @@ export class TaskScheduler {
     if (tasks.length === 0) return;
     const maxAttempts = this.getSchedulerConfig().maxAttemptsPerTask;
     const settledBlocked = (task: Task): boolean =>
-      task.status === "blocked" && (task.blockedReason === "review-rounds-exhausted" || task.blockedReason === "needs-approval");
+      task.status === "blocked" &&
+      (task.blockedReason === "review-rounds-exhausted" ||
+        task.blockedReason === "needs-approval" ||
+        task.blockedReason === "review-verdict-missing");
     const open = tasks.filter(
       (t) =>
         !["completed", "reviewed", "integrated", "cancelled"].includes(t.status) &&
@@ -674,11 +677,40 @@ export class TaskScheduler {
     );
     if (open.length > 0) return;
     // Un writer completado que exige review aún no está asentado: el
-    // coordinador debe registrar el veredicto. No cerrar el run como failed.
-    const awaitingVerdict = tasks.some(
+    // coordinador debe registrar el veredicto. Si el coordinador ya terminó y no
+    // queda nadie activo, el run no puede avanzar: se cierra como fallo y las
+    // tasks quedan bloqueadas para revisión/reintento manual, nunca "working…".
+    const awaitingVerdict = tasks.filter(
       (t) => t.agentRole === "implementer" && t.needsReview && t.status === "completed",
     );
-    if (awaitingVerdict) return;
+    if (awaitingVerdict.length > 0) {
+      const activeAgents = await this.db.queryOne<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM agent_instances WHERE run_id = ? AND status IN ('created','running','waiting_permission','waiting_input')",
+        [runId],
+      );
+      const coordinator = await this.db.queryOne<{ status: string }>(
+        "SELECT status FROM agent_instances WHERE run_id = ? AND parent_instance_id IS NULL ORDER BY created_at ASC LIMIT 1",
+        [runId],
+      );
+      const coordinatorTerminal =
+        !coordinator ||
+        ["completed", "failed", "cancelled"].includes(String(coordinator.status));
+      if (Number(activeAgents?.n ?? 0) === 0 && coordinatorTerminal) {
+        for (const task of awaitingVerdict) {
+          await this.tasks()
+            .setStatus(task.id, "blocked", {
+              reason: "review-verdict-missing",
+              details: { reason: "review-verdict-missing", coordinatorStatus: coordinator?.status ?? "missing" },
+            })
+            .catch(() => undefined);
+        }
+        await this.markRunFailed(
+          runId,
+          `${awaitingVerdict.length} writer(s) completed without review verdict; coordinator ended before record_review`,
+        );
+      }
+      return;
+    }
 
     const failedTasks = tasks.filter((t) => t.status === "failed" || settledBlocked(t));
     const writers = tasks.filter((t) => t.agentRole === "implementer");
