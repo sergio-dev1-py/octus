@@ -1847,6 +1847,43 @@ details.work .message {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.activity-target {
+  font-family: var(--oc-font-mono);
+  font-size: var(--oc-text-xs);
+  color: var(--oc-text);
+  background: var(--oc-bg-subtle, transparent);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius-sm, 4px);
+  padding: 0 5px;
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-delivery {
+  margin: 4px 0 2px 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--oc-border);
+  font-size: var(--oc-text-xs);
+  color: var(--oc-text);
+  max-height: 240px;
+  overflow: auto;
+}
+
+.agent-delivery .md p,
+.agent-delivery .md ul,
+.agent-delivery .md ol {
+  margin: 2px 0;
+}
+
+.agent-error {
+  margin: 4px 0 2px 14px;
+  font-size: var(--oc-text-xs);
+  color: var(--oc-danger);
 }
 
 .activity-dot {

@@ -33,6 +33,30 @@ describe("agent manager (delegation)", () => {
     }
   });
 
+  test("el delivery sintetiza acciones si el hijo termina sin texto final", async () => {
+    const t = await makeTestCore({
+      metaTurns: [{ toolCalls: [{ name: "read", args: { path: "missing.txt" } }] }, { text: "" }],
+    });
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      const { instanceId } = await makeRun(t, session.id);
+      const result = await t.core.agents.spawn({
+        parentInstanceId: instanceId,
+        definitionId: "explorer",
+        brief: "Read missing.txt and report.",
+        mode: "foreground",
+        model: { providerId: "fake-meta", modelId: "muse-wonder-1.0" },
+      });
+      expect(result.delivery?.status).toBe("completed");
+      expect(result.delivery?.summary).toContain("Últimas acciones");
+      expect(result.delivery?.summary).toContain("read");
+      expect(result.delivery?.summary).toContain("missing.txt");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("background survives the coordinator run and its delivery stays pending", async () => {
     const t = await makeTestCore({
       metaTurns: [{ toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }] }, { text: "child done" }],

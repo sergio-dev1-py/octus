@@ -94,19 +94,21 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     // El texto del coordinador es provisional mientras quedan agentes activos.
     expect(await pg().textContent(".message-provisional")).toContain("provisional");
     expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group]").length)).toBe(1);
-    // Los subagentes activos se expanden solos para mostrar su trabajo.
-    expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(true);
+    // Los subagentes están cerrados por defecto, incluso mientras trabajan.
+    expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(false);
     expect(await pg().getAttribute("[data-subagent-group]", "data-subagent-depth")).toBe("1");
     // Línea corta con el rol del subagente.
     const label = await pg().textContent("[data-subagent-group] summary");
     expect(label).toContain("implementer");
-    // Click real: colapsa/expande y conserva la herramienta en línea compacta.
-    await pg().click("[data-subagent-group] summary");
-    expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(false);
+    // Click real: expande, muestra la herramienta y el archivo concreto.
     await pg().click("[data-subagent-group] summary");
     expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(true);
     expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group] .activity-tool").length)).toBe(1);
-    expect(await pg().textContent("[data-subagent-group] .activity-tool-name")).toBe("read");
+    expect(await pg().textContent("[data-subagent-group] .activity-tool-name")).toBe("Read");
+    expect(await pg().textContent("[data-subagent-group] .activity-target")).toContain("src/login.ts");
+    // Colapsa de nuevo.
+    await pg().click("[data-subagent-group] summary");
+    expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(false);
     await pg().screenshot({ path: join(EVIDENCE_DIR, "task-3.png") });
   }, STEP_TIMEOUT_MS);
 

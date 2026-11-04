@@ -21,6 +21,8 @@ import {
   questionTimeoutRemainingMs,
   subagentLineage,
   subagentRollup,
+  toolCallTargetLabel,
+  toolDisplayName,
   toolStatusMeta,
   type PairedToolCall,
   type RuntimeErrorItem,
@@ -28,6 +30,7 @@ import {
 } from "@octus/shared";
 import { invoke, onEvent } from "./api.js";
 import { DiffCard } from "./diff-view.jsx";
+import { renderMarkdown } from "./markdown.js";
 import { loadChildMessages, loadRunUsage, retryTask, setError, state } from "./store.js";
 
 // ---------------------------------------------------------------- caché propia
@@ -225,6 +228,19 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
         const active = () => ["created", "running", "waiting_permission", "waiting_input"].includes(child.status);
         const status = () => (active() ? "working" : child.status);
         const elapsed = () => (active() ? "" : formatToolDurationMs(child.createdAt, child.updatedAt));
+        const deliveryText = () => {
+          const assistants = messages().filter((m) => m.role === "assistant");
+          for (let i = assistants.length - 1; i >= 0; i--) {
+            const text = assistants[i]!.parts
+              .filter((part): part is { type: "text"; text: string } => part.type === "text" && Boolean(part.text?.trim()))
+              .map((part) => part.text)
+              .join("\n");
+            if (text.trim()) return text;
+          }
+          return "";
+        };
+        const toolTarget = (item: PairedToolCall): string =>
+          toolCallTargetLabel(item.call.name, item.call.argumentsJson);
         createEffect(() => {
           if (!active()) void loadRunUsage(child.runId);
         });
@@ -241,7 +257,7 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
           return [model(), fmtClock(wall)].filter(Boolean).join(" · ");
         };
         return (
-          <details class="activity-node" open={active()} data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
+          <details class="activity-node" open={false} data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
             <summary>
               <span class="activity-caret" aria-hidden="true">›</span>
               <span class="activity-name">{label()}</span>
@@ -253,16 +269,35 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
             </summary>
             <div class="activity-body">
               <For each={tools()}>
-                {(item) => (
-                  <div class="activity-tool" data-tool-status={item.kind === "tool" && item.result ? (item.result.ok ? "completed" : "failed") : "running"}>
-                    <span class="activity-dot" aria-hidden="true" />
-                    <span class="activity-tool-name">{item.kind === "tool" ? item.call.name : ""}</span>
-                    <span class="activity-meta">{item.kind === "tool" && item.result ? (item.result.ok ? "ok" : "failed") : "running"}</span>
-                  </div>
-                )}
+                {(item) => {
+                  const target = () => toolTarget(item);
+                  return (
+                    <div
+                      class="activity-tool"
+                      data-tool-status={item.kind === "tool" && item.result ? (item.result.ok ? "completed" : "failed") : "running"}
+                      title={item.kind === "tool" ? (target() || item.call.name) : ""}
+                    >
+                      <span class="activity-dot" aria-hidden="true" />
+                      <span class="activity-tool-name">{item.kind === "tool" ? toolDisplayName(item.call.name) : ""}</span>
+                      <Show when={target()}>
+                        <code class="activity-target">{target()}</code>
+                      </Show>
+                      <span class="activity-meta">{item.kind === "tool" && item.result ? (item.result.ok ? "ok" : "failed") : "running"}</span>
+                    </div>
+                  );
+                }}
               </For>
               <For each={tools().filter((item) => item.result?.diff)}>{(item) => <DiffCard diff={item.result!.diff!} />}</For>
               <ChildAgents parentInstanceId={child.id} depth={depth() + 1} />
+              <Show when={!active() && child.error}>
+                <p class="agent-error" data-child-error={child.id}>Error: {child.error}</p>
+              </Show>
+              <Show when={!active() && deliveryText()}>
+                <div class="agent-delivery md" data-child-delivery={child.id} innerHTML={renderMarkdown(deliveryText())} />
+              </Show>
+              <Show when={!active() && !deliveryText() && !child.error}>
+                <p class="muted" data-child-empty={child.id}>Sin entrega textual; revisa las acciones.</p>
+              </Show>
               <Show when={!active() && agentFooter()}>
                 <div class="agent-footer" data-agent-footer={child.id}>{agentFooter()}</div>
               </Show>

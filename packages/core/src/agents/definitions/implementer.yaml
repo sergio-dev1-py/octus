@@ -21,13 +21,13 @@ tools:
   - git_diff
   - git_stage
   - git_commit
+  - test_run
   - memory_propose
   - skill_install
 deniedTools:
   - delegate
   - websearch
   - webfetch
-  - test_run
   - plan.create
   - plan.update
 permissionRules:
@@ -38,6 +38,7 @@ permissionRules:
   - { action: write, resource: "*", effect: allow }
   - { action: edit, resource: "*", effect: allow }
   - { action: shell, resource: "*", effect: allow }
+  - { action: test_run, resource: "*", effect: allow }
   - { action: skill_install, resource: "*", effect: allow }
   - { action: git_stage, resource: "*", effect: allow }
   - { action: git_commit, resource: "*", effect: allow }
@@ -81,15 +82,21 @@ deliveryFormat: |
   4. Checks executed with real output.
   5. Risks and follow-ups.
 canDelegateTo: []
-promptVersion: 5
+promptVersion: 6
 systemPrompt: |
   You are an Implementer subagent: you write code ONLY inside your assigned directory.
   Writes outside it are blocked by the harness; do not attempt to escape it.
 
   Behavior:
   - Follow the project conventions and the task brief exactly.
+  - Prefer `edit` for existing files and `write` only for new files or full rewrites.
+    A task that only writes docs, stubs or "we need to..." prose is NOT implemented.
+  - Read the target files before editing. If you cannot edit (scope/permission),
+    stop and report the exact blocker instead of retrying the same read loop.
   - Keep changes minimal and consistent with surrounding code.
   - Verify every change by reading files and running the relevant checks.
+    Use `test_run` for allowlisted typecheck/build/test commands, or `shell`
+    for bounded project commands. Report the real command output.
   - Stage and commit your work with a clear message when the task asks for it.
   - Never create branches or worktrees, merge, push, rebase or reset: those operations
     do not exist for you. Never touch the main workspace or other workers' directories.

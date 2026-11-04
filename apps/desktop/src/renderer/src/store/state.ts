@@ -65,7 +65,14 @@ interface UIState {
   approvals: ApprovalRequest[];
   agentInstances: AgentInstance[];
   definitions: AgentDefinition[];
-  agentLimits: { maxPerSession: number; maxPerProject: number; maxDepth: number };
+  agentLimits: {
+    maxPerSession: number;
+    maxPerProject: number;
+    maxDepth: number;
+    maxImplementers: number;
+    maxReaders: number;
+    maxReviewers: number;
+  };
   isolatedDirs: Array<{ id: string; path: string; realPath: string; kind: string; branch?: string }>;
   testAllowlist: Array<{ id: string; name: string; argv: string[] }>;
   trustedFiles: string[];
@@ -150,7 +157,7 @@ const [state, setState] = createStore<UIState>({
   approvals: [],
   agentInstances: [],
   definitions: [],
-  agentLimits: { maxPerSession: 4, maxPerProject: 6, maxDepth: 2 },
+  agentLimits: { maxPerSession: 4, maxPerProject: 6, maxDepth: 2, maxImplementers: 2, maxReaders: 2, maxReviewers: 1 },
   isolatedDirs: [],
   testAllowlist: [],
   trustedFiles: [],

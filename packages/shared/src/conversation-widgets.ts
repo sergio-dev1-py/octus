@@ -264,6 +264,62 @@ export function messageRenderItems(parts: MessagePart[]): MessageRenderItem[] {
   return items;
 }
 
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  read: "Read",
+  write: "Wrote",
+  edit: "Edited",
+  glob: "Glob",
+  grep: "Grep",
+  shell: "Ran",
+  test_run: "Tested",
+  git_status: "Git status",
+  git_diff: "Diff",
+  git_stage: "Staged",
+  git_commit: "Committed",
+  delegate: "Delegated",
+  question: "Asked",
+  memory_propose: "Memory",
+};
+
+/** Nombre corto de la herramienta para la lista de actividad. */
+export function toolDisplayName(name: string): string {
+  return TOOL_DISPLAY_NAMES[name] ?? name;
+}
+
+/** Objetivo legible de una tool call: archivo, patrón o comando (para la UI). */
+export function toolCallTargetLabel(name: string, argumentsJson: string): string {
+  try {
+    const args = JSON.parse(argumentsJson) as Record<string, unknown>;
+    const text = (...keys: string[]): string =>
+      keys.map((key) => args[key]).find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? "";
+    switch (name) {
+      case "read":
+      case "write":
+      case "edit":
+        return text("path", "file_path", "file");
+      case "glob":
+      case "grep":
+        return text("pattern", "query", "path");
+      case "shell":
+        return text("command", "cmd");
+      case "delegate":
+        return text("definitionId", "brief");
+      case "test_run":
+        return text("entryId", "command");
+      case "git_diff":
+        return text("path", "range", "base", "head");
+      case "question":
+        return text("question");
+      case "memory_propose":
+        return text("title", "summary");
+      default:
+        return text("path", "pattern", "command", "query", "title", "entryId");
+    }
+  } catch {
+    return "";
+  }
+}
+
 /** Preguntas pendientes ordenadas por creación (la más antigua primero). */
 export function orderPendingQuestions(requests: QuestionRequest[]): QuestionRequest[] {
   return [...requests].sort((a, b) => a.createdAt - b.createdAt);

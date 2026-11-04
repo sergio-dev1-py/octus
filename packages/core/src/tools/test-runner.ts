@@ -4,7 +4,7 @@
  * Los comandos salen de una allowlist explícita del usuario (kv por proyecto).
  */
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -38,6 +38,28 @@ function allowlistKey(projectId: string): string {
   return `test_allowlist.${projectId}`;
 }
 
+/** Defaults seguros y deterministas para proyectos Node: scripts estándar. */
+export function defaultTestEntries(rootPath: string): TestEntry[] {
+  try {
+    const pkgPath = path.join(rootPath, "package.json");
+    if (!existsSync(pkgPath)) return [];
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { scripts?: Record<string, unknown> };
+    const scripts = pkg.scripts ?? {};
+    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    const wanted: Array<[string, string]> = [
+      ["typecheck", "typecheck"],
+      ["build", "build"],
+      ["test", "test"],
+      ["test:unit", "test:unit"],
+    ];
+    return wanted
+      .filter(([, script]) => typeof scripts[script] === "string")
+      .map(([id, script]) => ({ id, name: `npm run ${script}`, argv: [npm, "run", script], timeoutMs: 600_000 }));
+  } catch {
+    return [];
+  }
+}
+
 export class TestRunner {
   constructor(
     private readonly db: PersistenceService,
@@ -55,6 +77,15 @@ export class TestRunner {
     }
   }
 
+  /** Si el proyecto nunca configuró allowlist, propone los scripts estándar de package.json. */
+  async ensureDefaults(projectId: string, rootPath: string): Promise<TestEntry[]> {
+    const row = await this.db.queryOne<{ key: string }>("SELECT key FROM kv WHERE key = ?", [allowlistKey(projectId)]);
+    if (row) return this.listAllowlist(projectId);
+    const defaults = defaultTestEntries(rootPath);
+    if (defaults.length === 0) return [];
+    return this.saveAllowlist(projectId, defaults);
+  }
+
   /** Solo la aplicación en nombre del usuario (nunca un modelo). */
   async saveAllowlist(projectId: string, entries: TestEntry[]): Promise<TestEntry[]> {
     const parsed = z.array(testEntrySchema).safeParse(entries);
@@ -70,7 +101,8 @@ export class TestRunner {
   }
 
   async run(projectId: string, entryId: string, sourceDir: string, signal: AbortSignal): Promise<TestRunResult> {
-    const entries = await this.listAllowlist(projectId);
+    const configured = await this.listAllowlist(projectId);
+    const entries = configured.length > 0 ? configured : defaultTestEntries(sourceDir);
     const entry = entries.find((e) => e.id === entryId);
     if (!entry) {
       throw new OctusError("tool_denied", `Test entry '${entryId}' is not in the project allowlist`);
@@ -78,7 +110,9 @@ export class TestRunner {
     const started = now();
     const sandbox = mkdtempSync(path.join(this.tmpRoot, "octus-test-"));
     try {
+      const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]).catch(() => undefined);
       this.copyDisposable(sourceDir, sandbox);
+      this.linkNodeModules(sourceDir, project ? String(project.root_path) : undefined, sandbox);
       const [executable, ...args] = entry.argv;
       const timeoutMs = entry.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const output = await this.execute(executable!, args, sandbox, timeoutMs, signal);
@@ -89,13 +123,27 @@ export class TestRunner {
     }
   }
 
+  /** node_modules no se copia (pesado): se enlaza desde el workspace principal. */
+  private linkNodeModules(sourceDir: string, projectRoot: string | undefined, sandbox: string): void {
+    const candidates = [path.join(sourceDir, "node_modules"), ...(projectRoot ? [path.join(projectRoot, "node_modules")] : [])];
+    const target = candidates.find((candidate) => existsSync(candidate));
+    if (!target) return;
+    const link = path.join(sandbox, "node_modules");
+    if (existsSync(link)) return;
+    try {
+      symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      // Sin enlace, el comando fallará con un error claro en su salida.
+    }
+  }
+
   /** Copia sin `.git`, con topes; los symlinks se materializan (nada apunta fuera). */
   private copyDisposable(sourceDir: string, sandbox: string): void {
     let bytes = 0;
     let files = 0;
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name === ".git") continue;
+        if (entry.name === ".git" || entry.name === "node_modules") continue;
         const full = path.join(dir, entry.name);
         if (entry.isSymbolicLink()) {
           try {
@@ -124,13 +172,13 @@ export class TestRunner {
     cpSync(sourceDir, sandbox, {
       recursive: true,
       dereference: true,
-      filter: (src) => path.basename(src) !== ".git",
+      filter: (src) => path.basename(src) !== ".git" && path.basename(src) !== "node_modules",
     });
   }
 
   private execute(executable: string, args: string[], cwd: string, timeoutMs: number, signal: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = execFile(executable, args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+      const child = execFile(executable, args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true, shell: process.platform === "win32" }, (error, stdout, stderr) => {
         if (error) {
           const out = `${stdout}${stderr}`.slice(0, MAX_OUTPUT_CHARS);
           reject(new OctusError("tool_failed", `Test command failed (exit ${String((error as { code?: unknown }).code ?? "?")}): ${out.slice(0, 2000) || "(no output)"}`));

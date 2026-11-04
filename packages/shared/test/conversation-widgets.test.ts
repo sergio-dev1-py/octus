@@ -20,6 +20,8 @@ import {
   subagentLineage,
   subagentRollup,
   summarizeAgentActivity,
+  toolCallTargetLabel,
+  toolDisplayName,
   toolStatusMeta,
   type ModifiedFile,
 } from "../src/conversation-widgets.js";
@@ -241,5 +243,16 @@ describe("chat limpio + subagentes (workbench-chat-terminal/3)", () => {
     expect(subagentRollup([]).status).toBe("idle");
     const r = subagentRollup(["failed", "running", "completed"]);
     expect([r.failed, r.active, r.total]).toEqual([1, 1, 3]);
+  });
+
+  test("tool labels y objetivos: archivo, patrón y comando visibles", () => {
+    expect(toolDisplayName("read")).toBe("Read");
+    expect(toolDisplayName("edit")).toBe("Edited");
+    expect(toolDisplayName("test_run")).toBe("Tested");
+    expect(toolCallTargetLabel("read", JSON.stringify({ path: "src/a.ts" }))).toBe("src/a.ts");
+    expect(toolCallTargetLabel("edit", JSON.stringify({ path: "lib/b.ts" }))).toBe("lib/b.ts");
+    expect(toolCallTargetLabel("grep", JSON.stringify({ pattern: "TODO" }))).toBe("TODO");
+    expect(toolCallTargetLabel("shell", JSON.stringify({ command: "npm test" }))).toBe("npm test");
+    expect(toolCallTargetLabel("read", "{bad")).toBe("");
   });
 });

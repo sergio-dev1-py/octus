@@ -18,6 +18,7 @@ import { backoffMs, now } from "../util.js";
 import { COMPACTION_PROMPT } from "../prompts/prompts.js";
 import type { ContextBuilder } from "./context-builder.js";
 import { nextMessageId } from "./context-builder.js";
+import { extractEmbeddedToolCalls } from "./embedded-tool-calls.js";
 import type { SkillPromptSections, SkillSectionsHook } from "../skills/skill-runtime.js";
 import type { EventBus, EventStore } from "../events/event-store.js";
 import type { PersistenceService } from "../persistence/persistence-service.js";
@@ -325,6 +326,17 @@ export class AgentRuntime {
       }
       if (idleFired && acc.error?.code === "aborted") {
         acc.error = { code: "timeout", message: `No provider activity for ${idleMs}ms`, retryable: attempt < (this.options.maxAttemptsPerStep ?? 5) };
+      }
+      // Algunos modelos (p. ej. DSML) emiten las tool calls como texto. Se
+      // convierten en llamadas reales y se limpia el bloque del texto persistido.
+      if (acc.calls.size === 0 && /<\s*(?:[^>\s]+[\s:])?invoke\b/i.test(acc.text)) {
+        const extracted = extractEmbeddedToolCalls(acc.text);
+        if (extracted.calls.length > 0) {
+          acc.text = extracted.text;
+          for (const call of extracted.calls) {
+            acc.calls.set(createId("call"), { name: call.name, args: call.argumentsJson });
+          }
+        }
       }
       emit({ kind: "part.done", sessionId: session.id, runId: instance.runId, instanceId: instance.id, messageId, part: "text" });
       return acc;

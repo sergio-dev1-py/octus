@@ -17,7 +17,7 @@ function toJsonSchema(schema: z.ZodType<unknown>): Record<string, unknown> {
 export const testRunTool: ToolDefinition = {
   manifest: {
     name: "test_run",
-    description: "Run an allowlisted test command in a disposable copy (never on worker files). Requires approval.",
+    description: "Run an allowlisted test command in a disposable copy (never on worker files). Standard ids typecheck/build/test are available automatically when package.json defines them. Auto-allowed for reviewers.",
     inputJsonSchema: toJsonSchema(testRunSchema),
     permissionAction: "test_run",
   },

@@ -1157,7 +1157,11 @@ export class OctusCore {
     const children = await this.agents.children(instanceId).catch(() => []);
     const active = children.filter((child) => ["created", "running", "waiting_permission", "waiting_input"].includes(child.status));
     const terminal = ["completed", "reviewed", "integrated", "failed", "cancelled", "interrupted"];
-    const lines = [`Run ${runId}: ${tasks.length} task(s), ${children.length} worker(s), ${active.length} active.`];
+    const limits = this.config.get().agentLimits;
+    const lines = [
+      `Run ${runId}: ${tasks.length} task(s), ${children.length} worker(s), ${active.length} active.`,
+      `Limits: session ${limits.maxPerSession} active agents (coordinator counts), project ${limits.maxPerProject}, depth ${limits.maxDepth}, implementers ${limits.maxImplementers}/session, readers ${limits.maxReaders}/session, reviewers ${limits.maxReviewers}/session.`,
+    ];
     if (tasks.length === 0) {
       lines.push("This run has NO tasks yet. For implementation work call plan_tasks NOW. Never reuse task/agent ids from previous runs.");
     } else if (active.length > 0) {
@@ -1932,7 +1936,9 @@ export class OctusCore {
   }
 
   async testAllowlist(projectId: string): Promise<TestEntry[]> {
-    return this.tests.listAllowlist(projectId);
+    const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]);
+    if (!project) return [];
+    return this.tests.ensureDefaults(projectId, String(project.root_path));
   }
 
   async saveTestAllowlist(projectId: string, entries: TestEntry[]): Promise<TestEntry[]> {

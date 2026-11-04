@@ -5,7 +5,7 @@
  */
 import type { AgentKind, ModelSelection, StreamEvent } from "@octus/shared";
 import { realpathSync } from "node:fs";
-import { createId } from "@octus/shared";
+import { createId, toolCallTargetLabel } from "@octus/shared";
 import type { AgentRegistry } from "../agents/agent-registry.js";
 import { promptHashOf, snapshotOf } from "../agents/definition-loader.js";
 import { OctusError } from "../errors.js";
@@ -317,6 +317,33 @@ export class AgentManager implements AgentToolService {
       } catch {
         summary = "";
       }
+    }
+    if (!summary.trim()) {
+      // El modelo puede terminar sin texto final. El padre no debe recibir un
+      // delivery vacío: se sintetiza con las acciones reales registradas.
+      const tools = await this.db.query<Record<string, string | number | null>>(
+        "SELECT name, arguments_json, status, error FROM tool_invocations WHERE instance_id = ? ORDER BY COALESCE(started_at, 0) DESC LIMIT 12",
+        [instanceId],
+      );
+      const task = row.task_id
+        ? await this.db.queryOne<{ title: string; status: string }>("SELECT title, status FROM tasks WHERE id = ?", [String(row.task_id)]).catch(() => undefined)
+        : undefined;
+      const actions = tools
+        .reverse()
+        .map((tool) => {
+          const target = toolCallTargetLabel(String(tool.name), String(tool.arguments_json ?? "{}"));
+          const error = tool.error ? ` — ${String(tool.error).slice(0, 180)}` : "";
+          return `- ${String(tool.name)}${target ? ` ${target}` : ""}: ${String(tool.status)}${error}`;
+        })
+        .join("\n");
+      summary = [
+        task ? `Task: ${task.title} (${task.status})` : "",
+        actions
+          ? `Sin resumen textual del subagente. Últimas acciones:\n${actions}`
+          : "Sin resumen textual del subagente.",
+      ]
+        .filter(Boolean)
+        .join("\n");
     }
     return {
       instanceId,

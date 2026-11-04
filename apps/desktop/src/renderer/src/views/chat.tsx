@@ -1,7 +1,7 @@
 /** Renderer/views — conversación: mensajes, composer, diálogos y vista de chat. */
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import type { Message, MessagePart, ModelDescriptor, PairedToolCall } from "@octus/shared";
-import { footerForMessage, formatDuration, indexToolResults, messageRenderItems } from "@octus/shared";
+import { footerForMessage, formatDuration, indexToolResults, messageRenderItems, toolCallTargetLabel, toolDisplayName } from "@octus/shared";
 import { invoke } from "../api.js";
 import { DiffCard } from "../diff-view.jsx";
 import { renderMarkdown } from "../markdown.js";
@@ -110,51 +110,22 @@ const BOOKKEEPING_TOOLS = new Set([
 ]);
 
 function ActivityGroups(props: { items: PairedToolCall[] }) {
-  interface Group {
-    label: string;
-    status: "completed" | "running" | "failed";
-  }
-  const groups = (): Group[] => {
-    let reads = 0;
-    let searches = 0;
-    let edits = 0;
-    let commands = 0;
-    let agents = 0;
-    const other = new Set<string>();
-    let failed = false;
-    let running = false;
-    for (const item of props.items) {
-      const name = item.call.name;
-      if (name === "read") reads++;
-      else if (name === "glob" || name === "grep") searches++;
-      else if (name === "write" || name === "edit") edits++;
-      else if (name === "shell") commands++;
-      else if (name === "delegate" || name.startsWith("agent_")) agents++;
-      else other.add(name);
-      if (!item.result) running = true;
-      else if (!item.result.ok) failed = true;
-    }
-    const status: Group["status"] = failed ? "failed" : running ? "running" : "completed";
-    const out: Group[] = [];
-    const explored = [reads > 0 ? `${reads} read${reads === 1 ? "" : "s"}` : "", searches > 0 ? `${searches} search${searches === 1 ? "" : "es"}` : ""].filter(Boolean);
-    if (explored.length > 0) out.push({ label: `Explored: ${explored.join(", ")}`, status });
-    if (edits > 0) out.push({ label: `Edited: ${edits} file${edits === 1 ? "" : "s"}`, status });
-    if (commands > 0) out.push({ label: `Ran: ${commands} command${commands === 1 ? "" : "s"}`, status });
-    if (agents > 0) out.push({ label: `Delegated: ${agents} agent${agents === 1 ? "" : "s"}`, status });
-    if (other.size > 0) out.push({ label: `Used: ${[...other].join(", ")}`, status });
-    return out;
-  };
   return (
-    <For each={groups()}>
-      {(group) => (
-        <div class="activity-group" data-tool-status={group.status}>
-          <span class="activity-caret" aria-hidden="true">→</span>
-          <span class="activity-name">{group.label}</span>
-          <Show when={group.status !== "completed"}>
-            <span class="activity-meta">{group.status}</span>
-          </Show>
-        </div>
-      )}
+    <For each={props.items}>
+      {(item) => {
+        const target = () => toolCallTargetLabel(item.call.name, item.call.argumentsJson);
+        const status = () => (item.result ? (item.result.ok ? "completed" : "failed") : "running");
+        return (
+          <div class="activity-tool" data-tool-status={status()} data-tool-name={item.call.name} title={target() || item.call.name}>
+            <span class="activity-dot" aria-hidden="true" />
+            <span class="activity-tool-name">{toolDisplayName(item.call.name)}</span>
+            <Show when={target()}>
+              <code class="activity-target">{target()}</code>
+            </Show>
+            <span class="activity-meta">{status() === "completed" ? "ok" : status()}</span>
+          </div>
+        );
+      }}
     </For>
   );
 }

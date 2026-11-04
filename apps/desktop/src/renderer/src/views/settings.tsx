@@ -6,6 +6,7 @@ import {
   loadModels,
   refreshAgentModelSettings,
   refreshDefinitions,
+  refreshLimits,
   refreshProviders,
   saveAgentModelAssignments,
   setError,
@@ -41,10 +42,14 @@ export function AgentSettings() {
   let maxSession: HTMLInputElement | undefined;
   let maxProject: HTMLInputElement | undefined;
   let maxDepth: HTMLInputElement | undefined;
+  let maxImplementers: HTMLInputElement | undefined;
+  let maxReaders: HTMLInputElement | undefined;
+  let maxReviewers: HTMLInputElement | undefined;
   const [enabled, setEnabled] = createSignal(state.agentModelSettings?.enabled ?? false);
   const [assignments, setAssignments] = createSignal<Record<string, ModelSelection>>({});
   const [saving, setSaving] = createSignal(false);
   const [saved, setSaved] = createSignal(false);
+  const [limitsSaved, setLimitsSaved] = createSignal(false);
 
   const workers = () => state.definitions.filter((definition) => definition.kind !== "coordinator");
   const modelFor = (definitionId: string, fallback: ModelSelection): ModelSelection =>
@@ -90,6 +95,10 @@ export function AgentSettings() {
       <h2>Agents</h2>
       <div class="card">
         <h3>Concurrency limits</h3>
+        <p class="muted">
+          Límites por sesión y proyecto. El coordinador cuenta como agente activo; los límites de rol
+          aplican a cada tipo dentro de la sesión.
+        </p>
         <div class="row">
           <label class="muted">
             per session
@@ -103,24 +112,48 @@ export function AgentSettings() {
             max depth
             <input ref={maxDepth} type="number" min="1" max="10" value={state.agentLimits.maxDepth} />
           </label>
+          <label class="muted">
+            max implementers
+            <input ref={maxImplementers} type="number" min="1" max="100" value={state.agentLimits.maxImplementers} />
+          </label>
+          <label class="muted">
+            max readers
+            <input ref={maxReaders} type="number" min="1" max="100" value={state.agentLimits.maxReaders} />
+          </label>
+          <label class="muted">
+            max reviewers
+            <input ref={maxReviewers} type="number" min="1" max="100" value={state.agentLimits.maxReviewers} />
+          </label>
           <button
             type="button"
             class="primary"
             onClick={() => {
               void (async () => {
+                setLimitsSaved(false);
                 const limits = {
                   maxPerSession: Number.parseInt(maxSession?.value ?? "", 10),
                   maxPerProject: Number.parseInt(maxProject?.value ?? "", 10),
                   maxDepth: Number.parseInt(maxDepth?.value ?? "", 10),
+                  maxImplementers: Number.parseInt(maxImplementers?.value ?? "", 10),
+                  maxReaders: Number.parseInt(maxReaders?.value ?? "", 10),
+                  maxReviewers: Number.parseInt(maxReviewers?.value ?? "", 10),
                 };
                 const result = await invoke("agents.setLimits", { limits });
-                if (!result.ok) setError(result.error ?? "Could not save limits");
-                else setError(undefined);
+                if (!result.ok) {
+                  setError(result.error ?? "Could not save limits");
+                  return;
+                }
+                setError(undefined);
+                await refreshLimits();
+                setLimitsSaved(true);
               })();
             }}
           >
             Save limits
           </button>
+          <Show when={limitsSaved()}>
+            <span class="pill ok" role="status">Límites guardados</span>
+          </Show>
         </div>
       </div>
 
