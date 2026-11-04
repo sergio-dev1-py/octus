@@ -299,6 +299,7 @@ export class GoAdapter implements ModelProvider {
         const efforts = (caps?.reasoning?.effort ?? []).filter((e): e is ReasoningEffort =>
           (KNOWN_EFFORTS as string[]).includes(e),
         );
+        const previous = this.table.find((model) => model.modelId === id);
         entries.push({
           providerId: "opencode-go",
           modelId: id,
@@ -307,9 +308,9 @@ export class GoAdapter implements ModelProvider {
           toolChoice: api?.[native]?.capabilities?.tools?.choice ?? [],
           capabilities: {
             toolCall: caps?.tools?.supported === true,
-            reasoningEfforts: efforts,
-            maxContextTokens: limit?.context ?? 0,
-            maxOutputTokens: limit?.output ?? 0,
+            reasoningEfforts: efforts.length > 0 ? efforts : (previous?.capabilities.reasoningEfforts ?? []),
+            maxContextTokens: limit?.context ?? previous?.capabilities.maxContextTokens ?? 131_072,
+            maxOutputTokens: limit?.output ?? previous?.capabilities.maxOutputTokens ?? 8192,
             supportsImages: (modalities?.input ?? []).some((m) => m.startsWith("image/")),
             priceInputPerM: cost?.input?.price,
             priceOutputPerM: cost?.output?.price,

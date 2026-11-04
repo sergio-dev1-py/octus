@@ -241,7 +241,7 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
           return [model(), fmtClock(wall)].filter(Boolean).join(" · ");
         };
         return (
-          <details class="activity-node" open={false} data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
+          <details class="activity-node" open={active()} data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
             <summary>
               <span class="activity-caret" aria-hidden="true">›</span>
               <span class="activity-name">{label()}</span>

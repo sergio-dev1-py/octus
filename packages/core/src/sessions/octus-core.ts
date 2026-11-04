@@ -4,6 +4,8 @@
  */
 import type {
   AgentInstance,
+  AgentModelAssignment,
+  AgentModelSettings,
   Message,
   ModelProvider,
   ModelSelection,
@@ -19,6 +21,7 @@ import type {
   ScheduledRun,
   ScheduledTask,
   Session,
+  SessionContextUsage,
   StreamEvent,
   Task,
   TaskAttempt,
@@ -311,6 +314,7 @@ export class OctusCore {
       () => this.integrations,
       // Todo 23: workers solo con skills autorizadas en el proyecto.
       this.skills ?? undefined,
+      () => this.config.get().agentModels?.enabled ?? false,
     );
     this.memory = new MemoryService(db, this.events, this.bus);
     this.memoryWriter = new MemoryWriter(this.memory, this.questions);
@@ -360,6 +364,7 @@ export class OctusCore {
       () => this.worktrees,
       () => this.integrations,
     );
+    this.runtime.setRunSettler((runId) => this.scheduler.finalizeRun(runId));
     this.conflicts = new ConflictManager(db, this.events, this.bus, this.repositories, this.worktrees, () => this.agents, options.dataDir);
     this.previews = new PreviewManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir);
     this.approvals = new ApprovalService(db, this.events, this.bus, this.validations, this.previews);
@@ -420,7 +425,18 @@ export class OctusCore {
     core.primarySecrets = primary;
     await core.registry.ensureSeeded(core.gateway.manifests().map((m) => m.name));
     await core.settleInterrupted();
+    // Catálogo vivo (límites reales de contexto) sin bloquear el arranque.
+    void core.refreshAllCatalogs().catch(() => undefined);
     return core;
+  }
+
+  async refreshAllCatalogs(): Promise<void> {
+    await Promise.allSettled(
+      this.router.list().map(async (provider) => {
+        const refreshable = provider as ModelProvider & { refreshCatalog?: () => Promise<unknown> };
+        if (typeof refreshable.refreshCatalog === "function") await refreshable.refreshCatalog();
+      }),
+    );
   }
 
   // ------------------------------------------------------------------ proyectos
@@ -1556,9 +1572,23 @@ export class OctusCore {
     return { ok: true };
   }
 
-  async incorporateIntegration(integrationId: string) {
-    const results = await this.integrations.incorporateRun(integrationId);
+  async incorporateIntegration(
+    integrationId: string,
+    options?: { includeUnreviewed?: boolean; taskIds?: string[] },
+  ) {
+    const results = await this.integrations.incorporateRun(integrationId, options);
     return { incorporated: results.length };
+  }
+
+  /**
+   * Recupera runs antiguos que quedaron sin integración: crea la integración y
+   * asienta todos los commits producidos, incluidos los de tareas fallidas o no
+   * revisadas. Nunca promueve ni toca la rama destino.
+   */
+  async recoverRunIntegration(projectId: string, runId: string, targetBranch?: string) {
+    const integration = await this.integrations.createForRun({ projectId, runId, targetBranch });
+    const results = await this.integrations.incorporateRun(integration.id, { includeUnreviewed: true });
+    return { integration: await this.integrations.getIntegration(integration.id), incorporated: results.length };
   }
 
   async listIntegrationConflicts(filter?: { scope?: "integration" | "work_base"; scopeRef?: string; status?: string }) {
@@ -1831,6 +1861,39 @@ export class OctusCore {
     await this.db.exec("UPDATE agent_definitions SET default_model = ? WHERE id = ?", [JSON.stringify(model), definitionId]);
   }
 
+  async agentModelSettings(): Promise<AgentModelSettings> {
+    const defs = await this.registry.list();
+    return {
+      enabled: this.config.get().agentModels?.enabled ?? false,
+      assignments: defs
+        .filter((definition) => definition.kind !== "coordinator")
+        .map((definition) => ({ definitionId: definition.id, model: { ...definition.defaultModel } })),
+    };
+  }
+
+  async setAgentModelAssignments(enabled: boolean, assignments: AgentModelAssignment[]): Promise<void> {
+    const defs = await this.registry.list();
+    const allowed = new Set(defs.filter((definition) => definition.kind !== "coordinator").map((definition) => definition.id));
+    const prepared: AgentModelAssignment[] = [];
+    for (const assignment of assignments) {
+      if (!allowed.has(assignment.definitionId)) {
+        throw new OctusError("invalid_tool_args", `Only subagent definitions can be assigned a model: ${assignment.definitionId}`);
+      }
+      this.router.resolve({ instance: assignment.model, globalDefault: assignment.model });
+      prepared.push({ definitionId: assignment.definitionId, model: { ...assignment.model } });
+    }
+    // Validación completa antes de tocar DB/config: sin estados a medias.
+    this.config.update({ agentModels: { enabled } });
+    if (prepared.length > 0) {
+      await this.db.batch(
+        prepared.map((assignment) => ({
+          sql: "UPDATE agent_definitions SET default_model = ? WHERE id = ?",
+          params: [JSON.stringify(assignment.model), assignment.definitionId],
+        })),
+      );
+    }
+  }
+
   async isolatedDirectories(projectId: string): Promise<IsolatedDirectory[]> {
     return this.directories.list(projectId);
   }
@@ -2060,6 +2123,99 @@ export class OctusCore {
     return usageForSession(this.db, sessionId);
   }
 
+  /**
+   * Contexto retenido por la conversación actual: último input_tokens real de
+   * cada instancia (coordinador + subagentes) del run más reciente. La ventana
+   * de referencia es la del modelo del coordinador; el desglose permite ver la
+   * ventana propia de cada subagente.
+   */
+  async sessionContextUsage(sessionId: string): Promise<SessionContextUsage> {
+    const session = await this.requireSession(sessionId);
+    const run = await this.db.queryOne<{ id: string }>(
+      "SELECT id FROM runs WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+      [sessionId],
+    );
+    const runId = run ? String(run.id) : undefined;
+    const instances = runId
+      ? await this.db.query<Record<string, string | number | null>>(
+          "SELECT id, definition_id, parent_instance_id, model FROM agent_instances WHERE run_id = ? ORDER BY created_at ASC",
+          [runId],
+        )
+      : [];
+    const latest = runId
+      ? await this.db.query<Record<string, string | number | null>>(
+          `SELECT * FROM (
+             SELECT u.*, ROW_NUMBER() OVER (
+               PARTITION BY agent_instance_id ORDER BY created_at DESC, id DESC
+             ) AS rn
+             FROM usage_records u WHERE run_id = ?
+           ) WHERE rn = 1`,
+          [runId],
+        )
+      : [];
+    const usedByInstance = new Map<string, number>();
+    const modelByInstance = new Map<string, ModelSelection>();
+    for (const row of latest) {
+      const instanceId = String(row.agent_instance_id);
+      usedByInstance.set(instanceId, Number(row.input_tokens ?? 0));
+      modelByInstance.set(instanceId, {
+        providerId: String(row.provider_id),
+        modelId: String(row.model_id),
+      });
+    }
+
+    const coordinator = instances.find((row) => !row.parent_instance_id);
+    const coordinatorModel =
+      (coordinator ? parseSelection(coordinator.model) : undefined) ??
+      modelByInstance.get(coordinator ? String(coordinator.id) : "") ??
+      session.model;
+    const coordinatorLimit = this.maxContextOf(coordinatorModel);
+    const maxContextTokens = coordinatorLimit ?? 0;
+
+    const agents: SessionContextUsage["agents"] = [];
+    let usedTokens = 0;
+    for (const row of instances) {
+      const instanceId = String(row.id);
+      const model = modelByInstance.get(instanceId) ?? parseSelection(row.model);
+      const limit = this.maxContextOf(model) ?? maxContextTokens;
+      const used = usedByInstance.get(instanceId) ?? 0;
+      usedTokens += used;
+      agents.push({
+        instanceId,
+        definitionId: String(row.definition_id),
+        providerId: model?.providerId ?? "",
+        modelId: model?.modelId ?? "",
+        usedTokens: used,
+        maxContextTokens: limit,
+        percent: limit > 0 ? Math.min(100, (used / limit) * 100) : 0,
+      });
+    }
+
+    const compactThresholdRatio = 0.87;
+    // El porcentaje refleja el agente con la ventana más llena: es el que puede
+    // disparar la compactación. El total sí suma coordinador + subagentes.
+    const fullestPercent = agents.reduce((max, agent) => Math.max(max, agent.percent), 0);
+    return {
+      sessionId,
+      runId,
+      usedTokens,
+      maxContextTokens,
+      percent: Math.min(100, fullestPercent),
+      compactAtTokens: Math.floor(maxContextTokens * compactThresholdRatio),
+      compactThresholdRatio,
+      agents,
+    };
+  }
+
+  private maxContextOf(model: ModelSelection | undefined): number | undefined {
+    if (!model?.providerId || !model.modelId) return undefined;
+    try {
+      return this.router.resolve({ instance: model, globalDefault: model }).model.capabilities.maxContextTokens;
+    } catch {
+      return undefined;
+    }
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -2146,6 +2302,22 @@ export class OctusCore {
 /** Memoria del último modelo usado por workspace (todo 9, prevalece al reabrir). */
 function workspaceLastModelKey(projectId: string): string {
   return `lastModel.${projectId}`;
+}
+
+function parseSelection(value: unknown): ModelSelection | undefined {
+  try {
+    const parsed = JSON.parse(String(value)) as Partial<ModelSelection>;
+    if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") {
+      return {
+        providerId: parsed.providerId,
+        modelId: parsed.modelId,
+        ...(typeof parsed.effort === "string" ? { effort: parsed.effort } : {}),
+      };
+    }
+  } catch {
+    // sin modelo persistido
+  }
+  return undefined;
 }
 
 function deserializeSession(row: Record<string, string | number | null>): Session {

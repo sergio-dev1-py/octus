@@ -148,7 +148,12 @@ export class IntegrationManager implements IntegrationPort {
    * Idempotente por UNIQUE(integration, task, attempt): repetir devuelve reused.
    * El attempt debe ser el último completado de la task (sin contenido rancio).
    */
-  async incorporateCommit(integrationId: string, taskId: string, attempt: number): Promise<IncorporateResult> {
+  async incorporateCommit(
+    integrationId: string,
+    taskId: string,
+    attempt: number,
+    options?: { allowUnreviewed?: boolean },
+  ): Promise<IncorporateResult> {
     const integration = await this.getIntegration(integrationId);
     if (!["building", "conflicted", "validating"].includes(integration.status)) {
       throw new OctusError("invalid_state", `Integration ${integrationId} is ${integration.status}, not open for incorporation`);
@@ -172,16 +177,20 @@ export class IntegrationManager implements IntegrationPort {
     const task = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM tasks WHERE id = ?", [taskId]);
     if (!task) throw new OctusError("not_found", `Task not found: ${taskId}`);
     const t = deserializeTask(task);
-    if (t.needsReview && t.status !== "reviewed") {
-      throw new OctusError("invalid_state", `Task ${taskId} requires review but is ${t.status}`);
+    // Recuperación explícita: se asienta el commit aunque la task no tenga
+    // veredicto (fallida/bloqueada). El worktree y el attempt siguen validándose.
+    if (!options?.allowUnreviewed) {
+      if (t.needsReview && t.status !== "reviewed") {
+        throw new OctusError("invalid_state", `Task ${taskId} requires review but is ${t.status}`);
+      }
+      if (!t.needsReview && t.status !== "completed" && t.status !== "reviewed") {
+        throw new OctusError("invalid_state", `Task ${taskId} is ${t.status}, not integrable`);
+      }
+      const activeVerdict = t.needsReview
+        ? await this.db.queryOne<{ verdict: string }>("SELECT verdict FROM task_review_verdicts WHERE target_task_id = ? AND verdict = 'accept' ORDER BY created_at DESC LIMIT 1", [taskId])
+        : { verdict: "accept" };
+      if (!activeVerdict) throw new OctusError("invalid_state", `Task ${taskId} has no recorded accept verdict`);
     }
-    if (!t.needsReview && t.status !== "completed" && t.status !== "reviewed") {
-      throw new OctusError("invalid_state", `Task ${taskId} is ${t.status}, not integrable`);
-    }
-    const activeVerdict = t.needsReview
-      ? await this.db.queryOne<{ verdict: string }>("SELECT verdict FROM task_review_verdicts WHERE target_task_id = ? AND verdict = 'accept' ORDER BY created_at DESC LIMIT 1", [taskId])
-      : { verdict: "accept" };
-    if (!activeVerdict) throw new OctusError("invalid_state", `Task ${taskId} has no recorded accept verdict`);
     const attemptRow = await this.db.queryOne<{ status: string }>("SELECT status FROM task_attempts WHERE task_id = ? AND attempt = ?", [taskId, attempt]);
     if (!attemptRow || attemptRow.status !== "completed") {
       throw new OctusError("invalid_state", `Task ${taskId} attempt ${attempt} is ${attemptRow?.status ?? "missing"}, not completed`);
@@ -285,31 +294,57 @@ export class IntegrationManager implements IntegrationPort {
    * Incorpora todos los escritores revisados del run en orden topológico.
    * Emite integration.completed al asentar el último (ensamblado completo).
    */
-  async incorporateRun(integrationId: string): Promise<IncorporateResult[]> {
+  async incorporateRun(
+    integrationId: string,
+    options?: { includeUnreviewed?: boolean; taskIds?: string[] },
+  ): Promise<IncorporateResult[]> {
     const integration = await this.getIntegration(integrationId);
     const run = await this.db.queryOne<{ session_id: string }>("SELECT session_id FROM runs WHERE id = ?", [integration.runId]);
     if (!run) throw new OctusError("not_found", `Run not found: ${integration.runId}`);
     const rows = await this.db.query<Record<string, string | number | null>>("SELECT * FROM tasks WHERE run_id = ? AND agent_role = 'implementer' ORDER BY priority DESC, created_at ASC, id ASC", [integration.runId]);
-    const writers = rows.map(deserializeTask);
+    const allWriters = rows.map(deserializeTask);
+    const selected = options?.taskIds?.length
+      ? allWriters.filter((writer) => options.taskIds!.includes(writer.id))
+      : allWriters;
+    const includeUnreviewed = options?.includeUnreviewed === true;
     const out: IncorporateResult[] = [];
     const done = new Set((await this.getCommits(integrationId)).map((c) => c.taskId));
+    // Las tasks que ya quedaron fuera de una integración parcial siguen fuera:
+    // reintentar la incorporación no debe fallar por ellas.
+    const previouslyExcluded = new Set(integration.excludedTaskIds);
+    const readyOf = async (w: (typeof allWriters)[number]): Promise<boolean> => {
+      if (includeUnreviewed) {
+        const wt = await this.worktrees.getByTask(w.id).catch(() => undefined);
+        return Boolean(wt?.producedCommit);
+      }
+      return w.status === "reviewed" || (!w.needsReview && w.status === "completed");
+    };
     // Estricto: sin escritores pendientes de revisión no hay nada que asentar.
-    const notReady = writers.filter((w) => !done.has(w.id) && !(w.status === "reviewed" || (!w.needsReview && w.status === "completed")));
-    if (notReady.length > 0) {
+    const notReady: typeof allWriters = [];
+    for (const writer of selected) {
+      if (done.has(writer.id) || previouslyExcluded.has(writer.id)) continue;
+      if (!(await readyOf(writer))) notReady.push(writer);
+    }
+    if (!includeUnreviewed && notReady.length > 0) {
       throw new OctusError("invalid_state", `Cannot incorporate: ${notReady.length} writer(s) not reviewed yet (${notReady.map((w) => w.id.slice(-6)).join(",")})`);
     }
     let progressed = true;
     while (progressed) {
       progressed = false;
-      for (const w of writers) {
-        if (done.has(w.id)) continue;
-        const ready = w.status === "reviewed" || (!w.needsReview && w.status === "completed");
-        if (!ready) continue;
+      for (const w of selected) {
+        if (done.has(w.id) || previouslyExcluded.has(w.id)) continue;
+        if (!(await readyOf(w))) continue;
+        // Orden de dependencias dentro del subconjunto elegido. Si el
+        // predecesor quedó fuera (fallido), se ignora para permitir la
+        // integración parcial de prueba.
         const deps = await this.db.query<{ depends_on: string }>("SELECT depends_on FROM task_dependencies WHERE task_id = ?", [w.id]);
         let blocked = false;
         for (const dep of deps) {
-          const depTask = await this.db.queryOne<{ agent_role: string }>("SELECT agent_role FROM tasks WHERE id = ?", [String(dep.depends_on)]);
-          if (depTask && String(depTask.agent_role) === "implementer" && !done.has(String(dep.depends_on))) {
+          const depId = String(dep.depends_on);
+          if (previouslyExcluded.has(depId)) continue;
+          if (!selected.some((candidate) => candidate.id === depId)) continue;
+          const depTask = await this.db.queryOne<{ agent_role: string }>("SELECT agent_role FROM tasks WHERE id = ?", [depId]);
+          if (depTask && String(depTask.agent_role) === "implementer" && !done.has(depId)) {
             blocked = true;
             break;
           }
@@ -317,14 +352,31 @@ export class IntegrationManager implements IntegrationPort {
         if (blocked) continue;
         const latest = await this.db.queryOne<{ attempt: number }>("SELECT attempt FROM task_attempts WHERE task_id = ? AND status = 'completed' ORDER BY attempt DESC LIMIT 1", [w.id]);
         if (!latest) continue;
-        out.push(await this.incorporateCommit(integrationId, w.id, Number(latest.attempt)));
+        out.push(
+          await this.incorporateCommit(integrationId, w.id, Number(latest.attempt), {
+            allowUnreviewed: includeUnreviewed,
+          }),
+        );
         done.add(w.id);
         progressed = true;
       }
     }
-    const pending = writers.filter((w) => !done.has(w.id) && (w.status === "reviewed" || (!w.needsReview && w.status === "completed")));
+    const pending = selected.filter(
+      (w) =>
+        !done.has(w.id) &&
+        !previouslyExcluded.has(w.id) &&
+        (includeUnreviewed ? false : w.status === "reviewed" || (!w.needsReview && w.status === "completed")),
+    );
     if (pending.length > 0) {
       throw new OctusError("invalid_state", `Cannot incorporate ${pending.length} writer(s): predecessors not incorporated or attempts not completed (${pending.map((w) => w.id.slice(-6)).join(",")})`);
+    }
+    // Integración parcial: deja visible qué commits no pudieron asentarse.
+    const excludedTaskIds = allWriters.filter((writer) => !done.has(writer.id)).map((writer) => writer.id);
+    if (excludedTaskIds.length > 0 || integration.excludedTaskIds.length > 0) {
+      await this.db.exec(
+        "UPDATE integrations SET excluded_task_ids = ?, updated_at = ? WHERE id = ?",
+        [JSON.stringify(excludedTaskIds), now(), integrationId],
+      );
     }
     // Idempotente: todo asentado y nada nuevo → sin evento duplicado.
     if (out.length === 0) return out;
@@ -819,6 +871,7 @@ function deserializeIntegration(row: Record<string, string | number | null>): In
     supersedes: row.supersedes ? String(row.supersedes) : undefined,
     status: row.status as IntegrationStatus,
     error: row.error ? String(row.error) : undefined,
+    excludedTaskIds: row.excluded_task_ids ? (JSON.parse(String(row.excluded_task_ids)) as string[]) : [],
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };

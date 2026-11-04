@@ -158,6 +158,8 @@ export interface PlanTasksInput {
   revisionId?: string;
   nonce?: string;
   replan?: boolean;
+  /** El coordinador debe pedir confirmación al usuario antes de replanificar. */
+  replanApprovedByUser?: boolean;
   coordinatorInstanceId: string;
 }
 

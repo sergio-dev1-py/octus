@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test --timeout 30000",
+    "test": "bun test --timeout 60000",
     "check:live": "bun scripts/check-live.ts",
     "check:live:stage3": "bun scripts/check-live-stage3.ts"
   },

@@ -422,7 +422,8 @@ export class TaskManager {
   async startAttempt(taskId: string, instanceId: string): Promise<number> {
     const task = await this.getTask(taskId);
     const cfg = this.getSchedulerConfig();
-    if (task.attempt >= cfg.maxAttemptsPerTask) {
+    // 'assigned' solo lo produce retryTask (manual): puede superar el budget.
+    if (task.status !== "assigned" && task.attempt >= cfg.maxAttemptsPerTask) {
       throw new OctusError("invalid_state", `Task ${taskId} exhausted its ${cfg.maxAttemptsPerTask} attempts`);
     }
     const active = await this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM task_attempts WHERE task_id = ? AND status IN ('pending','running')", [taskId]);
@@ -479,13 +480,11 @@ export class TaskManager {
    */
   async retryTask(taskId: string, opts?: { directoryId?: string; briefSuffix?: string }): Promise<{ attempt: number; instanceId: string }> {
     const task = await this.getTask(taskId);
-    if (task.status !== "failed" && task.status !== "interrupted") {
-      throw new OctusError("invalid_state", `Only failed or interrupted tasks can be retried (task is ${task.status})`);
+    const retryableBlocked = task.status === "blocked" && (task.blockedReason === "review-rounds-exhausted" || task.blockedReason === "needs-approval");
+    if (task.status !== "failed" && task.status !== "interrupted" && !retryableBlocked) {
+      throw new OctusError("invalid_state", `Only failed or interrupted tasks can be retried; user-blocked tasks are also allowed (task is ${task.status})`);
     }
     const cfg = this.getSchedulerConfig();
-    if (task.attempt >= cfg.maxAttemptsPerTask) {
-      throw new OctusError("invalid_state", `Task ${taskId} exhausted its ${cfg.maxAttemptsPerTask} attempts`);
-    }
     const last = await this.db.queryOne<Record<string, string | number | null>>("SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt DESC LIMIT 1", [taskId]);
     if (last && String(last.status) !== "completed" && last.completed_at) {
       const waitMs = backoffMs(task.attempt + 1, cfg.backoffBaseMs);
@@ -648,8 +647,10 @@ export class TaskManager {
               params: [timestamp, targetTaskId],
             }
           : {
-              sql: "UPDATE tasks SET status = 'failed', error = 'review-rounds-exhausted', reviewed_by_task_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?",
-              params: [reviewerTaskId, timestamp, timestamp, targetTaskId],
+              // No es un fallo técnico: es una decisión pendiente del usuario.
+              // Se conserva el worktree/commit para revisión o integración manual.
+              sql: "UPDATE tasks SET status = 'blocked', blocked_reason = 'review-rounds-exhausted', blocked_details = ?, error = 'review-rounds-exhausted', reviewed_by_task_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?",
+              params: [JSON.stringify({ reason: "review-rounds-exhausted", reviewerTaskId }), reviewerTaskId, timestamp, timestamp, targetTaskId],
             },
       ];
       let newReviewerId: string | undefined;

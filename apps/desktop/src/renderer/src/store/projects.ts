@@ -93,8 +93,22 @@ export async function refreshPending(): Promise<void> {
   setState("questions", questions.requests);
 }
 
+export async function refreshContextUsage(): Promise<void> {
+  if (!state.activeSessionId) {
+    setState("contextUsage", undefined);
+    return;
+  }
+  try {
+    const { usage } = await invoke("sessions.contextUsage", { sessionId: state.activeSessionId });
+    setState("contextUsage", usage);
+  } catch {
+    // El chip es informativo: un fallo no rompe el chat.
+  }
+}
+
 export async function refreshUsage(): Promise<void> {
   if (!state.activeSessionId) return;
+  void refreshContextUsage();
   const { runs } = await invoke("sessions.get", { sessionId: state.activeSessionId });
   setState("runs", runs);
   // Con varios runs activos, busy mientras alguno siga en planning/executing/integrating/promoting.

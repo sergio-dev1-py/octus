@@ -66,6 +66,7 @@ const CHANNELS: IpcChannel[] = [
   "sessions.prompt",
   "sessions.compact",
   "sessions.compaction",
+  "sessions.contextUsage",
   "sessions.interrupt",
   "runs.get",
   "runs.usage",
@@ -87,6 +88,8 @@ const CHANNELS: IpcChannel[] = [
   "agents.limits",
   "agents.setLimits",
   "agents.setDefinitionModel",
+  "agents.modelSettings",
+  "agents.setModelAssignments",
   "plans.list",
   "plans.get",
   "plans.approve",
@@ -128,6 +131,7 @@ const CHANNELS: IpcChannel[] = [
   "integrations.rebuild",
   "integrations.abort",
   "integrations.incorporate",
+  "integrations.recoverRun",
   "integrations.spawnReviewer",
   "integrations.review",
   "conflicts.list",
@@ -468,6 +472,10 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
       }
     },
+    "sessions.contextUsage": async (payload) => {
+      if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
+      return { usage: await need().sessionContextUsage(payload.sessionId) };
+    },
     "sessions.interrupt": async (payload) => {
       if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
       await need().interrupt(payload.sessionId);
@@ -558,6 +566,18 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
       if (!isNonEmptyString(payload.definitionId) || typeof payload.model !== "object" || payload.model === null) throw new Error("invalid payload");
       try {
         await need().setDefinitionModel(payload.definitionId, payload.model);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "agents.modelSettings": async () => ({ settings: await need().agentModelSettings() }),
+    "agents.setModelAssignments": async (payload) => {
+      if (typeof payload.enabled !== "boolean" || !Array.isArray(payload.assignments)) {
+        throw new Error("invalid payload");
+      }
+      try {
+        await need().setAgentModelAssignments(payload.enabled, payload.assignments);
         return { ok: true };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -853,8 +873,20 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     "integrations.incorporate": async (payload) => {
       if (!isNonEmptyString(payload.integrationId)) throw new Error("invalid payload");
       try {
-        const { incorporated } = await need().incorporateIntegration(payload.integrationId);
+        const { incorporated } = await need().incorporateIntegration(payload.integrationId, {
+          includeUnreviewed: payload.includeUnreviewed === true,
+          taskIds: Array.isArray(payload.taskIds) ? payload.taskIds : undefined,
+        });
         return { ok: true, incorporated };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    "integrations.recoverRun": async (payload) => {
+      if (!isNonEmptyString(payload.projectId) || !isNonEmptyString(payload.runId)) throw new Error("invalid payload");
+      try {
+        const out = await need().recoverRunIntegration(payload.projectId, payload.runId, payload.targetBranch);
+        return { ok: true, ...out };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }

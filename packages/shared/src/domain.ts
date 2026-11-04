@@ -42,6 +42,17 @@ export interface ModelSelection {
   effort?: string;
 }
 
+export interface AgentModelAssignment {
+  definitionId: string;
+  model: ModelSelection;
+}
+
+export interface AgentModelSettings {
+  /** Si está apagado, los subagentes heredan modelo y effort del padre. */
+  enabled: boolean;
+  assignments: AgentModelAssignment[];
+}
+
 export type RunStatus =
   | "planning"
   | "executing"
@@ -326,7 +337,9 @@ export type TaskBlockedReason =
   | "waiting-review-target"
   | "no-repository"
   | "repo-blocked"
-  | "deps-unavailable";
+  | "deps-unavailable"
+  /** El reviewer pidió cambios hasta agotar las rondas; requiere decisión del usuario. */
+  | "review-rounds-exhausted";
 
 export type AttemptStatus =
   | "pending"
@@ -539,6 +552,8 @@ export interface Integration {
   supersedes?: string;
   status: IntegrationStatus;
   error?: string;
+  /** Tasks con commits omitidos de esta integración (fallidas/no revisadas). */
+  excludedTaskIds: string[];
   createdAt: Milliseconds;
   updatedAt: Milliseconds;
 }

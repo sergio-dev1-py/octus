@@ -11,8 +11,17 @@ async function refreshAfterIntegrationAction(ok: boolean, error?: string): Promi
   await Promise.all([refreshIntegrations(), refreshTasks()]);
 }
 
-export async function incorporateIntegration(integrationId: string): Promise<void> {
-  const result = await invoke("integrations.incorporate", { integrationId });
+export async function incorporateIntegration(integrationId: string, options?: { includeUnreviewed?: boolean; taskIds?: string[] }): Promise<void> {
+  const result = await invoke("integrations.incorporate", { integrationId, ...options });
+  await refreshAfterIntegrationAction(result.ok, result.error);
+}
+
+export async function recoverRunIntegration(runId: string): Promise<void> {
+  if (!state.activeProjectId) return;
+  const result = await invoke("integrations.recoverRun", {
+    projectId: state.activeProjectId,
+    runId,
+  });
   await refreshAfterIntegrationAction(result.ok, result.error);
 }
 

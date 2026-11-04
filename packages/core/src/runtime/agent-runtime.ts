@@ -69,6 +69,12 @@ interface StepAccumulator {
 export class AgentRuntime {
   /** Último input_tokens real por instancia (calibra la compactación). */
   private readonly lastInputTokens = new Map<string, number>();
+  private runSettler?: (runId: string) => Promise<void>;
+
+  /** El scheduler decide el estado final del run cuando el coordinador termina. */
+  setRunSettler(settler: (runId: string) => Promise<void>): void {
+    this.runSettler = settler;
+  }
 
   constructor(
     private readonly db: PersistenceService,
@@ -782,19 +788,19 @@ export class AgentRuntime {
     const instanceStatus = status === "completed" ? "completed" : status === "failed" ? "failed" : "cancelled";
     await this.setInstanceStatus(instance, instanceStatus, correlationId, error);
     if (ownsRun) {
-      // El coordinador puede terminar su turno antes que los workers. El run no
-      // se cierra hasta que el scheduler no tenga tasks abiertas.
-      let settle = true;
-      if (status === "completed") {
-        const open = await this.db
-          .queryOne<{ n: number }>(
-            `SELECT COUNT(*) AS n FROM tasks WHERE run_id = ? AND status NOT IN ('completed','reviewed','integrated','failed','cancelled','interrupted')`,
-            [instance.runId],
-          )
-          .catch(() => undefined);
-        settle = Number(open?.n ?? 0) === 0;
+      // Con tasks en el run, el estado final lo decide el scheduler: aquí solo
+      // se cierra el run sin DAG (legacy) o un fallo/cancelación del coordinador.
+      const taskCount = await this.db
+        .queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE run_id = ?", [instance.runId])
+        .catch(() => undefined);
+      const hasTasks = Number(taskCount?.n ?? 0) > 0;
+      if (doesNotNeedScheduler(status, hasTasks, Boolean(this.runSettler))) {
+        await this.setRunStatus(instance.runId, status === "completed" ? "done" : status, correlationId, error);
+      } else if (status !== "completed") {
+        await this.setRunStatus(instance.runId, status, correlationId, error);
+      } else {
+        await this.runSettler?.(instance.runId);
       }
-      if (settle) await this.setRunStatus(instance.runId, status === "completed" ? "done" : status, correlationId, error);
       await this.db.exec("UPDATE sessions SET updated_at = ? WHERE id = ?", [now(), instance.sessionId]);
     }
     return { status, finalText, steps, error };
@@ -814,4 +820,12 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function doesNotNeedScheduler(status: AgentResult["status"], hasTasks: boolean, hasSettler: boolean): boolean {
+  if (!hasTasks) return true;
+  // Fallo/cancelación del coordinador: el run debe reflejarlo de inmediato.
+  if (status !== "completed") return true;
+  // Con DAG y scheduler disponible, el scheduler decide done/integrating/failed.
+  return !hasSettler;
 }

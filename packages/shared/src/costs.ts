@@ -4,6 +4,33 @@
  */
 import type { Milliseconds } from "./domain.js";
 
+/** Contexto real retenido por una instancia (último input_tokens del proveedor). */
+export interface ContextUsageAgent {
+  instanceId: string;
+  definitionId: string;
+  providerId: string;
+  modelId: string;
+  usedTokens: number;
+  maxContextTokens: number;
+  /** Porcentaje de la ventana propia de ese agente (0..100). */
+  percent: number;
+}
+
+/** Contexto agregado de la conversación: coordinador + subagentes del run actual. */
+export interface SessionContextUsage {
+  sessionId: string;
+  runId?: string;
+  /** Suma del último input_tokens real de todas las instancias del run. */
+  usedTokens: number;
+  /** Ventana del modelo del coordinador (referencia de compactación). */
+  maxContextTokens: number;
+  /** Porcentaje del agente con la ventana más llena (0..100). */
+  percent: number;
+  compactAtTokens: number;
+  compactThresholdRatio: number;
+  agents: ContextUsageAgent[];
+}
+
 export interface UsageRecord {
   id: string;
   providerId: string;

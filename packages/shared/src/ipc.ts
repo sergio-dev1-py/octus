@@ -2,9 +2,12 @@
  * @octus/shared — contrato IPC único (ADR-014). Main, preload y renderer lo consumen;
  * prohibido `invoke` genérico con casts. Sin secretos en ninguna respuesta.
  */
+import type { SessionContextUsage } from "./costs.js";
 import type {
   AgentDefinition,
   AgentInstance,
+  AgentModelAssignment,
+  AgentModelSettings,
   Approval,
   ApprovalRequest,
   ConflictResolution,
@@ -106,6 +109,7 @@ export interface OctusIPC {
   "sessions.prompt": { request: PromptRequest; response: { runId: string } };
   "sessions.compact": { request: { sessionId: string }; response: { ok: boolean; compacted?: boolean; error?: string } };
   "sessions.compaction": { request: { sessionId: string }; response: { ok: boolean; summary?: string; createdAt?: number; error?: string } };
+  "sessions.contextUsage": { request: { sessionId: string }; response: { usage: SessionContextUsage } };
   "sessions.interrupt": { request: { sessionId: string }; response: { ok: boolean } };
   "runs.get": { request: { runId: string }; response: { run: Run; instances: AgentInstance[]; toolCalls: ToolCallRecord[] } };
   "runs.usage": { request: { runId: string }; response: { records: UsageRecord[] } };
@@ -143,6 +147,8 @@ export interface OctusIPC {
   "agents.limits": { request: Record<string, never>; response: { limits: { maxPerSession: number; maxPerProject: number; maxDepth: number; maxImplementers: number; maxReaders: number; maxReviewers: number } } };
   "agents.setLimits": { request: { limits: { maxPerSession?: number; maxPerProject?: number; maxDepth?: number; maxImplementers?: number; maxReaders?: number; maxReviewers?: number } }; response: { ok: boolean; error?: string } };
   "agents.setDefinitionModel": { request: { definitionId: string; model: ModelSelection }; response: { ok: boolean; error?: string } };
+  "agents.modelSettings": { request: Record<string, never>; response: { settings: AgentModelSettings } };
+  "agents.setModelAssignments": { request: { enabled: boolean; assignments: AgentModelAssignment[] }; response: { ok: boolean; error?: string } };
   "tasks.list": { request: { sessionId?: string; runId?: string }; response: { tasks: Task[] } };
   "tasks.get": { request: { taskId: string }; response: { task: Task; dependencies: TaskDependency[]; attempts: TaskAttempt[] } };
   "tasks.cancel": { request: { taskId: string }; response: { ok: boolean; cancelled: string[]; error?: string } };
@@ -161,7 +167,8 @@ export interface OctusIPC {
   "integrations.list": { request: { runId: string }; response: { integrations: Integration[] } };
   "integrations.rebuild": { request: { integrationId: string }; response: { ok: boolean; id?: string; attempt?: number; error?: string } };
   "integrations.abort": { request: { integrationId: string; reason?: string }; response: { ok: boolean; error?: string } };
-  "integrations.incorporate": { request: { integrationId: string }; response: { ok: boolean; incorporated?: number; error?: string } };
+  "integrations.incorporate": { request: { integrationId: string; includeUnreviewed?: boolean; taskIds?: string[] }; response: { ok: boolean; incorporated?: number; error?: string } };
+  "integrations.recoverRun": { request: { projectId: string; runId: string; targetBranch?: string }; response: { ok: boolean; integration?: Integration; incorporated?: number; error?: string } };
   "integrations.spawnReviewer": { request: { integrationId: string; brief?: string }; response: { ok: boolean; instanceId?: string; error?: string } };
   "integrations.review": { request: { integrationId: string; instanceId: string; verdict: "accept" | "request-changes"; summary?: string }; response: { ok: boolean; error?: string } };
   "conflicts.list": { request: { scope?: "integration" | "work_base"; scopeRef?: string; status?: string }; response: { conflicts: IntegrationConflict[] } };

@@ -641,7 +641,7 @@ export class TaskScheduler {
         if (task.agentRole === "reviewer" && terminal === "completed") {
           await this.tasks().recordProgress(task.id, "result", "Review delivery ready; awaiting explicit recordReview verdict.");
         }
-        await this.finishRunIfDone(task.runId);
+        await this.finalizeRun(task.runId);
       }
     }
     return progressed;
@@ -656,73 +656,173 @@ export class TaskScheduler {
     }
   }
 
-  private async finishRunIfDone(runId: string): Promise<void> {
+  /**
+   * Único punto que decide el estado final del run. Lo llaman el scheduler al
+   * terminar una task y el runtime al cerrar el turno del coordinador.
+   */
+  async finalizeRun(runId: string): Promise<void> {
     const tasks = await this.tasks().listTasks({ runId });
     if (tasks.length === 0) return;
     const maxAttempts = this.getSchedulerConfig().maxAttemptsPerTask;
+    const settledBlocked = (task: Task): boolean =>
+      task.status === "blocked" && (task.blockedReason === "review-rounds-exhausted" || task.blockedReason === "needs-approval");
     const open = tasks.filter(
-      (t) => !["completed", "reviewed", "integrated", "cancelled"].includes(t.status) && !(t.status === "failed" && t.attempt >= maxAttempts),
+      (t) =>
+        !["completed", "reviewed", "integrated", "cancelled"].includes(t.status) &&
+        !(t.status === "failed" && t.attempt >= maxAttempts) &&
+        !settledBlocked(t),
     );
     if (open.length > 0) return;
-    const failed = tasks.some((t) => t.status === "failed");
-    // Etapa 5 (P1): runs con escritores git no terminan en done; se integran.
-    // Legacy (sin worktrees: no-git o solo lectores) conserva done directo.
-    if (!failed && tasks.some((t) => t.agentRole === "implementer")) {
-      const gitWriters = await this.db.queryOne<{ n: number }>(
-        "SELECT COUNT(*) AS n FROM worktrees w JOIN tasks t ON t.id = w.task_id WHERE t.run_id = ?",
-        [runId],
-      );
-      if ((gitWriters?.n ?? 0) > 0) {
-        await this.buildIntegrationForRun(runId).catch(() => undefined);
+    // Un writer completado que exige review aún no está asentado: el
+    // coordinador debe registrar el veredicto. No cerrar el run como failed.
+    const awaitingVerdict = tasks.some(
+      (t) => t.agentRole === "implementer" && t.needsReview && t.status === "completed",
+    );
+    if (awaitingVerdict) return;
+
+    const failedTasks = tasks.filter((t) => t.status === "failed" || settledBlocked(t));
+    const writers = tasks.filter((t) => t.agentRole === "implementer");
+    const readyWriters = writers.filter(
+      (w) => w.status === "reviewed" || (!w.needsReview && ["completed", "integrated"].includes(w.status)),
+    );
+    const gitWriters = await this.db.queryOne<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM worktrees w JOIN tasks t ON t.id = w.task_id WHERE t.run_id = ?",
+      [runId],
+    );
+    const existing = await this.db.queryOne<{ id: string; status: string }>(
+      "SELECT id, status FROM integrations WHERE run_id = ? AND status NOT IN ('rejected','promoted','stale','aborted','failed','invalidated') ORDER BY attempt DESC, created_at DESC LIMIT 1",
+      [runId],
+    );
+    if (existing) {
+      await this.markRunIntegrating(runId, existing.id, failedTasks.length);
+      return;
+    }
+
+    if ((gitWriters?.n ?? 0) > 0) {
+      if (readyWriters.length === 0) {
+        await this.markRunFailed(
+          runId,
+          failedTasks.length > 0
+            ? `No reviewed writer to integrate; ${failedTasks.length} task(s) blocked/failed`
+            : "No reviewed writer to integrate",
+        );
         return;
       }
+      await this.buildIntegrationForRun(runId).catch(() => undefined);
+      return;
     }
+
+    if (failedTasks.length > 0) {
+      await this.markRunFailed(runId, `${failedTasks.length} task(s) failed or blocked`);
+      return;
+    }
+    await this.markRunDone(runId, tasks.length);
+  }
+
+  private async markRunDone(runId: string, tasks: number): Promise<void> {
     const timestamp = now();
-    await this.db.exec("UPDATE runs SET status = ?, updated_at = ?, completed_at = ? WHERE id = ? AND status IN ('planning','executing')", [
-      failed ? "failed" : "done",
-      timestamp,
-      timestamp,
-      runId,
-    ]);
+    const changed = await this.db.exec(
+      "UPDATE runs SET status = 'done', error = NULL, updated_at = ?, completed_at = ? WHERE id = ? AND status IN ('planning','executing','integrating')",
+      [timestamp, timestamp, runId],
+    );
+    if (changed.changes === 0) return;
     const event = await this.events.append({
-      type: failed ? "run.failed" : "run.completed",
+      type: "run.completed",
       aggregate: { kind: "run", id: runId },
       correlationId: createId("cor"),
-      payload: { tasks: tasks.length },
+      payload: { tasks },
+    });
+    this.bus.publish(event);
+  }
+
+  private async markRunFailed(runId: string, error: string): Promise<void> {
+    const timestamp = now();
+    const changed = await this.db.exec(
+      "UPDATE runs SET status = 'failed', error = ?, updated_at = ?, completed_at = ? WHERE id = ? AND status IN ('planning','executing','integrating')",
+      [error.slice(0, 2000), timestamp, timestamp, runId],
+    );
+    if (changed.changes === 0) return;
+    const event = await this.events.append({
+      type: "run.failed",
+      aggregate: { kind: "run", id: runId },
+      correlationId: createId("cor"),
+      payload: { error: error.slice(0, 2000) },
+    });
+    this.bus.publish(event);
+  }
+
+  private async markRunIntegrating(runId: string, integrationId: string, failedCount: number): Promise<void> {
+    const timestamp = now();
+    const changed = await this.db.exec(
+      "UPDATE runs SET status = 'integrating', updated_at = ? WHERE id = ? AND status IN ('planning','executing')",
+      [timestamp, runId],
+    );
+    if (changed.changes === 0) return;
+    const event = await this.events.append({
+      type: "run.status_changed",
+      aggregate: { kind: "run", id: runId },
+      correlationId: createId("cor"),
+      payload: { to: "integrating", integrationId, excludedFailedTasks: failedCount },
     });
     this.bus.publish(event);
   }
 
   /**
-   * P1 (Etapa 5): auto-build. Con todos los escritores revisados, crea el
-   * espacio de integración y lo incorpora. Idempotente; solo avanza runs
-   * en 'executing'. El run pasa a 'integrating' (preview/aprobación/promoción
-   * quedan para acciones explícitas posteriores).
+   * Auto-build: integra los escritores revisados (o completados sin review) y
+   * deja fuera a fallidos/bloqueados sin bloquear la prueba del resto. El run
+   * pasa a 'integrating'; aprobación/promoción siguen siendo explícitas.
    */
   private async buildIntegrationForRun(runId: string): Promise<void> {
     const integrations = this.integrations?.();
     if (!integrations) return;
     const runRow = await this.db.queryOne<{ status: string; session_id: string }>("SELECT status, session_id FROM runs WHERE id = ?", [runId]);
-    if (!runRow || runRow.status !== "executing") return;
+    if (!runRow || !["planning", "executing"].includes(runRow.status)) return;
     const session = await this.db.queryOne<{ project_id: string }>("SELECT project_id FROM sessions WHERE id = ?", [String(runRow.session_id)]);
     if (!session) return;
     const tasks = await this.tasks().listTasks({ runId });
     const writers = tasks.filter((t) => t.agentRole === "implementer");
     if (writers.length === 0) return;
-    if (writers.some((w) => w.status === "failed")) return;
-    const ready = writers.every((w) => w.status === "reviewed" || (!w.needsReview && w.status === "completed"));
-    if (!ready) return;
-    const integration = await integrations.createForRun({ projectId: String(session.project_id), runId });
+    // Mientras quede trabajo real pendiente no se puede decidir "no hay nada
+    // que integrar": el tick puede llegar con writers aún en vuelo.
+    const pendingWriter = writers.some(
+      (w) =>
+        ["draft", "ready", "assigned", "running", "created", "interrupted"].includes(w.status) ||
+        (w.status === "blocked" && w.blockedReason !== "review-rounds-exhausted" && w.blockedReason !== "needs-approval"),
+    );
+    if (pendingWriter) return;
+    // Esperando el veredicto del coordinador: no es un fallo todavía.
+    if (writers.some((w) => w.needsReview && w.status === "completed")) return;
+    const readyWriters = writers.filter(
+      (w) => w.status === "reviewed" || (!w.needsReview && w.status === "completed"),
+    );
+    if (readyWriters.length === 0) {
+      await this.markRunFailed(runId, "No reviewed writer to integrate");
+      return;
+    }
+    let integrationId: string;
     try {
-      await integrations.incorporateRun(integration.id);
+      const integration = await integrations.createForRun({ projectId: String(session.project_id), runId });
+      integrationId = integration.id;
+      await integrations.incorporateRun(integration.id, {
+        // Solo los listos, ignorando bloqueos por dependencias de tasks fallidas.
+        includeUnreviewed: true,
+        taskIds: readyWriters.map((writer) => writer.id),
+      });
     } catch (error) {
       const conflict = (error as OctusError & { details?: { conflict?: boolean } }).details?.conflict === true;
-      if (!conflict) return; // error técnico: reintento en el próximo tick
+      if (!conflict) {
+        await this.markRunFailed(runId, error instanceof Error ? error.message : String(error));
+        return;
+      }
+      // Conflicto abierto: la integración existe y requiere resolución del usuario.
+      const row = await this.db.queryOne<{ id: string }>(
+        "SELECT id FROM integrations WHERE run_id = ? AND status NOT IN ('rejected','promoted','stale','aborted','failed','invalidated') ORDER BY attempt DESC, created_at DESC LIMIT 1",
+        [runId],
+      );
+      if (!row) return;
+      integrationId = String(row.id);
     }
-    const timestamp = now();
-    await this.db.exec("UPDATE runs SET status = 'integrating', updated_at = ? WHERE id = ? AND status = 'executing'", [timestamp, runId]);
-    const event = await this.events.append({ type: "run.status_changed", aggregate: { kind: "run", id: runId }, correlationId: createId("cor"), payload: { from: "executing", to: "integrating", integrationId: integration.id } });
-    this.bus.publish(event);
+    await this.markRunIntegrating(runId, integrationId, writers.length - readyWriters.length);
   }
 
   /** Runs en executing con escritores git que ya terminaron de revisarse. */

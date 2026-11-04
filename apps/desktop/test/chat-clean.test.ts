@@ -85,18 +85,22 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     await pg().goto(`${baseUrl}?state=working`, { waitUntil: "load" });
     // Dos burbujas; la del usuario en gris claro (token --oc-user-bubble).
     expect(await pg().evaluate(() => document.querySelectorAll(".message").length)).toBe(2);
+    // El mensaje de contabilidad (plan_tasks) no deja una tarjeta vacía.
+    expect(await pg().evaluate(() => document.body.textContent ?? "")).not.toContain("DAG creado");
     const userBg = await pg().evaluate(() => getComputedStyle(document.querySelector(".message.user")!).backgroundColor);
     expect(userBg).toBe("rgb(217, 222, 233)");
-    // El subagente aparece compacto en el panel del run, sin una caja por mensaje.
-    expect(await pg().textContent(".run-subagents [data-subagent-group] summary")).toContain("working");
-    // El grupo existe, colapsado por defecto (depth>=1 anidado también lo estaría).
+    // El subagente vive dentro del Working del mensaje, no en un panel inferior.
+    expect(await pg().textContent(".message.assistant details.work [data-subagent-group] summary")).toContain("working");
     expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group]").length)).toBe(1);
-    expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(false);
+    // Los subagentes activos se expanden solos para mostrar su trabajo.
+    expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(true);
     expect(await pg().getAttribute("[data-subagent-group]", "data-subagent-depth")).toBe("1");
     // Línea corta con el rol del subagente.
     const label = await pg().textContent("[data-subagent-group] summary");
     expect(label).toContain("implementer");
-    // Click real: expande y muestra la herramienta en línea compacta.
+    // Click real: colapsa/expande y conserva la herramienta en línea compacta.
+    await pg().click("[data-subagent-group] summary");
+    expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(false);
     await pg().click("[data-subagent-group] summary");
     expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(true);
     expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group] .activity-tool").length)).toBe(1);
@@ -112,7 +116,10 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     expect(await assistant.locator("details.work .md").count()).toBe(0);
     expect(await pg().locator(".diff-card").count()).toBe(1);
     expect(await pg().textContent(".diff-card summary")).toContain("components/Header.tsx");
-    expect(await pg().locator(".run-subagents [data-subagent-group]").count()).toBe(1);
+    expect(await pg().locator(".message.assistant details.work [data-subagent-group]").count()).toBe(1);
+    const contextChip = await pg().textContent(".context-usage");
+    expect(contextChip).toContain("Contexto");
+    expect(contextChip).toContain("2.0k");
     const footer = await pg().textContent(".run-footer");
     expect(footer).toContain("Build");
     expect(footer).toContain("muse-spark-1.3");

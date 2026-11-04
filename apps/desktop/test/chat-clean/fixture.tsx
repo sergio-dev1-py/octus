@@ -76,6 +76,20 @@ if (variant === "working" || variant === "failed" || variant === "completed") {
       createdAt: 9,
     },
     {
+      id: "msg_bookkeeping",
+      sessionId: "ses_t3",
+      runId: "run_t3",
+      instanceId: "ins_root",
+      role: "assistant",
+      parts: [
+        { type: "tool_call", toolCallId: "tc_plan", name: "plan_tasks", argumentsJson: JSON.stringify({ runId: "run_t3" }) },
+        { type: "tool_result", toolCallId: "tc_plan", providerCallId: "call_plan", ok: true, text: "DAG creado: 2 tareas" },
+      ],
+      trust: "tool",
+      seq: 2,
+      createdAt: 9.5,
+    },
+    {
       id: "msg_asst",
       sessionId: "ses_t3",
       runId: "run_t3",
@@ -83,7 +97,7 @@ if (variant === "working" || variant === "failed" || variant === "completed") {
       role: "assistant",
       parts: [{ type: "text", text: "Delego la implementación del login en un implementer." }],
       trust: "tool",
-      seq: 2,
+      seq: 3,
       createdAt: 10,
     },
     {
@@ -120,7 +134,7 @@ if (variant === "working" || variant === "failed" || variant === "completed") {
       createdAt: 11,
     },
   ] as never);
-  setState("childMessages", { ins_leaf: [state.messages[2]!] } as never);
+  setState("childMessages", { ins_leaf: [state.messages[3]!] } as never);
   if (completed) {
     const records = [
       {
@@ -161,6 +175,16 @@ if (variant === "working" || variant === "failed" || variant === "completed") {
       },
     ];
     setState("usageByRun", { run_t3: records } as never);
+    setState("contextUsage", {
+      sessionId: "ses_t3",
+      runId: "run_t3",
+      usedTokens: 2000,
+      maxContextTokens: 1_048_576,
+      percent: (2000 / 1_048_576) * 100,
+      compactAtTokens: Math.floor(1_048_576 * 0.87),
+      compactThresholdRatio: 0.87,
+      agents: [],
+    } as never);
   }
 }
 

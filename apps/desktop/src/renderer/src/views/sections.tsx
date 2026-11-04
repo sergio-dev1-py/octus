@@ -29,6 +29,7 @@ import {
   promoteIntegration,
   revalidateMemory,
   rebuildIntegration,
+  recoverRunIntegration,
   rejectIntegration,
   rejectRevision,
   reloadIntegrations,
@@ -434,8 +435,19 @@ export function IntegrationsSection() {
   const [waiver, setWaiver] = createSignal<Record<string, string>>({});
   const [reviewerInstance, setReviewerInstance] = createSignal<Record<string, string>>({});
   const active = () => state.integrations.filter((i) => ["building", "conflicted", "validating", "preview_ready", "approved", "promoting"].includes(i.status));
+  const ordered = () =>
+    [...state.integrations].sort((a, b) => {
+      const activeA = ["building", "conflicted", "validating", "preview_ready", "approved", "promoting"].includes(a.status) ? 0 : 1;
+      const activeB = ["building", "conflicted", "validating", "preview_ready", "approved", "promoting"].includes(b.status) ? 0 : 1;
+      return activeA - activeB || b.createdAt - a.createdAt;
+    });
+  const latestRun = () => state.runs[state.runs.length - 1];
+  const latestRunHasIntegration = () => {
+    const run = latestRun();
+    return Boolean(run && state.integrations.some((integration) => integration.runId === run.id));
+  };
   // Todo 34: las tarjetas de integración son las más pesadas del chat; diferido por conteo.
-  const capped = () => capList("integration-cards", state.integrations, INTEGRATION_CARD_WINDOW);
+  const capped = () => capList("integration-cards", ordered(), INTEGRATION_CARD_WINDOW);
   return (
     <details class="stage2">
       <summary>
@@ -443,6 +455,17 @@ export function IntegrationsSection() {
       </summary>
       <Show when={state.integrations.length === 0}>
         <p class="muted">No integrations yet. Reviewed writer tasks auto-integrate into an intermediate branch.</p>
+      </Show>
+      <Show when={latestRun() && !latestRunHasIntegration()}>
+        <div class="row">
+          <button
+            class="primary"
+            onClick={() => void recoverRunIntegration(latestRun()!.id)}
+          >
+            Recuperar integración del último run (incluye commits no revisados)
+          </button>
+          <span class="muted">Crea un worktree de prueba; no toca la rama principal.</span>
+        </div>
       </Show>
       <Show when={capped().over}>
         <p class="muted" data-deferred-panel="integration-cards">
@@ -468,6 +491,12 @@ export function IntegrationsSection() {
             </Show>
             <Show when={integration.error}>
               <p class="muted">error: {integration.error}</p>
+            </Show>
+            <Show when={integration.excludedTaskIds.length > 0}>
+              <p class="muted">
+                Sin commit integrado:{" "}
+                <For each={integration.excludedTaskIds}>{(taskId) => <code>{taskId} </code>}</For>
+              </p>
             </Show>
             <Show when={(state.integrationCommits[integration.id] ?? []).length > 0}>
               <details>

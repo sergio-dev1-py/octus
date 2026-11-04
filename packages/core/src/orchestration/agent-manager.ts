@@ -59,6 +59,8 @@ export class AgentManager implements AgentToolService {
     private readonly integrations?: () => IntegrationPort | undefined,
     /** Todo 23: puerta de skills para `spawn` (ausente = spawn con skills se niega). */
     private readonly skillGate?: SkillSpawnGate,
+    /** Si está activo, cada definición usa su modelo asignado; si no, hereda del padre. */
+    private readonly getPerAgentModels: () => boolean = () => false,
   ) {}
 
   // ------------------------------------------------------------------ spawn
@@ -89,7 +91,12 @@ export class AgentManager implements AgentToolService {
       throw new OctusError("concurrency_limit", `Delegation depth ${depth} exceeds the maximum of ${limits.maxDepth}`);
     }
     await this.checkConcurrency(parent.sessionId, parent.projectId);
-    const model = this.resolveModel(request.model, definition.defaultModel);
+    // Encendido: manda la asignación del agente. Apagado: hereda el modelo y
+    // effort exactos del padre (el coordinador), no el default del YAML.
+    const inherited = parent.model.modelId ? parent.model : definition.defaultModel;
+    const model = this.getPerAgentModels()
+      ? this.resolveModel(definition.defaultModel, definition.defaultModel)
+      : this.resolveModel(request.model ?? inherited, inherited);
     const assignment = await this.resolveDirectory(parent, definition.kind, request.directoryId, request.worktreeId, request.taskId, request.reviewTargetTaskId, request.resolutionWorkspaceId, request.integrationId);
     const instanceId = createId("ins");
     const timestamp = now();
@@ -450,7 +457,15 @@ export class AgentManager implements AgentToolService {
   }
 
   // ------------------------------------------------------------------ internas
-  private async requireInstance(instanceId: string): Promise<{ id: string; sessionId: string; runId: string; definitionId: string; snapshotJson: string; projectId: string }> {
+  private async requireInstance(instanceId: string): Promise<{
+    id: string;
+    sessionId: string;
+    runId: string;
+    definitionId: string;
+    snapshotJson: string;
+    projectId: string;
+    model: ModelSelection;
+  }> {
     const row = await this.db.queryOne<Record<string, string | number | null>>(
       "SELECT i.*, s.project_id AS project_id FROM agent_instances i JOIN sessions s ON s.id = i.session_id WHERE i.id = ?",
       [instanceId],
@@ -463,6 +478,7 @@ export class AgentManager implements AgentToolService {
       definitionId: String(row.definition_id),
       snapshotJson: String(row.definition_snapshot ?? "{}"),
       projectId: String(row.project_id),
+      model: parseModelSelection(row.model),
     };
   }
 
@@ -640,6 +656,22 @@ export class AgentManager implements AgentToolService {
       [createId("msg"), sessionId, runId, instanceId, JSON.stringify([{ type: "text", text: brief }]), instanceId, now()],
     );
   }
+}
+
+function parseModelSelection(value: unknown): ModelSelection {
+  try {
+    const parsed = JSON.parse(String(value)) as Partial<ModelSelection>;
+    if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") {
+      return {
+        providerId: parsed.providerId,
+        modelId: parsed.modelId,
+        ...(typeof parsed.effort === "string" ? { effort: parsed.effort } : {}),
+      };
+    }
+  } catch {
+    // legacy/invalid: el caller usa el default de la definición.
+  }
+  return { providerId: "", modelId: "" };
 }
 
 export type { SpawnMode, SpawnRequest, SpawnResult };

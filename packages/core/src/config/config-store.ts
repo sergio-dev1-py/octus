@@ -28,6 +28,11 @@ export interface SchedulerConfig {
   backoffBaseMs: number;
 }
 
+export interface AgentModelsConfig {
+  /** Si está apagado, los subagentes heredan modelo y effort del padre. */
+  enabled: boolean;
+}
+
 export interface OctusConfig {
   version: 1;
   providers: Record<string, ProviderConfig>;
@@ -36,6 +41,7 @@ export interface OctusConfig {
   shellTimeoutMs: number;
   maxOutputChars: number;
   agentLimits: AgentLimitsConfig;
+  agentModels: AgentModelsConfig;
   scheduler: SchedulerConfig;
 }
 
@@ -49,6 +55,7 @@ export const DEFAULT_CONFIG: OctusConfig = {
   shellTimeoutMs: 120_000,
   maxOutputChars: 30_000,
   agentLimits: { maxPerSession: 4, maxPerProject: 6, maxDepth: 2, maxImplementers: 2, maxReaders: 2, maxReviewers: 1 },
+  agentModels: { enabled: false },
   scheduler: { maxAttemptsPerTask: 3, backoffBaseMs: 1000 },
 };
 
@@ -71,6 +78,7 @@ export class ConfigStore {
         ...raw,
         providers: { ...structuredClone(DEFAULT_CONFIG.providers), ...(raw.providers ?? {}) },
         agentLimits: { ...structuredClone(DEFAULT_CONFIG.agentLimits), ...(raw.agentLimits ?? {}) },
+        agentModels: { ...structuredClone(DEFAULT_CONFIG.agentModels), ...(raw.agentModels ?? {}) },
         scheduler: { ...structuredClone(DEFAULT_CONFIG.scheduler), ...(raw.scheduler ?? {}) },
       };
     } catch {

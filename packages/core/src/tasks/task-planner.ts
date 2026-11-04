@@ -82,6 +82,8 @@ export interface PlanTasksInput {
   nonce?: string;
   /** Fuerza un DAG nuevo y cancela las tasks abiertas del run. */
   replan?: boolean;
+  /** Confirmación explícita del usuario para el replan. */
+  replanApprovedByUser?: boolean;
 }
 
 const PLANNER_SYSTEM = `You decompose an implementation plan into concrete executable tasks.
@@ -166,6 +168,12 @@ export class TaskPlanner {
       `SELECT COUNT(*) AS n FROM agent_instances WHERE run_id = ? AND parent_instance_id IS NOT NULL AND status IN ('created','running','waiting_permission','waiting_input')`,
       [input.runId],
     );
+    if (input.replan && !input.replanApprovedByUser) {
+      throw new OctusError(
+        "invalid_tool_args",
+        "Replan requires explicit user approval. Report the blocked tasks and ask the user before calling plan_tasks with replan:true and replanApprovedByUser:true.",
+      );
+    }
     if (input.replan && Number(activeChildren?.n ?? 0) > 0) {
       throw new OctusError("invalid_state", "Cannot replan while worker subagents are active; cancel them first");
     }

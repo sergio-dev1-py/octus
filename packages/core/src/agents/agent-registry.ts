@@ -50,7 +50,10 @@ export class AgentRegistry {
   }
 
   private async upsert(def: ValidatedDefinition): Promise<AgentDefinition> {
-    const existing = await this.db.queryOne<{ prompt_version: number }>("SELECT prompt_version FROM agent_definitions WHERE id = ?", [def.id]);
+    const existing = await this.db.queryOne<{ prompt_version: number; default_model: string }>(
+      "SELECT prompt_version, default_model FROM agent_definitions WHERE id = ?",
+      [def.id],
+    );
     const full = toAgentDefinition(def);
     if (!existing) {
       await this.db.exec(
@@ -81,6 +84,17 @@ export class AgentRegistry {
       if (!current) throw new OctusError("not_found", `Agent definition disappeared: ${def.id}`);
       return current;
     }
+    // Las asignaciones de modelo del usuario sobreviven a un bump de prompt:
+    // el YAML solo aporta el default al insertar una definición nueva.
+    let preservedModel = full.defaultModel;
+    try {
+      const parsed = JSON.parse(existing.default_model) as Partial<AgentDefinition["defaultModel"]>;
+      if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") {
+        preservedModel = parsed as AgentDefinition["defaultModel"];
+      }
+    } catch {
+      // default_model legacy/inválido: se reemplaza por el del YAML.
+    }
     await this.db.exec(
       "UPDATE agent_definitions SET kind = ?, name = ?, description = ?, profile = ?, default_model = ?, max_steps = ?, timeout_ms = ?, idle_timeout_ms = ?, system_prompt = ?, tools = ?, denied_tools = ?, permission_rules = ?, delivery_format = ?, can_delegate_to = ?, prompt_version = ? WHERE id = ?",
       [
@@ -88,7 +102,7 @@ export class AgentRegistry {
         full.name,
         full.description,
         full.profile ?? null,
-        JSON.stringify(full.defaultModel),
+        JSON.stringify(preservedModel),
         full.maxSteps,
         full.timeoutMs,
         full.idleTimeoutMs,

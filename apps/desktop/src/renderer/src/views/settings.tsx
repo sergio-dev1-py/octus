@@ -1,14 +1,20 @@
 /** Renderer/views — vista de ajustes: modal por secciones (Todo 4). */
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import type { ScheduleProfile } from "@octus/shared";
+import type { ModelSelection, ScheduleProfile } from "@octus/shared";
 import { invoke } from "../api.js";
 import {
+  loadModels,
+  refreshAgentModelSettings,
+  refreshDefinitions,
+  refreshProviders,
+  saveAgentModelAssignments,
   setError,
   setLayoutActivity,
   setUiPrefs,
   setView,
   state,
 } from "../store.js";
+import { ModelChoice } from "../components/model-choice.jsx";
 import {
   disableSkill,
   enableSkill,
@@ -35,7 +41,50 @@ export function AgentSettings() {
   let maxSession: HTMLInputElement | undefined;
   let maxProject: HTMLInputElement | undefined;
   let maxDepth: HTMLInputElement | undefined;
-  const modelInputs: Record<string, { provider?: HTMLInputElement; model?: HTMLInputElement; effort?: HTMLInputElement }> = {};
+  const [enabled, setEnabled] = createSignal(state.agentModelSettings?.enabled ?? false);
+  const [assignments, setAssignments] = createSignal<Record<string, ModelSelection>>({});
+  const [saving, setSaving] = createSignal(false);
+  const [saved, setSaved] = createSignal(false);
+
+  const workers = () => state.definitions.filter((definition) => definition.kind !== "coordinator");
+  const modelFor = (definitionId: string, fallback: ModelSelection): ModelSelection =>
+    assignments()[definitionId] ?? fallback;
+
+  const hydrate = () => {
+    const next: Record<string, ModelSelection> = {};
+    for (const definition of workers()) next[definition.id] = { ...definition.defaultModel };
+    for (const assignment of state.agentModelSettings?.assignments ?? []) {
+      next[assignment.definitionId] = { ...assignment.model };
+    }
+    setAssignments(next);
+    setEnabled(state.agentModelSettings?.enabled ?? false);
+  };
+
+  onMount(() => {
+    void (async () => {
+      await Promise.all([refreshAgentModelSettings(), refreshDefinitions(), refreshProviders()]);
+      await Promise.all(state.providers.filter((provider) => provider.configured).map((provider) => loadModels(provider.id)));
+      hydrate();
+    })();
+  });
+
+  const save = async () => {
+    setSaving(true);
+    setSaved(false);
+    setError(undefined);
+    const payload = workers().map((definition) => ({
+      definitionId: definition.id,
+      model: modelFor(definition.id, definition.defaultModel),
+    }));
+    const ok = await saveAgentModelAssignments(enabled(), payload);
+    setSaving(false);
+    if (!ok) {
+      setError("No se pudieron guardar los modelos por agente");
+      return;
+    }
+    setSaved(true);
+  };
+
   return (
     <section>
       <h2>Agents</h2>
@@ -74,46 +123,61 @@ export function AgentSettings() {
           </button>
         </div>
       </div>
-      <For each={state.definitions}>
-        {(definition) => (
-          <div class="card">
-            <h3>
-              <code>{definition.id}</code> <span class="muted">{definition.kind}</span>
-            </h3>
-            <p class="muted">{definition.description}</p>
+
+      <div class="card" id="agent-models">
+        <div class="row agent-models-head">
+          <div>
+            <h3>Modelo por agente</h3>
             <p class="muted">
-              default: <code>{definition.defaultModel.providerId}/{definition.defaultModel.modelId}</code>
-              {definition.defaultModel.effort ? ` effort=${definition.defaultModel.effort}` : ""} · tools={definition.tools.length} · prompt v{definition.promptVersion}
+              Asigna proveedor, modelo y esfuerzo a cada subagente. Si está apagado, todos heredan el modelo
+              y el esfuerzo del agente padre.
             </p>
-            <div class="row">
-              <input ref={(el) => ((modelInputs[definition.id] ??= {}).provider = el)} placeholder="providerId" value={definition.defaultModel.providerId} />
-              <input ref={(el) => ((modelInputs[definition.id] ??= {}).model = el)} placeholder="modelId" value={definition.defaultModel.modelId} />
-              <input ref={(el) => ((modelInputs[definition.id] ??= {}).effort = el)} placeholder="effort (optional)" value={definition.defaultModel.effort ?? ""} />
-              <button
-                type="button"
-                class="primary"
-                onClick={() => {
-                  void (async () => {
-                    const entry = modelInputs[definition.id] ?? {};
-                    const providerId = entry.provider?.value.trim() ?? "";
-                    const modelId = entry.model?.value.trim() ?? "";
-                    const effort = entry.effort?.value.trim() || undefined;
-                    if (!providerId || !modelId) {
-                      setError("providerId and modelId are required");
-                      return;
-                    }
-                    const result = await invoke("agents.setDefinitionModel", { definitionId: definition.id, model: { providerId, modelId, effort } });
-                    if (!result.ok) setError(result.error ?? "Could not save model");
-                    else setError(undefined);
-                  })();
-                }}
-              >
-                Save model
-              </button>
-            </div>
           </div>
-        )}
-      </For>
+          <label class="toggle-row">
+            <input
+              type="checkbox"
+              checked={enabled()}
+              disabled={saving()}
+              onChange={(event) => {
+                setEnabled(event.currentTarget.checked);
+                setSaved(false);
+              }}
+            />
+            <span>Permitir modelo por agente</span>
+          </label>
+        </div>
+        <p class="muted">
+          El coordinador usa el modelo elegido en la sesión. Los cambios se aplican a los próximos subagentes.
+        </p>
+        <For each={workers()}>
+          {(definition) => (
+            <div class="agent-model-row" data-agent-model={definition.id}>
+              <div class="agent-model-meta">
+                <strong>{definition.name}</strong>
+                <code>{definition.id}</code>
+                <span class="muted">{definition.kind}</span>
+              </div>
+              <ModelChoice
+                value={modelFor(definition.id, definition.defaultModel)}
+                disabled={!enabled() || saving()}
+                label={`model-${definition.id}`}
+                onChange={(model) => {
+                  setAssignments((prev) => ({ ...prev, [definition.id]: model }));
+                  setSaved(false);
+                }}
+              />
+            </div>
+          )}
+        </For>
+        <div class="row agent-models-actions">
+          <button type="button" class="primary" disabled={saving()} onClick={() => void save()}>
+            {saving() ? "Guardando…" : "Guardar cambios"}
+          </button>
+          <Show when={saved()}>
+            <span class="pill ok" role="status">Modelos guardados</span>
+          </Show>
+        </div>
+      </div>
     </section>
   );
 }

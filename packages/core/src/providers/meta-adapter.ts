@@ -51,6 +51,20 @@ const SPARK: ModelDescriptor = {
   },
 };
 
+/** Límites reales del catálogo Meta (la API no los declara en /v1/models).
+ *  Muse Wonder y todas las versiones de Muse Spark comparten 1M de contexto. */
+const KNOWN_META_LIMITS: Record<string, { context: number; output: number; efforts: ReasoningEffort[] }> = {
+  "muse-wonder-1.0": { context: 1_048_576, output: 131_072, efforts: ["minimal", "low", "medium", "high", "xhigh", "max"] },
+  "muse-spark-1.3": { context: 1_048_576, output: 131_072, efforts: ["minimal", "low", "medium", "high", "xhigh", "max"] },
+  "muse-spark-1.3-contributor": { context: 1_048_576, output: 131_072, efforts: ["minimal", "low", "medium", "high", "xhigh"] },
+  "muse-spark-1.2": { context: 1_048_576, output: 131_072, efforts: ["minimal", "low", "medium", "high", "xhigh", "max"] },
+  "muse-spark-1.2-contributor": { context: 1_048_576, output: 131_072, efforts: ["minimal", "low", "medium", "high", "xhigh"] },
+  "muse-spark-1.1": { context: 1_048_576, output: 131_072, efforts: ["minimal", "low", "medium", "high", "xhigh", "max"] },
+};
+
+/** Modelos que Meta publica pero no son de conversación/tool-calling. */
+const META_NON_CHAT = /^(muse-image|muse-voice-transcribe|sam-)/i;
+
 /** Niveles de razonamiento verificados por modelo (la API no siempre los declara).
  *  Sin entrada aquí y sin metadatos de la API se ofrece el set completo. */
 const KNOWN_MODEL_EFFORTS: Record<string, ReasoningEffort[]> = {
@@ -105,23 +119,21 @@ export class MetaAdapter implements ModelProvider {
       const entries: ModelDescriptor[] = [];
       for (const item of body.data ?? []) {
         if (typeof item.id !== "string" || !item.id) continue;
-        if (item.id === WONDER.modelId) {
-          entries.push(WONDER);
-          continue;
-        }
-        if (item.id === SPARK.modelId) {
-          entries.push(SPARK);
-          continue;
-        }
+        const known = KNOWN_META_LIMITS[item.id];
+        const nonChat = META_NON_CHAT.test(item.id);
         entries.push({
           providerId: "meta",
           modelId: item.id,
           displayName: typeof item.name === "string" ? item.name : item.id,
           capabilities: {
-            toolCall: (item.capabilities as { tools?: { supported?: boolean } } | undefined)?.tools?.supported ?? true,
-            reasoningEfforts: parseEfforts(item),
-            maxContextTokens: num(item.limit, item.context_window, item.max_context_length, item.context_length) ?? 131_072,
-            maxOutputTokens: num(item.limit, item.max_output_tokens, item.output_length) ?? 8192,
+            toolCall: nonChat ? false : ((item.capabilities as { tools?: { supported?: boolean } } | undefined)?.tools?.supported ?? true),
+            reasoningEfforts: nonChat ? [] : (known?.efforts ?? parseEfforts(item)),
+            maxContextTokens: nonChat
+              ? 131_072
+              : (known?.context ?? num(item.limit, item.context_window, item.max_context_length, item.context_length) ?? 131_072),
+            maxOutputTokens: nonChat
+              ? 8192
+              : (known?.output ?? num(item.limit, item.max_output_tokens, item.output_length) ?? 8192),
             supportsImages: modalitiesIncludeImage(item.modalities),
             pricingSource: `${this.baseURL}/models`,
             pricingDate: new Date().toISOString().slice(0, 10),

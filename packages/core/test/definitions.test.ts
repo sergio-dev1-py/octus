@@ -135,7 +135,7 @@ describe("agent definitions (YAML)", () => {
       const instance = instances[0]!;
       // Versión vigente del coordinador-build (subir promptVersion en el YAML
       // la propaga aquí: el seed actualiza y el snapshot la congela).
-      expect(instance.definitionVersion).toBe(17);
+      expect(instance.definitionVersion).toBe(18);
       expect(instance.promptHash).toHaveLength(64);
       expect(instance.definitionSnapshot.definitionId).toBe("coordinator-build");
       expect(instance.definitionSnapshot.tools).toContain("read");

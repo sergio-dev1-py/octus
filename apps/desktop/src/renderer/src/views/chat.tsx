@@ -13,6 +13,30 @@ import {
   replyToQuestion,
 } from "../toolcall-widgets.jsx";
 import type { LiveMessage } from "../store.js";
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens >= 100_000 ? 0 : 1)}k`;
+  return String(tokens);
+}
+
+function contextUsageTitle(usage: NonNullable<typeof state.contextUsage>): string {
+  const fullest = [...usage.agents].sort((a, b) => b.percent - a.percent)[0];
+  const subagents = Math.max(0, usage.agents.length - 1);
+  const agents = usage.agents
+    .map((agent) => `${agent.definitionId}: ${formatTokenCount(agent.usedTokens)} / ${formatTokenCount(agent.maxContextTokens)} (${Math.round(agent.percent)}%)`)
+    .join("\n");
+  return [
+    `Contexto total (coordinador${subagents > 0 ? ` + ${subagents} subagentes` : ""}): ${usage.usedTokens.toLocaleString()} tokens`,
+    fullest
+      ? `Agente más lleno: ${fullest.definitionId} ${fullest.usedTokens.toLocaleString()} / ${fullest.maxContextTokens.toLocaleString()} (${Math.round(fullest.percent)}%)`
+      : "",
+    `Ventana del coordinador: ${usage.maxContextTokens.toLocaleString()} tokens`,
+    `Compactación automática al ${Math.round(usage.compactThresholdRatio * 100)}%: ${usage.compactAtTokens.toLocaleString()} tokens`,
+    "Se conservan ~15k tokens recientes",
+    agents ? `\n${agents}` : "",
+  ].filter(Boolean).join("\n");
+}
 import {
   addAttachments,
   dismissCancelNotice,
@@ -74,6 +98,16 @@ function modelDisplay(providerId: string, modelId: string): string {
   const model = (state.modelsByProvider[providerId] ?? []).find((entry) => entry.modelId === modelId);
   return model?.displayName ?? modelId;
 }
+
+/** Herramientas de contabilidad interna: no justifican una burbuja propia. */
+const BOOKKEEPING_TOOLS = new Set([
+  "agent_wait",
+  "agent_status",
+  "agent_result",
+  "record_review",
+  "plan_tasks",
+  "plan.list",
+]);
 
 function ActivityGroups(props: { items: PairedToolCall[] }) {
   interface Group {
@@ -209,11 +243,14 @@ export function MessageView(props: { message: Message }) {
     onCleanup(() => clearInterval(timer));
   });
   const hasDiff = () => state.messages.some((m) => m.runId === message().runId && m.parts.some((part) => part.type === "tool_result" && part.diff));
-  const hasActivity = () => {
-    const items = toolItems();
-    const bookkeeping = new Set(["agent_wait", "agent_status", "agent_result", "record_review", "plan_tasks", "plan.list"]);
-    return items.some((item) => !bookkeeping.has(item.call.name));
+  const coordinatorId = () =>
+    state.agentInstances.find((instance) => instance.runId === message().runId && !instance.parentInstanceId)?.id;
+  const hasChildren = () => {
+    const coordinator = coordinatorId();
+    return Boolean(coordinator && state.agentInstances.some((instance) => instance.parentInstanceId === coordinator));
   };
+  const visibleTools = () => toolItems().filter((item) => !BOOKKEEPING_TOOLS.has(item.call.name));
+  const hasActivity = () => visibleTools().length > 0;
   const workLabel = () => {
     if (isLastAssistantOfRun() && active()) {
       const value = footer();
@@ -223,12 +260,17 @@ export function MessageView(props: { message: Message }) {
     const value = footer();
     return value ? `Worked · ${formatDuration(value.durationMs)}` : "Worked";
   };
-  const isEmpty = () => textParts().length === 0 && toolItems().length === 0;
+  const showChildren = () => isLastAssistantOfRun() && hasChildren();
+  const isEmpty = () => textParts().length === 0 && visibleTools().length === 0 && !showChildren();
   return (
     <Show when={!isEmpty()}>
       <div class={`message ${message().role}`} data-message-id={message().id}>
-        <Show when={isAssistant() && hasActivity()}>
-          <details class="work" open={(isLastAssistantOfRun() && active()) || hasDiff()} data-message-id={message().id}>
+        <Show when={isAssistant() && (hasActivity() || showChildren())}>
+          <details
+            class="work"
+            open={(isLastAssistantOfRun() && active()) || hasDiff()}
+            data-message-id={message().id}
+          >
             <summary>
               <span>{workLabel()}</span>
             </summary>
@@ -242,8 +284,11 @@ export function MessageView(props: { message: Message }) {
                   </Show>
                 </div>
               </Show>
-              <ActivityGroups items={toolItems()} />
-              <For each={toolItems().filter((item) => item.result?.diff)}>{(item) => <DiffCard diff={item.result!.diff!} />}</For>
+              <ActivityGroups items={visibleTools()} />
+              <For each={visibleTools().filter((item) => item.result?.diff)}>{(item) => <DiffCard diff={item.result!.diff!} />}</For>
+              <Show when={isLastAssistantOfRun() && coordinatorId()}>
+                <ChildAgents parentInstanceId={coordinatorId()!} depth={1} />
+              </Show>
             </div>
           </details>
         </Show>
@@ -260,29 +305,48 @@ export function MessageView(props: { message: Message }) {
 /** Marco de streaming con estado visible por marco (N-C-12a/12b). */
 export function LiveView(props: { live: LiveMessage }) {
   const live = () => props.live;
+  const coordinatorId = () =>
+    state.agentInstances.find((instance) => instance.runId === live().runId && !instance.parentInstanceId)?.id;
+  const hasChildren = () => {
+    const coordinator = coordinatorId();
+    return Boolean(coordinator && state.agentInstances.some((instance) => instance.parentInstanceId === coordinator));
+  };
+  const hasWork = () => live().reasoning.length > 0 || Object.keys(live().tools).length > 0 || hasChildren();
   return (
-    <Show when={live().text || live().reasoning || Object.keys(live().tools).length > 0}>
+    <Show when={live().text || hasWork()}>
       <div class="message assistant live" data-live={live().id} data-text-status={live().textStatus}>
+        <Show when={hasWork()}>
+          <details class="work" open data-live-work={live().id}>
+            <summary>
+              <span>Working</span>
+            </summary>
+            <div class="activity-body">
+              <Show when={live().reasoning}>
+                <details class="reasoning" open>
+                  <summary>
+                    Reasoning summary <FrameStatus status={live().reasoningStatus} />
+                  </summary>
+                  <div class="md" innerHTML={renderMarkdown(live().reasoning)} />
+                </details>
+              </Show>
+              <For each={Object.entries(live().tools)}>
+                {([key, frame]) => (
+                  <div class="toolcall" data-tool-status={frame.status}>
+                    <span class="toolname">tool {key}</span>
+                    <FrameStatus status={frame.status} />
+                    <code>{frame.args.slice(0, 500)}</code>
+                  </div>
+                )}
+              </For>
+              <Show when={coordinatorId()}>
+                <ChildAgents parentInstanceId={coordinatorId()!} depth={1} />
+              </Show>
+            </div>
+          </details>
+        </Show>
         <Show when={live().text}>
           <div class="md" innerHTML={renderMarkdown(live().text)} />
         </Show>
-        <Show when={live().reasoning}>
-          <details class="reasoning" open>
-            <summary>
-              Reasoning summary <FrameStatus status={live().reasoningStatus} />
-            </summary>
-            <div class="md" innerHTML={renderMarkdown(live().reasoning)} />
-          </details>
-        </Show>
-        <For each={Object.entries(live().tools)}>
-          {([key, frame]) => (
-            <div class="toolcall" data-tool-status={frame.status}>
-              <span class="toolname">tool {key}</span>
-              <FrameStatus status={frame.status} />
-              <code>{frame.args.slice(0, 500)}</code>
-            </div>
-          )}
-        </For>
       </div>
     </Show>
   );
@@ -452,6 +516,11 @@ export function ModelPicker() {
           <option value="">Default</option>
           <For each={efforts()}>{(effort) => <option value={effort}>{effort}</option>}</For>
         </select>
+      </Show>
+      <Show when={state.contextUsage && state.contextUsage.maxContextTokens > 0}>
+        <span class="context-usage" title={contextUsageTitle(state.contextUsage!)}>
+          Contexto {formatTokenCount(state.contextUsage!.usedTokens)} · {Math.round(state.contextUsage!.percent)}%
+        </span>
       </Show>
       <Show when={open()}>
         <div class="model-popover-backdrop" onClick={() => setOpen(false)} />
@@ -879,11 +948,6 @@ export function ChatView() {
   const threadMessages = () => state.messages.filter((m) => !childInstanceIds().has(m.instanceId));
   const visibleMessages = () => windowMessages(threadMessages(), CHAT_DOM_WINDOW);
   const domHidden = () => threadMessages().length - visibleMessages().length;
-  const latestRunId = () => state.runs[state.runs.length - 1]?.id ?? state.messages[state.messages.length - 1]?.runId;
-  const latestCoordinatorId = () => {
-    const runId = latestRunId();
-    return runId ? state.agentInstances.find((instance) => instance.runId === runId && !instance.parentInstanceId)?.id : undefined;
-  };
   // Si la primera página solo trae mensajes de subagentes, el timeline raíz
   // quedaría vacío aunque la sesión tenga historial. Carga páginas anteriores
   // hasta encontrar al menos un mensaje del hilo raíz.
@@ -1059,11 +1123,6 @@ export function ChatView() {
         </Show>
         <For each={visibleMessages()}>{(message) => <MessageView message={message} />}</For>
         <For each={rootLive()}>{(live) => <LiveView live={live} />}</For>
-        <Show when={latestCoordinatorId()}>
-          <div class="run-subagents">
-            <ChildAgents parentInstanceId={latestCoordinatorId()!} depth={1} />
-          </div>
-        </Show>
         <div id="timeline-bottom" ref={bottomAnchor} />
         </div>
       </div>

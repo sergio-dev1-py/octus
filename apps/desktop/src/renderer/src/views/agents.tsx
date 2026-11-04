@@ -16,6 +16,7 @@ import {
   state,
 } from "../store.js";
 import { DAG_NODE_WINDOW, capList } from "../perf.js";
+import { IntegrationsSection } from "./sections.jsx";
 
 export interface DagEdge {
   from: string;
@@ -448,6 +449,7 @@ export function AgentsView() {
       <AgentDagSection />
       <AgentRunsSection />
       <AgentWorktreesSection />
+      <IntegrationsSection />
     </main>
   );
 }

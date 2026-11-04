@@ -1,7 +1,7 @@
 /** Renderer/store — estado raíz, tipos de UI y banderas globales. */
 import { DEFAULT_LAYOUT, DEFAULT_UI_PREFS } from "@octus/shared";
 import { createStore } from "solid-js/store";
-import type { WorkbenchLayout, AgentDefinition, AgentInstance, Approval, ApprovalRequest, DiagnosticProblem, ExplorerFile, ExplorerPage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, SkillCatalogError, SkillCatalogItem, SkillDetail, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
+import type { WorkbenchLayout, AgentDefinition, AgentInstance, AgentModelSettings, Approval, ApprovalRequest, DiagnosticProblem, ExplorerFile, ExplorerPage, Integration, IntegrationCommit, IntegrationConflict, IntegrationOperation, IntegrationReview, MemoryItem, Message, ModelDescriptor, PermissionRequest, Plan, PlanRevision, Preview, Project, Promotion, ProviderDescriptor, QuestionRequest, RepositorySummary, Run, Session, SessionContextUsage, SkillCatalogError, SkillCatalogItem, SkillDetail, Task, TaskDependency, TaskAttempt, ToolCallRecord, UiPrefs, UsageRecord, Validation, Worktree, WorktreeOperation } from "@octus/shared";
 import type { ChatAttachment, LiveFrame } from "../timeline.js";
 
 /** Marco de streaming visible (Todo 13, N-C-12a/12b): forma pura en timeline.ts. */
@@ -33,6 +33,10 @@ interface UIState {
   usage: UsageRecord[];
   /** Usage completo por run (footer de cada petición, todos los agentes). */
   usageByRun: Record<string, UsageRecord[]>;
+  /** Contexto real retenido por la conversación (coordinador + subagentes). */
+  contextUsage?: SessionContextUsage;
+  /** Ajuste de modelos por agente (toggle + asignaciones). */
+  agentModelSettings?: AgentModelSettings;
   /** Todo 16 — run seleccionado en la vista de agentes y su ficha (runs.get). */
   selectedRunId?: string;
   runDetail?: { run: Run; instances: AgentInstance[]; toolCalls: ToolCallRecord[] };
@@ -127,6 +131,8 @@ const [state, setState] = createStore<UIState>({
   providers: [],
   usage: [],
   usageByRun: {},
+  contextUsage: undefined,
+  agentModelSettings: undefined,
   selectedRunId: undefined,
   runDetail: undefined,
   cancelReason: undefined,

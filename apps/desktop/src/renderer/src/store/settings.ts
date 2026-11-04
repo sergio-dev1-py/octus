@@ -20,6 +20,25 @@ export async function refreshLimits(): Promise<void> {
   }
 }
 
+export async function refreshAgentModelSettings(): Promise<void> {
+  try {
+    const { settings } = await invoke("agents.modelSettings", {});
+    setState("agentModelSettings", settings);
+  } catch {
+    // conserva el valor previo
+  }
+}
+
+export async function saveAgentModelAssignments(
+  enabled: boolean,
+  assignments: NonNullable<typeof state.agentModelSettings>["assignments"],
+): Promise<boolean> {
+  const result = await invoke("agents.setModelAssignments", { enabled, assignments });
+  if (!result.ok) return false;
+  await Promise.all([refreshAgentModelSettings(), refreshDefinitions()]);
+  return true;
+}
+
 export async function refreshProjectSettings(): Promise<void> {
   if (!state.activeProjectId) {
     setState("isolatedDirs", []);

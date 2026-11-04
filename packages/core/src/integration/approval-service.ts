@@ -213,6 +213,7 @@ export class ApprovalService {
       supersedes: row.supersedes ? String(row.supersedes) : undefined,
       status: row.status as Integration["status"],
       error: row.error ? String(row.error) : undefined,
+      excludedTaskIds: row.excluded_task_ids ? (JSON.parse(String(row.excluded_task_ids)) as string[]) : [],
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     };

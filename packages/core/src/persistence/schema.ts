@@ -882,6 +882,11 @@ BEGIN
 END;
 `;
 
+const MIGRATION_0013 = `
+-- Integración parcial: tasks con commits que quedaron fuera (fallidas o sin review).
+ALTER TABLE integrations ADD COLUMN excluded_task_ids TEXT NOT NULL DEFAULT '[]';
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "core-etapa1", sql: MIGRATION_0001 },
   { version: 2, name: "agents-plans-etapa2", sql: MIGRATION_0002 },
@@ -895,4 +900,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 10, name: "scheduled-tasks-wbct7", sql: MIGRATION_0010 },
   { version: 11, name: "schedules-edit-once-maxruns", sql: MIGRATION_0011 },
   { version: 12, name: "task-review-target-cascade", sql: MIGRATION_0012 },
+  { version: 13, name: "integration-excluded-tasks", sql: MIGRATION_0013 },
 ];

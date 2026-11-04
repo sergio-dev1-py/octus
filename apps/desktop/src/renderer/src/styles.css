@@ -382,6 +382,35 @@ select {
   padding: var(--oc-message-pad);
 }
 
+/* Chat compacto: menos aire entre mensajes y dentro de la respuesta. */
+.message-timeline .message {
+  padding: var(--oc-space-3);
+}
+
+.message-timeline .timeline-content {
+  gap: var(--oc-space-2);
+}
+
+.message-timeline .message .md > :first-child {
+  margin-top: 0;
+}
+
+.message-timeline .message .md > :last-child {
+  margin-bottom: 0;
+}
+
+.message-timeline .message .md p,
+.message-timeline .message .md ul,
+.message-timeline .message .md ol,
+.message-timeline .message .md blockquote,
+.message-timeline .message .md pre {
+  margin-block: var(--oc-space-2);
+}
+
+.message-timeline .message .md li {
+  margin-block: 0;
+}
+
 .message .role {
   font-size: var(--oc-text-xs);
   text-transform: uppercase;
@@ -1233,6 +1262,75 @@ code.muted {
 
 .composer-chip:hover:not(:disabled) {
   border-color: var(--oc-accent-border);
+}
+
+.context-usage {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--oc-text-xs);
+  color: var(--oc-text-muted);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.agent-models-head {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.agent-models-head h3 {
+  margin-top: 0;
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--oc-space-2);
+  font-size: var(--oc-text-sm);
+  white-space: nowrap;
+}
+
+.agent-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--oc-gap);
+  padding: var(--oc-space-2) 0;
+  border-top: 1px solid var(--oc-border);
+}
+
+.agent-model-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--oc-space-2);
+  min-width: 0;
+}
+
+.agent-model-meta code {
+  font-size: var(--oc-text-xs);
+  color: var(--oc-text-muted);
+}
+
+.model-choice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--oc-space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.agent-model-row .model-popover {
+  bottom: auto;
+  top: calc(100% + var(--oc-space-2));
+  right: 0;
+  left: auto;
+}
+
+.agent-models-actions {
+  margin-top: var(--oc-space-3);
+  padding-top: var(--oc-space-3);
+  border-top: 1px solid var(--oc-border);
 }
 
 .composer-model {
