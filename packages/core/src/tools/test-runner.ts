@@ -24,6 +24,7 @@ export type TestEntry = z.infer<typeof testEntrySchema>;
 /** Artefactos/cachés que no deben copiarse al sandbox de pruebas. */
 const COPY_EXCLUDES = new Set([
   ".git",
+  ".octus",
   "node_modules",
   ".next",
   ".nuxt",
