@@ -576,10 +576,15 @@ export class AgentRuntime {
     } catch {
       // El cierre es best-effort; el run termina igualmente.
     }
-    if (text.trim()) {
-      await this.appendMessageWithId(instance, messageId, "assistant", [{ type: "text", text }], "tool", undefined, opts.correlationId, this.messageMode(definition, session));
+    // El cierre también puede llegar como DSML/XML (el modelo ignora "no tools"
+    // bajo inercia). Se limpia para que el delivery no contenga una tool call
+    // fantasma; si no quedó texto, se entrega un resumen explícito.
+    const cleaned = extractEmbeddedToolCalls(text).text.trim();
+    const closingText = cleaned || (text.trim() ? "Maximum steps reached. The closing message contained only a tool call and no textual summary; review the recorded tool actions." : "");
+    if (closingText) {
+      await this.appendMessageWithId(instance, messageId, "assistant", [{ type: "text", text: closingText }], "tool", undefined, opts.correlationId, this.messageMode(definition, session));
     }
-    return text;
+    return closingText;
   }
 
   /**
