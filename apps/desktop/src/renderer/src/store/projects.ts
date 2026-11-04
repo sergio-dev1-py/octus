@@ -1,5 +1,6 @@
 /** Renderer/store — proyectos, sesiones, mensajes, proveedores y prompts. */
 import { reconcile } from "solid-js/store";
+import type { Message } from "@octus/shared";
 import { invoke } from "../api.js";
 import {
   TIMELINE_MAX_ATTACHMENT_BYTES,
@@ -58,6 +59,7 @@ export async function refreshMessages(): Promise<void> {
     const { messages, total, hasOlder } = await invoke("sessions.messages", {
       sessionId: state.activeSessionId,
       limit: TIMELINE_PAGE,
+      rootOnly: true,
     });
     setState("messages", messages);
     setState("timelineTotal", total ?? messages.length);
@@ -192,6 +194,7 @@ export async function selectSession(sessionId: string): Promise<void> {
   setState("activeSessionId", sessionId);
   // reconcile: setState fusiona y un {} no borraría marcos viejos (fantasma).
   setState("live", reconcile({}));
+  setState("childMessages", reconcile({}));
   setState("cancelReason", undefined);
   setState("attachments", []);
   // Todo 34 (§7: cambio de sesión sin jank): primero lo crítico del chat
@@ -292,6 +295,7 @@ export async function loadOlderMessages(): Promise<void> {
       sessionId: state.activeSessionId,
       limit: TIMELINE_PAGE,
       beforeId: firstId,
+      rootOnly: true,
     });
     const known = new Set(state.messages.map((m) => m.id));
     const fresh = messages.filter((m) => !known.has(m.id));
@@ -305,6 +309,30 @@ export async function loadOlderMessages(): Promise<void> {
 
 export function dismissCancelNotice(): void {
   setState("cancelReason", undefined);
+}
+
+const loadingChildMessages = new Set<string>();
+
+/** Carga bajo demanda los mensajes de un subagente (no contaminan el timeline raíz). */
+export async function loadChildMessages(instanceId: string, sessionId = state.activeSessionId): Promise<void> {
+  if (!sessionId || loadingChildMessages.has(instanceId)) return;
+  loadingChildMessages.add(instanceId);
+  try {
+    const { messages } = await invoke("sessions.messages", {
+      sessionId,
+      instanceId,
+      limit: 1000,
+    });
+    const known = new Set((state.childMessages[instanceId] ?? []).map((message) => message.id));
+    const fresh = (messages as Message[]).filter((message) => !known.has(message.id));
+    if (fresh.length === 0) return;
+    const merged = [...(state.childMessages[instanceId] ?? []), ...fresh].sort((a, b) => (a.createdAt - b.createdAt) || (a.seq - b.seq));
+    setState("childMessages", { ...state.childMessages, [instanceId]: merged });
+  } catch {
+    // El panel del subagente puede seguir mostrando el resumen sin historial.
+  } finally {
+    loadingChildMessages.delete(instanceId);
+  }
 }
 
 /** Adjunta archivos de texto al composer (se en línea en el prompt, sin IPC nuevo). */

@@ -28,7 +28,7 @@ import {
 } from "@octus/shared";
 import { invoke, onEvent } from "./api.js";
 import { DiffCard } from "./diff-view.jsx";
-import { loadRunUsage, retryTask, setError, state } from "./store.js";
+import { loadChildMessages, loadRunUsage, retryTask, setError, state } from "./store.js";
 
 // ---------------------------------------------------------------- caché propia
 interface WidgetCache {
@@ -206,7 +206,8 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
   return (
     <For each={children()}>
       {(child) => {
-        const messages = () => state.messages.filter((m) => m.instanceId === child.id);
+        const messages = () => state.childMessages[child.id] ?? [];
+        createEffect(() => { void loadChildMessages(child.id, child.sessionId); });
         const tools = () => {
           const results = indexToolResults(messages());
           return messages().flatMap((m) =>
@@ -228,7 +229,6 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
           if (!active()) void loadRunUsage(child.runId);
         });
         const usage = () => (state.usageByRun[child.runId] ?? []).filter((row) => row.agentInstanceId === child.id);
-        const hasDiff = () => tools().some((item) => item.result?.diff);
         const model = () => {
           const own = child.model ?? usage()[0];
           if (!own) return "";
@@ -241,14 +241,11 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
           return [model(), fmtClock(wall)].filter(Boolean).join(" · ");
         };
         return (
-          <details class="activity-node" open={hasDiff()} data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
+          <details class="activity-node" open={false} data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
             <summary>
               <span class="activity-caret" aria-hidden="true">›</span>
               <span class="activity-name">{label()}</span>
               <span class="activity-meta">
-                <Show when={active()}>
-                  <span class="work-spinner work-spinner--small" aria-hidden="true" />
-                </Show>
                 {status()}
                 {elapsed() ? ` · ${elapsed()}` : ""}
                 {tools().length > 0 ? ` · ${tools().length} tool${tools().length === 1 ? "" : "s"}` : ""}

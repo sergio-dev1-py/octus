@@ -6,7 +6,7 @@
 import { render } from "solid-js/web";
 import { ChatView } from "../../src/renderer/src/views/chat.jsx";
 import "../../src/renderer/src/styles.css";
-import { setState } from "../../src/renderer/src/store.js";
+import { setState, state } from "../../src/renderer/src/store.js";
 
 const variant = new URLSearchParams(location.search).get("state") ?? "empty";
 
@@ -120,6 +120,7 @@ if (variant === "working" || variant === "failed" || variant === "completed") {
       createdAt: 11,
     },
   ] as never);
+  setState("childMessages", { ins_leaf: [state.messages[2]!] } as never);
   if (completed) {
     const records = [
       {

@@ -773,23 +773,35 @@ export class OctusCore {
   }
 
   /** Paginación aditiva del historial (N-C-06, Todo 13): ventana por cursor
-      estable sobre el mismo orden (runs por creación, mensajes por seq).
-      Sin limit devuelve todo (comportamiento legacy intacto). */
+      estable sobre el mismo orden (runs por creación, mensajes por creación).
+      `rootOnly` excluye mensajes de subagentes; `instanceId` aísla un agente. */
   async sessionMessagesPage(
     sessionId: string,
     runId?: string,
-    opts?: { limit?: number; beforeId?: string },
+    opts?: { limit?: number; beforeId?: string; rootOnly?: boolean; instanceId?: string },
   ): Promise<{ messages: Message[]; total: number; hasOlder: boolean }> {
     await this.requireSession(sessionId);
-    const rows = runId
-      ? await this.db.query<Record<string, string | number | null>>(
-        "SELECT m.* FROM messages m JOIN runs r ON r.id = m.run_id WHERE m.session_id = ? AND m.run_id = ? ORDER BY r.created_at ASC, m.seq ASC",
-        [sessionId, runId],
-      )
-      : await this.db.query<Record<string, string | number | null>>(
-        "SELECT m.* FROM messages m JOIN runs r ON r.id = m.run_id WHERE m.session_id = ? ORDER BY r.created_at ASC, m.seq ASC",
-        [sessionId],
-      );
+    const where = ["m.session_id = ?"];
+    const params: Array<string | number> = [sessionId];
+    if (runId) {
+      where.push("m.run_id = ?");
+      params.push(runId);
+    }
+    if (opts?.instanceId) {
+      where.push("m.instance_id = ?");
+      params.push(opts.instanceId);
+    }
+    if (opts?.rootOnly) {
+      where.push("(m.instance_id IS NULL OR i.parent_instance_id IS NULL)");
+    }
+    const rows = await this.db.query<Record<string, string | number | null>>(
+      `SELECT m.* FROM messages m
+       JOIN runs r ON r.id = m.run_id
+       LEFT JOIN agent_instances i ON i.id = m.instance_id
+       WHERE ${where.join(" AND ")}
+       ORDER BY r.created_at ASC, m.created_at ASC, m.rowid ASC`,
+      params,
+    );
     const all = rows.map(deserializeMessage);
     const limit = opts?.limit;
     if (limit === undefined || !(limit >= 1)) return { messages: all, total: all.length, hasOlder: false };

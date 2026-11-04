@@ -87,8 +87,8 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     expect(await pg().evaluate(() => document.querySelectorAll(".message").length)).toBe(2);
     const userBg = await pg().evaluate(() => getComputedStyle(document.querySelector(".message.user")!).backgroundColor);
     expect(userBg).toBe("rgb(217, 222, 233)");
-    // El asistente del coordinador resume su trabajo en una sola línea.
-    expect(await pg().textContent(".message-timeline details.work > summary")).toContain("Working");
+    // El subagente aparece compacto en el panel del run, sin una caja por mensaje.
+    expect(await pg().textContent(".run-subagents [data-subagent-group] summary")).toContain("working");
     // El grupo existe, colapsado por defecto (depth>=1 anidado también lo estaría).
     expect(await pg().evaluate(() => document.querySelectorAll("[data-subagent-group]").length)).toBe(1);
     expect(await pg().evaluate(() => (document.querySelector("[data-subagent-group]") as HTMLDetailsElement).open)).toBe(false);
@@ -110,10 +110,9 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     const assistant = pg().locator(".message.assistant").first();
     expect(await assistant.locator(":scope > .md").textContent()).toContain("Delego");
     expect(await assistant.locator("details.work .md").count()).toBe(0);
-    expect(await assistant.locator(".diff-card").count()).toBe(1);
-    expect(await assistant.locator(".diff-card summary").textContent()).toContain("components/Header.tsx");
-    const summary = await assistant.locator("details.work > summary").textContent();
-    expect(summary).toContain("Worked");
+    expect(await pg().locator(".diff-card").count()).toBe(1);
+    expect(await pg().textContent(".diff-card summary")).toContain("components/Header.tsx");
+    expect(await pg().locator(".run-subagents [data-subagent-group]").count()).toBe(1);
     const footer = await pg().textContent(".run-footer");
     expect(footer).toContain("Build");
     expect(footer).toContain("muse-spark-1.3");

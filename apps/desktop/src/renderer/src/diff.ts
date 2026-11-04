@@ -1,9 +1,11 @@
 /** Renderer — diff de líneas para el visor del chat (sin dependencias).
  *  Solo archivos existentes modificados: el core no envía diff para nuevos. */
 export interface DiffRow {
-  kind: "same" | "change" | "add" | "del";
+  kind: "same" | "change" | "add" | "del" | "hunk";
   left?: { no: number; text: string };
   right?: { no: number; text: string };
+  /** Solo para kind === "hunk": cabecera @@ -a,b +c,d @@. */
+  header?: string;
 }
 
 export interface DiffResult {
@@ -15,6 +17,8 @@ export interface DiffResult {
 
 const MAX_LINES = 1200;
 const MAX_CELLS = 400_000;
+const CONTEXT_LINES = 3;
+const MAX_DIFF_ROWS = 500;
 
 function linesOf(text: string): string[] {
   if (text === "") return [];
@@ -36,6 +40,55 @@ function pairBlock(deleted: Array<{ no: number; text: string }>, added: Array<{ 
     });
   }
   return rows;
+}
+
+function sideStats(rows: DiffRow[], start: number, end: number): { leftNo: number; rightNo: number; leftCount: number; rightCount: number } {
+  let leftNo = 0;
+  let rightNo = 0;
+  let leftCount = 0;
+  let rightCount = 0;
+  for (let i = start; i < end; i++) {
+    const row = rows[i]!;
+    if (row.left) {
+      if (leftNo === 0) leftNo = row.left.no;
+      leftCount++;
+    }
+    if (row.right) {
+      if (rightNo === 0) rightNo = row.right.no;
+      rightCount++;
+    }
+  }
+  return { leftNo, rightNo, leftCount, rightCount };
+}
+
+/** Conserva solo los bloques modificados y 3 líneas de contexto, como un diff de git. */
+function compressRows(rows: DiffRow[]): { rows: DiffRow[]; compressed: boolean } {
+  const changed: number[] = [];
+  for (let i = 0; i < rows.length; i++) if (rows[i]!.kind !== "same") changed.push(i);
+  if (changed.length === 0) return { rows, compressed: false };
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const index of changed) {
+    const start = Math.max(0, index - CONTEXT_LINES);
+    const end = Math.min(rows.length, index + CONTEXT_LINES + 1);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last.end) last.end = Math.max(last.end, end);
+    else ranges.push({ start, end });
+  }
+  if (ranges.length === 1 && ranges[0]!.start === 0 && ranges[0]!.end === rows.length) {
+    return { rows, compressed: false };
+  }
+
+  const out: DiffRow[] = [];
+  for (const range of ranges) {
+    const stats = sideStats(rows, range.start, range.end);
+    out.push({
+      kind: "hunk",
+      header: `@@ -${stats.leftNo},${stats.leftCount} +${stats.rightNo},${stats.rightCount} @@`,
+    });
+    out.push(...rows.slice(range.start, range.end));
+  }
+  return { rows: out, compressed: true };
 }
 
 export function diffLines(before: string, after: string): DiffResult {
@@ -108,5 +161,7 @@ export function diffLines(before: string, after: string): DiffResult {
   for (let i = endA + 1, j = endB + 1; i < aa.length && j < bb.length; i++, j++) {
     rows.push({ kind: "same", left: { no: i + 1, text: aa[i]! }, right: { no: j + 1, text: bb[j]! } });
   }
-  return { rows, added, removed, truncated };
+  const compressed = compressRows(rows);
+  const limited = compressed.rows.length > MAX_DIFF_ROWS ? compressed.rows.slice(0, MAX_DIFF_ROWS) : compressed.rows;
+  return { rows: limited, added, removed, truncated: truncated || limited.length < compressed.rows.length };
 }

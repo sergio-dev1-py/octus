@@ -19,6 +19,8 @@ interface UIState {
   activeProjectId?: string;
   activeSessionId?: string;
   messages: Message[];
+  /** Mensajes de subagentes por instanceId (el timeline raíz no los mezcla). */
+  childMessages: Record<string, Message[]>;
   runs: Run[];
   busy: boolean;
   live: Record<string, LiveMessage>;
@@ -114,6 +116,7 @@ const [state, setState] = createStore<UIState>({
   sessionsByProject: {},
   workingBySession: {},
   messages: [],
+  childMessages: {},
   runs: [],
   busy: false,
   live: {},

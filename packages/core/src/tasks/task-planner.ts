@@ -96,6 +96,7 @@ Rules:
 - Keep descriptions and acceptance criteria concise (max 2 sentences / 3 criteria per task) so the JSON stays complete.
 - Maximize parallelism: only add a dependency when the task truly consumes another task's output. After a base scaffold, independent feature areas (DB/schema, API, UI components/pages) must be siblings, not a chain. Aim for 2-4 parallel implementer tasks with disjoint writeScope.
 - For a greenfield/empty repository or an unfamiliar existing codebase, include exactly one read-only explorer task first (agentRole=explorer, writeScope=[], needsReview=false, no dependencies) to inspect the current files and conventions; implementers that need that context depend on it.
+- Never propose more than one explorer task in the same DAG: one explorer can inspect several areas; multiple explorers duplicate context.
 - Do not include approvals, merges, branches or worktrees: those do not exist for workers.`;
 
 export class TaskPlanner {

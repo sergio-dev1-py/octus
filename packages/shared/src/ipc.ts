@@ -99,7 +99,7 @@ export interface OctusIPC {
   "sessions.setProfile": { request: { sessionId: string; profile: "plan" | "build" }; response: { ok: boolean } };
   "sessions.setModel": { request: { sessionId: string; model: ModelSelection }; response: { ok: boolean; error?: string } };
   "sessions.messages": {
-    request: { sessionId: string; runId?: string; limit?: number; beforeId?: string };
+    request: { sessionId: string; runId?: string; limit?: number; beforeId?: string; rootOnly?: boolean; instanceId?: string };
     response: { messages: Message[]; total?: number; hasOlder?: boolean };
   };
   "sessions.recover": { request: { sessionId: string }; response: { session: Session; messages: Message[]; recovered: boolean; skippedMessages: string[]; skippedEvents: number } };

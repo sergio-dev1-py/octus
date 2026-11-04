@@ -51,7 +51,15 @@ export function applyEvent(event: CoreEvent): void {
     case "message.appended": {
       const message = persisted.payload.message as Message;
       if (message.sessionId === state.activeSessionId) {
-        setState("messages", (messages) => appendMessage(messages, message));
+        const instance = state.agentInstances.find((entry) => entry.id === message.instanceId);
+        if (instance?.parentInstanceId) {
+          setState("childMessages", {
+            ...state.childMessages,
+            [message.instanceId]: appendMessage(state.childMessages[message.instanceId] ?? [], message),
+          });
+        } else {
+          setState("messages", (messages) => appendMessage(messages, message));
+        }
         if (message.role === "assistant") {
           const live = { ...state.live };
           delete live[message.id];

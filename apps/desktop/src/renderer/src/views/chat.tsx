@@ -190,7 +190,6 @@ export function MessageView(props: { message: Message }) {
   };
   const footer = () => (message().role === "assistant" ? footerForMessage(message().id, state.usage) : undefined);
   const isAssistant = () => message().role === "assistant";
-  const hasChildren = () => state.agentInstances.some((instance) => instance.parentInstanceId === message().instanceId);
   const isLastAssistantOfRun = () => {
     const peers = state.messages.filter((m) => m.runId === message().runId && m.instanceId === message().instanceId && m.role === "assistant");
     return peers.length === 0 || peers[peers.length - 1]!.id === message().id;
@@ -210,7 +209,11 @@ export function MessageView(props: { message: Message }) {
     onCleanup(() => clearInterval(timer));
   });
   const hasDiff = () => state.messages.some((m) => m.runId === message().runId && m.parts.some((part) => part.type === "tool_result" && part.diff));
-  const hasActivity = () => toolItems().length > 0 || (isAssistant() && isLastAssistantOfRun() && hasChildren());
+  const hasActivity = () => {
+    const items = toolItems();
+    const bookkeeping = new Set(["agent_wait", "agent_status", "agent_result", "record_review", "plan_tasks", "plan.list"]);
+    return items.some((item) => !bookkeeping.has(item.call.name));
+  };
   const workLabel = () => {
     if (isLastAssistantOfRun() && active()) {
       const value = footer();
@@ -220,16 +223,13 @@ export function MessageView(props: { message: Message }) {
     const value = footer();
     return value ? `Worked · ${formatDuration(value.durationMs)}` : "Worked";
   };
-  const isEmpty = () => textParts().length === 0 && toolItems().length === 0 && !(isAssistant() && isLastAssistantOfRun() && hasChildren());
+  const isEmpty = () => textParts().length === 0 && toolItems().length === 0;
   return (
     <Show when={!isEmpty()}>
       <div class={`message ${message().role}`} data-message-id={message().id}>
         <Show when={isAssistant() && hasActivity()}>
           <details class="work" open={(isLastAssistantOfRun() && active()) || hasDiff()} data-message-id={message().id}>
             <summary>
-              <Show when={isLastAssistantOfRun() && active()}>
-                <span class="work-spinner" aria-hidden="true" />
-              </Show>
               <span>{workLabel()}</span>
             </summary>
             <div class="activity-body">
@@ -244,9 +244,6 @@ export function MessageView(props: { message: Message }) {
               </Show>
               <ActivityGroups items={toolItems()} />
               <For each={toolItems().filter((item) => item.result?.diff)}>{(item) => <DiffCard diff={item.result!.diff!} />}</For>
-              <Show when={isLastAssistantOfRun()}>
-                <ChildAgents parentInstanceId={message().instanceId} />
-              </Show>
             </div>
           </details>
         </Show>
@@ -882,6 +879,11 @@ export function ChatView() {
   const threadMessages = () => state.messages.filter((m) => !childInstanceIds().has(m.instanceId));
   const visibleMessages = () => windowMessages(threadMessages(), CHAT_DOM_WINDOW);
   const domHidden = () => threadMessages().length - visibleMessages().length;
+  const latestRunId = () => state.runs[state.runs.length - 1]?.id ?? state.messages[state.messages.length - 1]?.runId;
+  const latestCoordinatorId = () => {
+    const runId = latestRunId();
+    return runId ? state.agentInstances.find((instance) => instance.runId === runId && !instance.parentInstanceId)?.id : undefined;
+  };
   // Si la primera página solo trae mensajes de subagentes, el timeline raíz
   // quedaría vacío aunque la sesión tenga historial. Carga páginas anteriores
   // hasta encontrar al menos un mensaje del hilo raíz.
@@ -961,11 +963,12 @@ export function ChatView() {
       stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
     };
     el.addEventListener("scroll", onScroll, { passive: true });
-    const mutations = new MutationObserver(scheduleFollow);
-    mutations.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["open"] });
+    const content = el.querySelector(".timeline-content");
+    const resize = content ? new ResizeObserver(() => scheduleFollow()) : undefined;
+    resize?.observe(content!);
     onCleanup(() => {
       el.removeEventListener("scroll", onScroll);
-      mutations.disconnect();
+      resize?.disconnect();
     });
   });
   createEffect(() => {
@@ -1035,6 +1038,7 @@ export function ChatView() {
         data-timeline-rendered={visibleMessages().length}
         data-timeline-older={state.timelineHasOlder ? "true" : "false"}
       >
+        <div class="timeline-content">
         <Show when={state.timelineHasOlder}>
           <div class="older-wrap">
             <div id="timeline-sentinel" />
@@ -1055,7 +1059,13 @@ export function ChatView() {
         </Show>
         <For each={visibleMessages()}>{(message) => <MessageView message={message} />}</For>
         <For each={rootLive()}>{(live) => <LiveView live={live} />}</For>
+        <Show when={latestCoordinatorId()}>
+          <div class="run-subagents">
+            <ChildAgents parentInstanceId={latestCoordinatorId()!} depth={1} />
+          </div>
+        </Show>
         <div id="timeline-bottom" ref={bottomAnchor} />
+        </div>
       </div>
       <Composer />
     </main>

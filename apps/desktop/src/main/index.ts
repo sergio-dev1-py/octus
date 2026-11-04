@@ -421,7 +421,12 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
     },
     "sessions.messages": async (payload) => {
       if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");
-      return need().sessionMessagesPage(payload.sessionId, payload.runId, { limit: payload.limit, beforeId: payload.beforeId });
+      return need().sessionMessagesPage(payload.sessionId, payload.runId, {
+        limit: payload.limit,
+        beforeId: payload.beforeId,
+        rootOnly: payload.rootOnly === true,
+        instanceId: isNonEmptyString(payload.instanceId) ? payload.instanceId : undefined,
+      });
     },
     "sessions.recover": async (payload) => {
       if (!isNonEmptyString(payload.sessionId)) throw new Error("invalid payload");

@@ -20,4 +20,21 @@ describe("diffLines (visor de cambios)", () => {
     expect(removed.removed).toBe(1);
     expect(removed.rows.some((row) => row.kind === "del")).toBe(true);
   });
+
+  test("comprime archivos grandes a hunks con contexto", () => {
+    const before = Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n");
+    const after = before.replace("line-20", "line-20-CHANGED");
+    const result = diffLines(before, after);
+    expect(result.rows.some((row) => row.kind === "hunk")).toBe(true);
+    expect(result.rows.length).toBeLessThan(40);
+    expect(result.rows.length).toBeLessThanOrEqual(10);
+    expect(result.rows[0]!.kind).toBe("hunk");
+    expect(result.rows[0]!.header).toContain("@@");
+    expect(result.rows.filter((row) => row.kind === "same").length).toBeLessThanOrEqual(6);
+  });
+
+  test("un cambio pequeño sin zonas omitidas no añade hunk", () => {
+    const result = diffLines("a\nb\nc\n", "a\nB\nc\n");
+    expect(result.rows.some((row) => row.kind === "hunk")).toBe(false);
+  });
 });

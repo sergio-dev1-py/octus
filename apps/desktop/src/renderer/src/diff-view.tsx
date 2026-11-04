@@ -17,6 +17,9 @@ export function DiffCard(props: { diff: FileDiff }) {
       <div class="diff-grid" role="table" aria-label={`Diff de ${props.diff.path}`}>
         <For each={result.rows}>
           {(row) => {
+            if (row.kind === "hunk") {
+              return <div class="diff-hunk">{row.header ?? "@@ ... @@"}</div>;
+            }
             const leftKind = row.left ? (row.kind === "same" ? "same" : "del") : "empty";
             const rightKind = row.right ? (row.kind === "same" ? "same" : "add") : "empty";
             return (
