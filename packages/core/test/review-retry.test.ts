@@ -62,4 +62,47 @@ describe("revisión y replanificación del DAG", () => {
       await t.cleanup();
     }
   });
+
+  test("cobertura de review: crea reviewer para un completed sin reviewer", async () => {
+    const t = await makeTestCore();
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      const { runId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "X", structured: STRUCTURED, runId, createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_seed");
+      await t.core.tasks.createDag({
+        runId,
+        planId: plan.id,
+        revisionId: rev.id,
+        requestHash: "h-review-coverage",
+        tasks: [
+          {
+            tempId: "w1",
+            title: "Implement feature",
+            description: "Implement the feature and leave it ready for review.",
+            agentRole: "implementer",
+            priority: 1,
+            dependencies: [],
+            acceptanceCriteria: ["feature implemented"],
+            requiredTools: ["read", "write"],
+            writeScope: ["."],
+            validationCommands: [],
+            needsReview: true,
+          },
+        ],
+      });
+      const impl = (await t.core.tasks.listTasks({ runId }))[0]!;
+      await t.core.db.exec("UPDATE tasks SET status = 'completed' WHERE id = ?", [impl.id]);
+      const created = await t.core.tasks.ensureReviewerForTarget(impl.id);
+      expect(created).toBeDefined();
+      const reviewer = (await t.core.tasks.listTasks({ runId })).find((task) => task.agentRole === "reviewer")!;
+      expect(reviewer.reviewTargetTaskId).toBe(impl.id);
+      expect(reviewer.status).toBe("draft");
+      expect(await t.core.tasks.ensureReviewerForTarget(impl.id)).toBeUndefined();
+    } finally {
+      await t.cleanup();
+    }
+  });
 });

@@ -6,7 +6,7 @@
  * que el núcleo valida (Zod + reglas) antes de crear el DAG.
  */
 import { z } from "zod";
-import { createId, type AgentKind } from "@octus/shared";
+import { createId, type AgentKind, type PlanRevision } from "@octus/shared";
 import { OctusError } from "../errors.js";
 import type { PersistenceService } from "../persistence/persistence-service.js";
 import type { ModelRouter } from "../providers/model-router.js";
@@ -95,6 +95,7 @@ Rules:
 - Every task needs concrete acceptance criteria with verifiable evidence.
 - Keep descriptions and acceptance criteria concise (max 2 sentences / 3 criteria per task) so the JSON stays complete.
 - Maximize parallelism: only add a dependency when the task truly consumes another task's output. After a base scaffold, independent feature areas (DB/schema, API, UI components/pages) must be siblings, not a chain. Aim for 2-4 parallel implementer tasks with disjoint writeScope.
+- For a greenfield/empty repository or an unfamiliar existing codebase, include exactly one read-only explorer task first (agentRole=explorer, writeScope=[], needsReview=false, no dependencies) to inspect the current files and conventions; implementers that need that context depend on it.
 - Do not include approvals, merges, branches or worktrees: those do not exist for workers.`;
 
 export class TaskPlanner {
@@ -113,7 +114,7 @@ export class TaskPlanner {
    * Idempotente por (run, plan, revisión, request_hash): repetir devuelve el
    * DAG ya creado; tras un rechazo exige nonce explícito.
    */
-  async planTasks(coordinatorInstanceId: string, input: PlanTasksInput): Promise<{ planningId: string; taskIds: string[]; created: boolean }> {
+  async planTasks(coordinatorInstanceId: string, input: PlanTasksInput): Promise<{ planningId: string; taskIds: string[]; created: boolean; fallback?: boolean }> {
     const coord = await this.db.queryOne<Record<string, string | number | null>>(
       `SELECT i.*, s.project_id AS project_id, s.model AS session_model FROM agent_instances i
        JOIN sessions s ON s.id = i.session_id WHERE i.id = ?`,
@@ -187,7 +188,14 @@ export class TaskPlanner {
       throw new OctusError("invalid_state", `Planning was rejected: ${existing.reason ?? "no reason recorded"}. Re-plan explicitly with a nonce.`);
     }
 
-    const proposal = await this.generateProposal(model, run.session_id, plan.objective, revision.contentMarkdown, objective, input.brief ?? "", plan.projectId);
+    let proposal: Awaited<ReturnType<TaskPlanner["generateProposal"]>>;
+    let fallbackUsed = false;
+    try {
+      proposal = await this.generateProposal(model, run.session_id, plan.objective, revision.contentMarkdown, objective, input.brief ?? "", plan.projectId);
+    } catch {
+      proposal = this.fallbackProposal(revision, objective);
+      fallbackUsed = true;
+    }
     // El planner propone tools y comandos con conocimiento limitado: no dejamos
     // que un detalle accesorio tumbe todo el DAG. Se recortan a lo que el
     // proyecto y cada rol permiten de verdad.
@@ -216,13 +224,59 @@ export class TaskPlanner {
           { sql: `DELETE FROM scheduler_reservations WHERE task_id IN (${marks})`, params: supersedeIds },
         ]);
       }
-      return result;
+      return { ...result, ...(fallbackUsed ? { fallback: true } : {}) };
     } catch (error) {
       if (error instanceof OctusError && (error.code === "invalid_tool_args" || error.code === "invalid_state" || error.code === "plan_conflict")) {
         await this.tasks.recordPlanningRejected({ runId: input.runId, planId, revisionId, requestHash: hash, reason: error.message });
       }
       throw error;
     }
+  }
+
+  /**
+   * Último recurso si el planner no devuelve JSON válido: un DAG mínimo y
+   * seguro (un implementer + su reviewer). Evita que un fallo del modelo deje
+   * el run bloqueado sin tareas. El scheduler puede paralelizar en runs futuros.
+   */
+  private fallbackProposal(revision: PlanRevision, objective: string): Array<{
+    tempId: string; title: string; description: string; agentRole: AgentKind; priority: number;
+    dependencies: string[]; acceptanceCriteria: string[]; requiredTools: string[];
+    writeScope: string[]; validationCommands: string[]; needsReview: boolean;
+    reviewTargetTempId?: string; estimatedComplexity?: string;
+  }> {
+    const steps = revision.structuredContent?.steps ?? [];
+    const stepText = steps.map((step) => `- ${step.title}${step.detail ? `: ${step.detail}` : ""}`).join("\n");
+    const acceptance = (revision.structuredContent?.acceptanceCriteria ?? []).filter((criterion) => criterion.trim().length >= 5).slice(0, 3);
+    const description = `Implementar el plan "${objective}" de principio a fin.\n${stepText}`.slice(0, 4000);
+    return [
+      {
+        tempId: "impl-fallback",
+        title: `Implementar ${objective}`.slice(0, 500),
+        description: description.length >= 20 ? description : `Implementar el plan "${objective}" completo y verificar el resultado.`,
+        agentRole: "implementer",
+        priority: 5,
+        dependencies: [],
+        acceptanceCriteria: acceptance.length > 0 ? acceptance : ["implementation completed and verified"],
+        requiredTools: ["read", "write", "edit", "shell", "git_status", "git_diff", "git_stage", "git_commit"],
+        writeScope: ["."],
+        validationCommands: [],
+        needsReview: true,
+      },
+      {
+        tempId: "review-fallback",
+        title: `Revisar ${objective}`.slice(0, 500),
+        description: `Revisar la implementación del plan "${objective}" contra sus criterios de aceptación y emitir veredicto.`,
+        agentRole: "reviewer",
+        priority: 5,
+        dependencies: [],
+        acceptanceCriteria: ["review report with findings and verdict"],
+        requiredTools: ["read", "glob", "grep"],
+        writeScope: [],
+        validationCommands: [],
+        needsReview: false,
+        reviewTargetTempId: "impl-fallback",
+      },
+    ];
   }
 
   private async generateProposal(

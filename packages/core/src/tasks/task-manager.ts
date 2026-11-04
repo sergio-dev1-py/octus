@@ -567,6 +567,47 @@ export class TaskManager {
   }
 
   // ------------------------------------------------------------------ review
+  /**
+   * Cobertura de review: crea un reviewer para una task completed que lo
+   * necesita y no tiene ninguno. Es la red de seguridad si el planner omite
+   * el reviewer; sin esto las dependientes esperan `reviewed` para siempre.
+   */
+  async ensureReviewerForTarget(targetTaskId: string): Promise<string | undefined> {
+    const target = await this.getTask(targetTaskId);
+    if (!target.needsReview) return undefined;
+    const existing = await this.db.query<{ id: string }>("SELECT id FROM tasks WHERE agent_role = 'reviewer' AND review_target_task_id = ?", [targetTaskId]);
+    if (existing.length > 0) return undefined;
+    const id = createId("tsk");
+    const timestamp = now();
+    await this.db.exec(
+      `INSERT INTO tasks (id, run_id, planning_id, plan_id, revision_id, title, description, agent_role, priority, acceptance_criteria, required_tools, write_scope, validation_commands, review_target_task_id, needs_review, status, attempt, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'reviewer', ?, ?, ?, '[]', '[]', ?, 0, 'draft', 0, ?, ?)`,
+      [
+        id,
+        target.runId,
+        target.planningId,
+        target.planId,
+        target.revisionId,
+        `Revisar ${target.title}`.slice(0, 500),
+        `Revisar la implementación de "${target.title}" contra los criterios de aceptación y reportar hallazgos.`.slice(0, 4000),
+        target.priority,
+        JSON.stringify(["review report with findings and verdict"]),
+        JSON.stringify(["read", "glob", "grep"]),
+        targetTaskId,
+        timestamp,
+        timestamp,
+      ],
+    );
+    const event = await this.events.append({
+      type: "task.created",
+      aggregate: { kind: "task", id },
+      correlationId: createId("cor"),
+      payload: { runId: target.runId, role: "reviewer", targetTaskId, reason: "review-coverage-repair" },
+    });
+    this.bus.publish(event);
+    return id;
+  }
+
   async recordReview(reviewerTaskId: string, targetTaskId: string, verdict: "accept" | "request-changes", detail?: Record<string, unknown>): Promise<void> {
     const reviewer = await this.getTask(reviewerTaskId);
     const target = await this.getTask(targetTaskId);

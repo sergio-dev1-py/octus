@@ -117,7 +117,8 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     const footer = await pg().textContent(".run-footer");
     expect(footer).toContain("Build");
     expect(footer).toContain("muse-spark-1.3");
-    expect(footer).toContain("tok/s");
+    expect(footer).not.toContain("tok/s");
+    expect(footer).not.toContain("tok");
     await pg().screenshot({ path: join(EVIDENCE_DIR, "task-3-completed.png") });
   }, STEP_TIMEOUT_MS);
 

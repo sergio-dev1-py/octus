@@ -149,6 +149,28 @@ describe("plan_tasks sin argumentos (run anclado)", () => {
     }
   });
 
+  test("si el planner devuelve JSON inválido usa un DAG de fallback", async () => {
+    const t = await makeTestCore({ metaTurns: [{ text: "not json" }, { text: "still not json" }] });
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "Build auth", structured: STRUCTURED, runId, createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_seed");
+      const out = await t.core.planner.planTasks(instanceId, { runId, objective: "Build auth", planId: plan.id, revisionId: rev.id });
+      expect(out.created).toBe(true);
+      expect(out.fallback).toBe(true);
+      const tasks = await t.core.tasks.listTasks({ runId });
+      expect(tasks).toHaveLength(2);
+      expect(tasks.some((task) => task.agentRole === "implementer" && task.needsReview)).toBe(true);
+      expect(tasks.some((task) => task.agentRole === "reviewer")).toBe(true);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("sin ancla devuelve error accionable (no auto-selecciona)", async () => {
     const t = await makeTestCore();
     try {

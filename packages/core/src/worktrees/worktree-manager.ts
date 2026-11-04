@@ -8,8 +8,8 @@
  * - Un worktree por task (UNIQUE(task_id)); reintentos reutilizan, nunca duplican.
  * - Ramas `harness/run-<runId>/task-<taskId>` (+ sufijo -rN ante colisión ajena).
  * - Paths planos bajo worktrees_root: `<root>/<taskId>/` (seguro en Windows).
- * - Cero auto-borrado: la limpieza es explícita del usuario con guardas.
- * - Las ramas con trabajo producido se conservan para la Etapa 5.
+ * - Cero auto-borrado fuera de promoción: solo se retiran worktrees ya fusionados.
+ * - Las ramas con trabajo producido se conservan para auditoría.
  */
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -376,10 +376,19 @@ export class WorktreeManager implements WorktreePort {
     if (rels.length > 0) {
       await runGit(workReal, ["add", "--", ...rels]);
     }
+    const head = (await runGit(workReal, ["rev-parse", "HEAD"])).stdout.trim();
     const porcelain = (await runGit(workReal, ["status", "--porcelain=v1"])).stdout.trim();
     if (!porcelain) {
-      await this.recordProducedCommit(worktreeId, wt.baseCommit);
-      return { producedCommit: wt.baseCommit, committed: false };
+      // El agente pudo haber commiteado su propio trabajo: en ese caso HEAD ya
+      // no es la base y el commit producido es HEAD, no la base.
+      const produced = head !== wt.baseCommit ? head : wt.baseCommit;
+      if (produced !== wt.baseCommit) {
+        await runGit(workReal, ["merge-base", "--is-ancestor", wt.baseCommit, produced]).catch(() => {
+          throw new OctusError("invalid_state", `Worktree ${worktreeId} HEAD ${produced.slice(0, 12)} is not a descendant of base ${wt.baseCommit.slice(0, 12)}`);
+        });
+      }
+      await this.recordProducedCommit(worktreeId, produced);
+      return { producedCommit: produced, committed: produced !== wt.baseCommit };
     }
     await runGit(workReal, ["-c", "user.name=Octus Harness", "-c", "user.email=octus-harness@localhost", "commit", "--no-verify", "-m", input.message.slice(0, 500)]);
     const sha = (await runGit(workReal, ["rev-parse", "HEAD"], { tries: 4 })).stdout.trim();
@@ -407,6 +416,97 @@ export class WorktreeManager implements WorktreePort {
     await this.db.exec("UPDATE worktrees SET status = 'finished', instance_id = NULL, updated_at = ? WHERE id = ?", [timestamp, worktreeId]);
     const event = await this.events.append({ type: "worktree.status_changed", aggregate: { kind: "worktree", id: worktreeId }, correlationId: createId("cor"), payload: { from: wt.status, to: "finished" } });
     this.bus.publish(event);
+  }
+
+  /**
+   * Limpieza segura post-promoción: borra solo worktrees de tareas cuyo
+   * produced_commit ya está fusionado en targetBranch y cuyo árbol está limpio.
+   * La rama se conserva (auditoría); nunca toca worktrees ajenos o sucios.
+   */
+  async cleanupMergedForRun(runId: string, targetBranch: string): Promise<{ removed: number; kept: number }> {
+    const run = await this.db.queryOne<{ project_id: string }>(
+      "SELECT s.project_id AS project_id FROM runs r JOIN sessions s ON s.id = r.session_id WHERE r.id = ?",
+      [runId],
+    );
+    if (!run) return { removed: 0, kept: 0 };
+    const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [String(run.project_id)]);
+    if (!project) return { removed: 0, kept: 0 };
+    let repoRoot: string;
+    try {
+      repoRoot = await this.repoRootOf(String(project.root_path));
+    } catch {
+      return { removed: 0, kept: 0 };
+    }
+    const rows = await this.db.query<Record<string, string | number | null>>(
+      "SELECT * FROM worktrees WHERE run_id = ? AND status IN ('finished','retained','available') ORDER BY created_at ASC",
+      [runId],
+    );
+    let removed = 0;
+    let kept = 0;
+    for (const row of rows) {
+      const worktreeId = String(row.id);
+      const active = await this.db
+        .queryOne<{ id: string }>("SELECT id FROM agent_instances WHERE worktree_id = ? AND status IN ('created','running','waiting_permission','waiting_input') LIMIT 1", [worktreeId])
+        .catch(() => undefined);
+      if (active) {
+        kept++;
+        continue;
+      }
+      try {
+        const porcelain = (await runGit(String(row.canonical_path), ["status", "--porcelain=v1"])).stdout.trim();
+        if (porcelain) {
+          kept++;
+          continue;
+        }
+        const produced = String(row.produced_commit ?? "");
+        if (!produced) {
+          kept++;
+          continue;
+        }
+        await runGit(repoRoot, ["merge-base", "--is-ancestor", produced, targetBranch]);
+        await runGit(repoRoot, ["worktree", "remove", String(row.canonical_path)]);
+        const timestamp = now();
+        await this.db.exec("UPDATE worktrees SET status = 'removed', updated_at = ? WHERE id = ?", [timestamp, worktreeId]);
+        const event = await this.events.append({
+          type: "worktree.removed",
+          aggregate: { kind: "worktree", id: worktreeId },
+          correlationId: createId("cor"),
+          payload: { runId, reason: "merged-after-promotion" },
+        });
+        this.bus.publish(event);
+        removed++;
+      } catch {
+        kept++;
+      }
+    }
+    // Worktree intermedio de integración: ya promovido, su commit está en el
+    // destino. Se retira el directorio físico pero la fila promovida queda como
+    // registro de auditoría.
+    const integrationRows = await this.db.query<{ id: string; canonical_path: string | null }>(
+      "SELECT id, canonical_path FROM integrations WHERE run_id = ? AND status = 'promoted' AND canonical_path IS NOT NULL",
+      [runId],
+    );
+    for (const integration of integrationRows) {
+      const integrationPath = String(integration.canonical_path ?? "");
+      if (!integrationPath) continue;
+      try {
+        const porcelain = (await runGit(integrationPath, ["status", "--porcelain=v1"])).stdout.trim();
+        if (porcelain) {
+          kept++;
+          continue;
+        }
+        const toplevel = (await runGit(integrationPath, ["rev-parse", "--show-toplevel"])).stdout.trim();
+        if (realpathSync(toplevel) !== realpathSync(integrationPath)) {
+          kept++;
+          continue;
+        }
+        await runGit(repoRoot, ["worktree", "remove", integrationPath]);
+        removed++;
+      } catch {
+        kept++;
+      }
+    }
+    return { removed, kept };
   }
 
   // ---------------------------------------------------------------- inspección

@@ -68,6 +68,7 @@ export function applyEvent(event: CoreEvent): void {
       const runId = event.event.aggregate.id;
       setState("live", reconcile(purgeRunFrames(state.live, runId)));
       setState("busy", false);
+      setState("sessionNotice", undefined);
       if (persisted.type === "run.cancelled") {
         setState("cancelReason", cancelReasonOf(event.event.payload));
       } else {
@@ -112,7 +113,11 @@ export function applyEvent(event: CoreEvent): void {
       break;
     case "session.notice": {
       const message = persisted.payload.message;
-      if (typeof message === "string" && message.length > 0) setState("sessionNotice", message);
+      // Los avisos de progreso del auto-plan son transitorios: no deben quedar
+      // como banner pegajoso en el chat. Los avisos de recuperación/error sí.
+      if (typeof message === "string" && message.length > 0 && !/^(Generando el DAG|DAG creado)\b/i.test(message)) {
+        setState("sessionNotice", message);
+      }
       break;
     }
     case "permission.asked":

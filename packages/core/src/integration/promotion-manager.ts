@@ -15,6 +15,7 @@ import { runGit } from "../repositories/git-exec.js";
 import type { RepositoryManager } from "../repositories/repository-manager.js";
 import type { ApprovalService } from "./approval-service.js";
 import type { IntegrationManager } from "./integration-manager.js";
+import type { WorktreeManager } from "../worktrees/worktree-manager.js";
 
 export interface PromotionResult {
   promotionId: string;
@@ -32,6 +33,7 @@ export class PromotionManager {
     private readonly repos: RepositoryManager,
     private readonly approvals: ApprovalService,
     private readonly integrations: () => IntegrationManager,
+    private readonly worktrees?: () => WorktreeManager,
   ) {}
 
   // ------------------------------------------------------------------ lectura
@@ -67,6 +69,7 @@ export class PromotionManager {
       const tip = await this.targetTip(String(repo.root_path), targetBranch);
       if (tip === head) {
         const prior = await this.db.queryOne<{ id: string }>("SELECT id FROM promotions WHERE integration_id = ? AND status = 'completed' ORDER BY created_at DESC LIMIT 1", [integrationId]);
+        await this.cleanupMerged(String(integration.run_id), targetBranch);
         return { promotionId: prior ? String(prior.id) : "already-applied", integrationId, newSha: head, targetBranch, reused: true };
       }
       throw new OctusError("invalid_state", `Integration ${integrationId} is already promoted but ${targetBranch} moved since (${tip.slice(0, 12)} != ${head.slice(0, 12)})`);
@@ -156,6 +159,7 @@ export class PromotionManager {
       this.bus.publish(runDone);
       const changed = await this.events.append({ type: "integration.status_changed", aggregate: { kind: "integration", id: integrationId }, correlationId: createId("cor"), payload: { to: "promoted", head } });
       this.bus.publish(changed);
+      await this.cleanupMerged(String(integration.run_id), targetBranch);
       return { promotionId, integrationId, newSha: head, targetBranch, reused: false };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -315,6 +319,14 @@ export class PromotionManager {
     const tip = (await runGit(repoRoot, ["rev-parse", targetBranch])).stdout.trim();
     if (tip !== newSha) {
       throw new OctusError("tool_failed", `Promotion verification failed: ${targetBranch} is at ${tip.slice(0, 12)}, expected ${newSha.slice(0, 12)}`);
+    }
+  }
+
+  private async cleanupMerged(runId: string, targetBranch: string): Promise<void> {
+    try {
+      await this.worktrees?.().cleanupMergedForRun(runId, targetBranch);
+    } catch {
+      // La limpieza es best-effort: nunca revierte una promoción correcta.
     }
   }
 }

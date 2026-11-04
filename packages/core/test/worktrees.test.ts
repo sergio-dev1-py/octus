@@ -314,6 +314,82 @@ describe("etapa 4 — worktree manager: creación e idempotencia", () => {
     }
   });
 
+  test("commitTaskWork registra el commit propio del agente, no la base", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "SELFCOMMIT");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-self-commit", [IMPL("w")]);
+      const wt = await t.core.worktrees.ensureForTask({ projectId: project.id, runId, taskId: dag.taskIds[0]!, attempt: 1 });
+      expect(wt.ok).toBe(true);
+      if (!wt.ok) return;
+      writeFileSync(path.join(wt.path, "agent.txt"), "agent work\n");
+      git(wt.path, ["add", "."]);
+      git(wt.path, ["-c", "user.name=Agent", "-c", "user.email=agent@localhost", "commit", "-m", "agent self commit"]);
+      const expected = git(wt.path, ["rev-parse", "HEAD"]).trim();
+      expect(expected).not.toBe(wt.baseCommit);
+      const committed = await t.core.worktrees.commitTaskWork(wt.worktreeId, { scopes: ["."], sessionDir: root, message: "harness" });
+      expect(committed.producedCommit).toBe(expected);
+      expect((await t.core.worktrees.getWorktree(wt.worktreeId)).producedCommit).toBe(expected);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("cleanup merged: borra solo worktrees fusionados y limpios", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "CLEAN");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-clean", [IMPL("w"), REVIEWER_OF("r", "w")]);
+      const taskId = dag.taskIds[0]!;
+      const wt = await t.core.worktrees.ensureForTask({ projectId: project.id, runId, taskId, attempt: 1 });
+      expect(wt.ok).toBe(true);
+      if (!wt.ok) return;
+      writeFileSync(path.join(wt.path, "impl"), "work\n");
+      const committed = await t.core.worktrees.commitTaskWork(wt.worktreeId, { scopes: ["."], sessionDir: root, message: "impl work" });
+      await t.core.worktrees.markFinished(wt.worktreeId);
+      git(root, ["merge", "--ff-only", committed.producedCommit]);
+      const cleanup = await t.core.worktrees.cleanupMergedForRun(runId, "main");
+      expect(cleanup.removed).toBe(1);
+      expect(existsSync(wt.path)).toBe(false);
+      expect((await t.core.worktrees.getWorktree(wt.worktreeId)).status).toBe("removed");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("cleanup merged: retira también el worktree de integración promovido", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "CLEANINT");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-clean-int", [IMPL("w")]);
+      const ensured = await t.core.worktrees.ensureForTask({ projectId: project.id, runId, taskId: dag.taskIds[0]!, attempt: 1 });
+      expect(ensured.ok).toBe(true);
+      const repo = await t.core.db.queryOne<{ id: string }>("SELECT id FROM repositories WHERE project_id = ?", [project.id]);
+      expect(repo).toBeDefined();
+      const integrationPath = path.join(t.dir, "integration-promoted");
+      git(root, ["worktree", "add", "-b", "harness/integration-promoted", integrationPath, "HEAD"]);
+      const base = git(root, ["rev-parse", "HEAD"]).trim();
+      await t.core.db.exec(
+        `INSERT INTO integrations (id, project_id, repository_id, run_id, target_branch, target_base_commit, integration_branch, canonical_path, attempt, status, created_at, updated_at)
+         VALUES ('int_cleanup_test', ?, ?, ?, 'main', ?, 'harness/integration-promoted', ?, 1, 'promoted', 1, 1)`,
+        [project.id, String(repo!.id), runId, base, integrationPath],
+      );
+      const cleanup = await t.core.worktrees.cleanupMergedForRun(runId, "main");
+      expect(cleanup.removed).toBe(1);
+      expect(existsSync(integrationPath)).toBe(false);
+      // La rama se conserva para auditoría.
+      expect(git(root, ["rev-parse", "--verify", "harness/integration-promoted"]).trim()).toBe(base);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("7: proyecto no-git se inicializa automáticamente y usa worktree", async () => {
     const t = await makeTestCore();
     try {
@@ -355,7 +431,8 @@ describe("etapa 4 — worktree manager: creación e idempotencia", () => {
 });
 
 describe("etapa 4 — scheduler + agentmanager con worktrees", () => {
-  test("11+21: dos implementers en paralelo en worktrees distintos; scopes sin solape", async () => {    const seen = new Map<string, number>();
+  test("11+21: dos implementers en paralelo en worktrees distintos; scopes sin solape", async () => {
+    const seen = new Map<string, number>();
     const t = await makeTestCore({
       metaTurns: ((_: number, input: { messages?: Array<{ blocks?: unknown[] }> }) => {
         const text = JSON.stringify(input?.messages ?? []);
@@ -376,8 +453,8 @@ describe("etapa 4 — scheduler + agentmanager con worktrees", () => {
       try {
         await t.core.scheduler.tick({ sessionId: session.id });
         await until(async () => {
-          const rows = await t.core.db.query<{ status: string }>("SELECT status FROM tasks");
-          return rows.length === 2 && rows.every((r) => r.status === "completed");
+          const statuses = await Promise.all(dag.taskIds.map(async (id) => (await t.core.tasks.getTask(id)).status));
+          return statuses.every((status) => ["completed", "reviewed", "integrated"].includes(status));
         }, 30000);
         await untilWorktrees(t, dag.taskIds, ["finished"]);
         const paths = new Set<string>();
@@ -492,6 +569,8 @@ describe("etapa 4 — scheduler + agentmanager con worktrees", () => {
       const { runId } = await makeRun(t, session.id);
       const dag = await approvedDag(t, session.id, project.id, runId, "h-retry", [IMPL("w")]);
       const taskId = dag.taskIds[0]!;
+      // Aísla el retry de worktree: sin reviewer automático compitiendo por turnos fake.
+      await t.core.db.exec("UPDATE tasks SET needs_review = 0 WHERE id = ?", [taskId]);
       const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
       try {
         await t.core.scheduler.tick({ sessionId: session.id });
@@ -512,7 +591,7 @@ describe("etapa 4 — scheduler + agentmanager con worktrees", () => {
         expect(existsSync(path.join(firstPath, "partial.txt"))).toBe(true);
         await t.core.agents.wait(instanceId, 30000).catch(() => undefined);
         await t.core.scheduler.tick({ sessionId: session.id });
-        await until(async () => (await t.core.tasks.getTask(taskId)).status === "completed", 30000);
+        await until(async () => ["completed", "reviewed", "integrated"].includes((await t.core.tasks.getTask(taskId)).status), 30000);
         expect(readFileSync(path.join(firstPath, "partial.txt"), "utf8")).toContain("v2");
         await sweepWorktrees(t, project.id);
       } finally {

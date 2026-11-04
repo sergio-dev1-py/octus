@@ -70,12 +70,6 @@ function formatRunClock(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function formatTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M tok`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k tok`;
-  return `${value} tok`;
-}
-
 function modelDisplay(providerId: string, modelId: string): string {
   const model = (state.modelsByProvider[providerId] ?? []).find((entry) => entry.modelId === modelId);
   return model?.displayName ?? modelId;
@@ -158,15 +152,6 @@ export function RunFooter(props: { runId: string }) {
     if (!current) return 0;
     return Math.max(0, (current.completedAt ?? current.updatedAt) - current.createdAt);
   };
-  const totals = () => {
-    let input = 0;
-    let output = 0;
-    for (const row of usage()) {
-      input += row.inputTokens;
-      output += row.outputTokens;
-    }
-    return { input, output, total: input + output };
-  };
   return (
     <Show when={run() && (TERMINAL_RUN.includes(run()!.status) || blocked())}>
       <div class={`run-footer run-${blocked() ? "blocked" : run()!.status}`} data-run-footer={props.runId}>
@@ -175,10 +160,6 @@ export function RunFooter(props: { runId: string }) {
           {model() ? ` · ${modelDisplay(model()!.providerId, model()!.modelId)}` : ""}
         </span>
         <span>{formatRunClock(duration())}</span>
-        <Show when={totals().total > 0}>
-          <span>{formatTokens(totals().total)}</span>
-          <span>{duration() > 0 ? `${(totals().output / (duration() / 1000)).toFixed(1)} tok/s` : ""}</span>
-        </Show>
         <Show when={blocked()}>
           <span class="run-status">blocked</span>
         </Show>
@@ -245,7 +226,12 @@ export function MessageView(props: { message: Message }) {
       <div class={`message ${message().role}`} data-message-id={message().id}>
         <Show when={isAssistant() && hasActivity()}>
           <details class="work" open={(isLastAssistantOfRun() && active()) || hasDiff()} data-message-id={message().id}>
-            <summary>{workLabel()}</summary>
+            <summary>
+              <Show when={isLastAssistantOfRun() && active()}>
+                <span class="work-spinner" aria-hidden="true" />
+              </Show>
+              <span>{workLabel()}</span>
+            </summary>
             <div class="activity-body">
               <Show when={message().parts.some((part) => part.type === "reasoning_summary")}>
                 <div class="activity-group">
@@ -896,6 +882,30 @@ export function ChatView() {
   const threadMessages = () => state.messages.filter((m) => !childInstanceIds().has(m.instanceId));
   const visibleMessages = () => windowMessages(threadMessages(), CHAT_DOM_WINDOW);
   const domHidden = () => threadMessages().length - visibleMessages().length;
+  // Si la primera página solo trae mensajes de subagentes, el timeline raíz
+  // quedaría vacío aunque la sesión tenga historial. Carga páginas anteriores
+  // hasta encontrar al menos un mensaje del hilo raíz.
+  let autoLoadingRoot = false;
+  createEffect(() => {
+    const sessionId = state.activeSessionId;
+    const loaded = state.messages.length;
+    const rootCount = threadMessages().length;
+    const hasOlder = state.timelineHasOlder;
+    if (!sessionId || loaded === 0 || rootCount > 0 || !hasOlder || autoLoadingRoot) return;
+    autoLoadingRoot = true;
+    void (async () => {
+      try {
+        for (let i = 0; i < 24; i++) {
+          if (state.activeSessionId !== sessionId || threadMessages().length > 0 || !state.timelineHasOlder) break;
+          const before = state.messages.length;
+          await loadOlderMessages();
+          if (state.messages.length === before) break;
+        }
+      } finally {
+        autoLoadingRoot = false;
+      }
+    })();
+  });
   // Los marcos en vivo de subagentes tampoco se pintan sueltos en el timeline:
   // su actividad se resume en el árbol compacto del mensaje del coordinador.
   const rootLive = () => Object.values(state.live).filter((live) => !childInstanceIds().has(live.instanceId));
@@ -929,17 +939,48 @@ export function ChatView() {
     onCleanup(() => el.removeEventListener("scroll", arm));
   });
   // Al abrir/cambiar de sesión se salta al final; después solo se sigue el
-  // directo si el usuario ya estaba abajo (no roba el scroll).
+  // directo si el usuario ya estaba abajo (no roba el scroll). Los diffs y
+  // subagentes crecen después de montar: MutationObserver reprograma el
+  // seguimiento cuando cambia el alto real del contenido.
   let followKey = "";
+  let stickToBottom = true;
+  let followScheduled = false;
+  const scheduleFollow = () => {
+    if (!stickToBottom || followScheduled) return;
+    followScheduled = true;
+    requestAnimationFrame(() => {
+      followScheduled = false;
+      const el = timelineEl;
+      if (el && stickToBottom) el.scrollTop = el.scrollHeight;
+    });
+  };
+  onMount(() => {
+    const el = timelineEl;
+    if (!el) return;
+    const onScroll = () => {
+      stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const mutations = new MutationObserver(scheduleFollow);
+    mutations.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["open"] });
+    onCleanup(() => {
+      el.removeEventListener("scroll", onScroll);
+      mutations.disconnect();
+    });
+  });
   createEffect(() => {
     const count = state.messages.length;
     void Object.keys(state.live).length;
     const el = timelineEl;
     if (!el || count === 0) return;
     const key = state.activeSessionId ?? "";
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
-    if (key !== followKey || nearBottom) el.scrollTop = el.scrollHeight;
-    followKey = key;
+    if (key !== followKey) {
+      followKey = key;
+      stickToBottom = true;
+      scheduleFollow();
+      return;
+    }
+    if (stickToBottom) scheduleFollow();
   });
   // Al aparecer el resumen de compactación (arriba del timeline), volver al
   // final para no dejar al usuario mirando solo el resumen.

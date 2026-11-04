@@ -167,8 +167,20 @@ export class TaskScheduler {
 
   /** Draft → ready cuando sus dependencias están satisfechas (reviewer: target completed). */
   private async promoteDrafts(runId: string): Promise<void> {
-    const tasks = await this.tasks().listTasks({ runId });
+    let tasks = await this.tasks().listTasks({ runId });
     const raw = await this.db.query<{ task_id: string; depends_on: string; kind: string }>("SELECT * FROM task_dependencies");
+    // Cobertura de review: si un implementer needsReview quedó completed sin
+    // reviewer (planner incompleto), crear la ronda ahora. Todo writer necesita
+    // veredicto `accept` para que la integración del run pueda construirse,
+    // incluso si es una hoja sin dependientes.
+    let repaired = false;
+    for (const task of tasks) {
+      if (task.needsReview && task.status === "completed") {
+        const created = await this.tasks().ensureReviewerForTarget(task.id);
+        if (created) repaired = true;
+      }
+    }
+    if (repaired) tasks = await this.tasks().listTasks({ runId });
     const mine = new Set(tasks.map((t) => t.id));
     const deps = raw.filter((d) => mine.has(d.task_id)).map((d) => ({ taskId: d.task_id, dependsOn: d.depends_on }));
     const byId = new Map(tasks.map((t) => [t.id, t]));
@@ -210,7 +222,8 @@ export class TaskScheduler {
        JOIN runs r ON r.id = t.run_id
        JOIN sessions s ON s.id = r.session_id
        WHERE t.status IN ('ready','blocked','assigned')
-       ${sessionId ? "AND r.session_id = ?" : ""}
+        AND r.status IN ('planning','executing')
+        ${sessionId ? "AND r.session_id = ?" : ""}
        ORDER BY r.rowid ASC`,
       sessionId ? [sessionId] : [],
     );

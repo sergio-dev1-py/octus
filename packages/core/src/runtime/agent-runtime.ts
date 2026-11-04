@@ -186,7 +186,7 @@ export class AgentRuntime {
     }
 
     const messageId = nextMessageId();
-    const maxAttempts = this.options.maxAttemptsPerStep ?? 3;
+    const maxAttempts = this.options.maxAttemptsPerStep ?? 5;
     let attempt = 0;
     let acc: StepAccumulator | undefined;
     for (;;) {
@@ -205,7 +205,7 @@ export class AgentRuntime {
         return { done: true, finalText: "", fatal: `${acc.error.code}: ${acc.error.message}` };
       }
       opts.onStream({ kind: "step.retry", sessionId: session.id, runId: instance.runId, instanceId: instance.id, messageId, attempt, reason: acc.error.code });
-      const wait = acc.error.retryAfterMs ?? backoffMs(attempt);
+      const wait = acc.error.retryAfterMs ?? backoffMs(attempt, 1000, 30_000);
       await sleepAbortable(Math.min(wait, 60_000), opts.signal);
     }
     const final = acc!;
@@ -318,7 +318,7 @@ export class AgentRuntime {
         }
       }
       if (idleFired && acc.error?.code === "aborted") {
-        acc.error = { code: "timeout", message: `No provider activity for ${idleMs}ms`, retryable: attempt < (this.options.maxAttemptsPerStep ?? 3) };
+        acc.error = { code: "timeout", message: `No provider activity for ${idleMs}ms`, retryable: attempt < (this.options.maxAttemptsPerStep ?? 5) };
       }
       emit({ kind: "part.done", sessionId: session.id, runId: instance.runId, instanceId: instance.id, messageId, part: "text" });
       return acc;

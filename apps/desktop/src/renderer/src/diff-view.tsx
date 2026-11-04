@@ -16,14 +16,18 @@ export function DiffCard(props: { diff: FileDiff }) {
       </summary>
       <div class="diff-grid" role="table" aria-label={`Diff de ${props.diff.path}`}>
         <For each={result.rows}>
-          {(row) => (
-            <>
-              <span class={`diff-cell diff-no diff-${row.kind}`}>{row.left?.no ?? ""}</span>
-              <code class={`diff-cell diff-code diff-${row.kind}`}>{row.left?.text ?? ""}</code>
-              <span class={`diff-cell diff-no diff-${row.kind}`}>{row.right?.no ?? ""}</span>
-              <code class={`diff-cell diff-code diff-${row.kind}`}>{row.right?.text ?? ""}</code>
-            </>
-          )}
+          {(row) => {
+            const leftKind = row.left ? (row.kind === "same" ? "same" : "del") : "empty";
+            const rightKind = row.right ? (row.kind === "same" ? "same" : "add") : "empty";
+            return (
+              <>
+                <span class={`diff-cell diff-no diff-${leftKind}`}>{row.left?.no ?? ""}</span>
+                <code class={`diff-cell diff-code diff-${leftKind}`} data-diff-side="left">{row.left?.text ?? ""}</code>
+                <span class={`diff-cell diff-no diff-${rightKind}`}>{row.right?.no ?? ""}</span>
+                <code class={`diff-cell diff-code diff-${rightKind}`} data-diff-side="right">{row.right?.text ?? ""}</code>
+              </>
+            );
+          }}
         </For>
       </div>
       <Show when={result.truncated}>

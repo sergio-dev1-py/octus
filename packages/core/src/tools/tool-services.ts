@@ -169,7 +169,7 @@ export interface RecordReviewInput {
 }
 
 export interface TaskPlannerService {
-  plan(input: PlanTasksInput): Promise<{ planningId: string; taskIds: string[]; created: boolean }>;
+  plan(input: PlanTasksInput): Promise<{ planningId: string; taskIds: string[]; created: boolean; fallback?: boolean }>;
   review(input: RecordReviewInput): Promise<void>;
 }
 

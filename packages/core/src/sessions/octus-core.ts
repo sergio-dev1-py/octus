@@ -363,7 +363,7 @@ export class OctusCore {
     this.conflicts = new ConflictManager(db, this.events, this.bus, this.repositories, this.worktrees, () => this.agents, options.dataDir);
     this.previews = new PreviewManager(db, this.events, this.bus, this.repositories, this.worktrees, options.dataDir);
     this.approvals = new ApprovalService(db, this.events, this.bus, this.validations, this.previews);
-    this.promotions = new PromotionManager(db, this.events, this.bus, this.repositories, this.approvals, () => this.integrations);
+    this.promotions = new PromotionManager(db, this.events, this.bus, this.repositories, this.approvals, () => this.integrations, () => this.worktrees);
     toolServices.tasks = {
       plan: async (input) => {
         const out = await this.planner.planTasks(input.coordinatorInstanceId, input);

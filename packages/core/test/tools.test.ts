@@ -26,6 +26,17 @@ function baseRequest(t: Awaited<ReturnType<typeof setup>>, name: string, args: u
   };
 }
 
+/**
+ * El perfil build permite write por defecto. Para ejercitar el flujo de
+ * pregunta del gateway, una regla guardada `ask` (última capa) lo fuerza.
+ */
+async function makeWritesAsk(t: Awaited<ReturnType<typeof setup>>): Promise<void> {
+  await t.t.core.db.exec(
+    "INSERT INTO permission_rules (id, project_id, action, resource, effect, created_at) VALUES ('pru_test_ask_write', ?, 'write', '*', 'ask', 1)",
+    [t.project.id],
+  );
+}
+
 describe("tool gateway", () => {
   test("read/glob/grep run without asking (profile allow)", async () => {
     const t = await setup();
@@ -46,6 +57,7 @@ describe("tool gateway", () => {
   test("write asks once: approved run writes, then always-rule skips asking", async () => {
     const t = await setup();
     try {
+      await makeWritesAsk(t);
       const stop = autoAllow(t.t.core, "once");
       const first = await t.t.core.gateway.execute(baseRequest(t, "write", { path: "w.txt", content: "one" }, "tool_w_1"));
       expect(first.ok).toBe(true);
@@ -72,6 +84,7 @@ describe("tool gateway", () => {
   test("reject ends as tool_denied with a stored record", async () => {
     const t = await setup();
     try {
+      await makeWritesAsk(t);
       const stop = autoAllow(t.t.core, "reject");
       const error = await expectRejects(t.t.core.gateway.execute(baseRequest(t, "write", { path: "x.txt", content: "x" })), /declined|reject/i);
       expect(isOctusError(error, "tool_denied")).toBe(true);

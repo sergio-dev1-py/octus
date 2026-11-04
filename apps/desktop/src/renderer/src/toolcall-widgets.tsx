@@ -203,7 +203,6 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
     if (total < 60) return `${(ms / 1000).toFixed(1)}s`;
     return `${Math.floor(total / 60)}m ${total % 60}s`;
   };
-  const fmtTokens = (value: number): string => (value >= 1000 ? `${(value / 1000).toFixed(1)}k tok` : `${value} tok`);
   return (
     <For each={children()}>
       {(child) => {
@@ -238,10 +237,8 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
         };
         const agentFooter = () => {
           if (active()) return "working";
-          const output = usage().reduce((sum, row) => sum + row.outputTokens, 0);
           const wall = Math.max(0, child.updatedAt - child.createdAt);
-          const speed = wall > 0 ? `${(output / (wall / 1000)).toFixed(1)} tok/s` : "";
-          return [model(), fmtClock(wall), output > 0 ? fmtTokens(output) : "", speed].filter(Boolean).join(" · ");
+          return [model(), fmtClock(wall)].filter(Boolean).join(" · ");
         };
         return (
           <details class="activity-node" open={hasDiff()} data-subagent-group={child.id} data-subagent-depth={depth()} data-subagent-status={status()} style={{ "margin-left": `${(depth() - 1) * 14}px` }}>
@@ -249,6 +246,9 @@ export function ChildAgents(props: { parentInstanceId: string; depth?: number })
               <span class="activity-caret" aria-hidden="true">›</span>
               <span class="activity-name">{label()}</span>
               <span class="activity-meta">
+                <Show when={active()}>
+                  <span class="work-spinner work-spinner--small" aria-hidden="true" />
+                </Show>
                 {status()}
                 {elapsed() ? ` · ${elapsed()}` : ""}
                 {tools().length > 0 ? ` · ${tools().length} tool${tools().length === 1 ? "" : "s"}` : ""}

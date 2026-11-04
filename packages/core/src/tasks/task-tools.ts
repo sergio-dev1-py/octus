@@ -51,7 +51,7 @@ export const planTasksTool: ToolDefinition = {
       replan: parsed.replan,
       coordinatorInstanceId: ctx.instanceId,
     });
-    return { text: `Task DAG ${result.created ? "created" : "reused (idempotent)"}: planning ${result.planningId} with tasks ${result.taskIds.join(", ")}. The scheduler provisions the workspaces and spawns the workers. Call agent_wait with {all:true} to wait for every worker and collect deliveries; agent_status without instanceId lists them. Task/planning ids are NOT agent instance ids.` };
+    return { text: `Task DAG ${result.created ? "created" : "reused (idempotent)"}${result.fallback ? " with deterministic fallback (planner unavailable)" : ""}: planning ${result.planningId} with tasks ${result.taskIds.join(", ")}. The scheduler provisions the workspaces and spawns the workers. Call agent_wait with {all:true} to wait for every worker and collect deliveries; agent_status without instanceId lists them. Task/planning ids are NOT agent instance ids.` };
   },
 };
 

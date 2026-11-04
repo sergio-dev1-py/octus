@@ -137,14 +137,32 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
     }
   });
 
-  test("H5: conflicto de scopes solapados serializa escritores", async () => {
+  test("runs cancelados no se reanudan al tickear", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const s = await approvedRun(t);
+      const dag = await t.core.tasks.createDag({
+        runId: s.runId,
+        planId: s.plan.id,
+        revisionId: s.revision.id,
+        requestHash: "h-cancelled",
+        tasks: [EXPLORER_TASK("stale")],
+      });
+      await t.core.db.exec("UPDATE runs SET status = 'cancelled' WHERE id = ?", [s.runId]);
+      const assigned = await t.core.scheduler.tick({ sessionId: s.session.id });
+      expect(assigned).toHaveLength(0);
+      expect((await t.core.tasks.getTask(dag.taskIds[0]!)).status).toBe("ready");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("H5: scopes solapados corren aislados en worktrees paralelos", async () => {
     const t = await makeTestCore({
-      metaTurns: [
-        { toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }] },
-        { text: "done-a" },
-        { toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }] },
-        { text: "done-b" },
-      ],
+      metaTurns: (() => ({
+        toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }],
+      })) as never,
     });
     try {
       await useFakeModels(t.core);
@@ -181,24 +199,32 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
         reviewTargetTempId: target,
       });
       const dag = await t.core.tasks.createDag({ runId: s.runId, planId: s.plan.id, revisionId: s.revision.id, requestHash: "h-conflict", tasks: [impl("w1", "work"), impl("w2", "work"), rev("r1", "w1"), rev("r2", "w2")] });
+      const [w1Id, w2Id] = dag.taskIds as [string, string];
       const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
       try {
         await t.core.scheduler.tick({ sessionId: s.session.id });
         await until(async () => {
-          const statuses = await Promise.all(dag.taskIds.map(async (id) => (await t.core.tasks.getTask(id)).status));
-          return statuses.some((x) => x === "assigned" || x === "running") && statuses.some((x) => x === "blocked");
+          const states = await Promise.all([w1Id, w2Id].map(async (id) => (await t.core.tasks.getTask(id)).status));
+          return states.every((x) => x === "assigned" || x === "running");
         });
-        const w1 = await t.core.tasks.getTask(dag.taskIds[0]!);
-        const w2 = await t.core.tasks.getTask(dag.taskIds[1]!);
-        const blocked = w1.status === "blocked" ? w1 : w2;
-        expect(blocked.blockedReason).toBe("no-capacity");
-        // Al cancelar la activa, la bloqueada avanza.
-        const active = w1.status === "blocked" ? w2 : w1;
-        const attempts = await t.core.tasks.getAttempts(active.id);
-        if (attempts[0]?.instanceId) await t.core.agents.cancel(attempts[0].instanceId);
-        await t.core.scheduler.tick({ sessionId: s.session.id });
-        await until(async () => (await t.core.tasks.getTask(blocked.id)).status !== "blocked");
+        const w1 = await t.core.tasks.getTask(w1Id);
+        const w2 = await t.core.tasks.getTask(w2Id);
+        expect(w1.blockedReason).toBeUndefined();
+        expect(w2.blockedReason).toBeUndefined();
+        const wt1 = await t.core.worktrees.getByTask(w1Id);
+        const wt2 = await t.core.worktrees.getByTask(w2Id);
+        expect(wt1).toBeDefined();
+        expect(wt2).toBeDefined();
+        expect(wt1!.canonicalPath).not.toBe(wt2!.canonicalPath);
+        expect(wt1!.branchName).not.toBe(wt2!.branchName);
       } finally {
+        for (const id of [w1Id, w2Id]) {
+          const attempts = await t.core.tasks.getAttempts(id);
+          if (attempts[0]?.instanceId) {
+            await t.core.agents.cancel(attempts[0].instanceId).catch(() => undefined);
+            await t.core.agents.wait(attempts[0].instanceId, 10000).catch(() => undefined);
+          }
+        }
         stop();
       }
     } finally {
@@ -338,7 +364,7 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
     }
   });
 
-  test("request-changes deja failed elegible para retry", async () => {
+  test("request-changes reencola el implementer con nueva ronda de review", async () => {
     const t = await makeTestCore();
     try {
       await useFakeModels(t.core);
@@ -375,19 +401,16 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
       await t.core.db.exec("UPDATE tasks SET status = 'completed' WHERE id = ?", [implId]);
       await t.core.db.exec("UPDATE tasks SET status = 'completed' WHERE id = ? AND agent_role = 'reviewer'", [revId]);
       await t.core.tasks.recordReview(revId, implId, "request-changes", { reason: "missing tests" });
-      expect((await t.core.tasks.getTask(implId)).status).toBe("failed");
-      expect((await t.core.tasks.getTask(implId)).error).toContain("changes-requested");
-      await t.core.config.update({ scheduler: { maxAttemptsPerTask: 3, backoffBaseMs: 0 } });
-      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
-      try {
-        const retried = await t.core.tasks.retryTask(implId);
-        expect(retried.attempt).toBe(1);
-        // Espera a que la instancia alcance estado terminal antes de limpiar (evita EBUSY en Windows).
-        await t.core.agents.cancel(retried.instanceId).catch(() => undefined);
-        await t.core.agents.wait(retried.instanceId, 10000).catch(() => undefined);
-      } finally {
-        stop();
-      }
+      // Nuevo contrato: request-changes reencola el implementer y abre otra
+      // ronda de review; no falla terminalmente la task.
+      const implAfter = await t.core.tasks.getTask(implId);
+      expect(implAfter.status).toBe("ready");
+      expect(implAfter.error).toBeUndefined();
+      const rounds = (await t.core.tasks.listTasks({ runId: s.runId })).filter(
+        (task) => task.agentRole === "reviewer" && task.reviewTargetTaskId === implId,
+      );
+      expect(rounds).toHaveLength(2);
+      expect(rounds.some((task) => task.id !== revId && task.status === "draft")).toBe(true);
     } finally {
       await t.cleanup();
     }
@@ -425,8 +448,15 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
       const attB = (await t.core.tasks.getAttempts(dag.taskIds[1]!))[0]!;
       expect(attA.completedAt).toBeDefined();
       expect(attB.completedAt).toBeDefined();
-      // Intervalos disjuntos: uno terminó antes de que el otro empezara.
-      const disjoint = attB.startedAt! >= attA.completedAt! || attA.startedAt! >= attB.completedAt!;
+      // Intervalos disjuntos a nivel de ejecución del agente: uno terminó antes
+      // de que el otro empezara. (task_attempts.completed_at se sella al
+      // supervisar, que puede ocurrir después del arranque del siguiente.)
+      const insts = await t.core.agentInstances(s.session.id);
+      const instA = insts.find((i) => i.id === attA.instanceId)!;
+      const instB = insts.find((i) => i.id === attB.instanceId)!;
+      expect(instA.completedAt).toBeDefined();
+      expect(instB.completedAt).toBeDefined();
+      const disjoint = instB.createdAt >= instA.completedAt! || instA.createdAt >= instB.completedAt!;
       expect(disjoint).toBe(true);
       // Sin duplicados: un intento por tarea.
       for (const id of dag.taskIds) {
@@ -466,6 +496,8 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
         const pending = await t.core.pendingApprovals(session.id);
         await t.core.decideApproval(pending[pending.length - 1]!.id, "approved");
         const dag = await t.core.tasks.createDag({ runId, planId: plan.id, revisionId: rev.id, requestHash: `h-fair-${suffix}`, tasks: [IMPL_TASK(`t${suffix}`, `work/f${suffix}`)] });
+        // Fairness puro: sin ronda de review automática que añada otra task al run.
+        await t.core.db.exec("UPDATE tasks SET needs_review = 0 WHERE id = ?", [dag.taskIds[0]!]);
         return { runId, taskId: dag.taskIds[0]! };
       };
       const r1 = await mkDag("1");
