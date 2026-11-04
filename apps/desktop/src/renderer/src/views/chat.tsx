@@ -27,11 +27,11 @@ function contextUsageTitle(usage: NonNullable<typeof state.contextUsage>): strin
     .map((agent) => `${agent.definitionId}: ${formatTokenCount(agent.usedTokens)} / ${formatTokenCount(agent.maxContextTokens)} (${Math.round(agent.percent)}%)`)
     .join("\n");
   return [
-    `Contexto total (coordinador${subagents > 0 ? ` + ${subagents} subagentes` : ""}): ${usage.usedTokens.toLocaleString()} tokens`,
+    `Contexto del coordinador (el que se compacta): ${usage.coordinatorUsedTokens.toLocaleString()} / ${usage.coordinatorMaxContextTokens.toLocaleString()} (${Math.round(usage.coordinatorPercent)}%)`,
+    `Total con subagentes${subagents > 0 ? ` (+${subagents})` : ""}: ${usage.usedTokens.toLocaleString()} tokens`,
     fullest
       ? `Agente más lleno: ${fullest.definitionId} ${fullest.usedTokens.toLocaleString()} / ${fullest.maxContextTokens.toLocaleString()} (${Math.round(fullest.percent)}%)`
       : "",
-    `Ventana del coordinador: ${usage.maxContextTokens.toLocaleString()} tokens`,
     `Compactación automática al ${Math.round(usage.compactThresholdRatio * 100)}%: ${usage.compactAtTokens.toLocaleString()} tokens`,
     "Se conservan ~15k tokens recientes",
     agents ? `\n${agents}` : "",
@@ -517,9 +517,11 @@ export function ModelPicker() {
           <For each={efforts()}>{(effort) => <option value={effort}>{effort}</option>}</For>
         </select>
       </Show>
-      <Show when={state.contextUsage && state.contextUsage.maxContextTokens > 0}>
+      <Show when={state.contextUsage && state.contextUsage.coordinatorMaxContextTokens > 0}>
         <span class="context-usage" title={contextUsageTitle(state.contextUsage!)}>
-          Contexto {formatTokenCount(state.contextUsage!.usedTokens)} · {Math.round(state.contextUsage!.percent)}%
+          Contexto {formatTokenCount(state.contextUsage!.coordinatorUsedTokens)} /{" "}
+          {formatTokenCount(state.contextUsage!.coordinatorMaxContextTokens)} ·{" "}
+          {Math.round(state.contextUsage!.coordinatorPercent)}%
         </span>
       </Show>
       <Show when={open()}>

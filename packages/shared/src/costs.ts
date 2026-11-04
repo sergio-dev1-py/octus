@@ -26,6 +26,10 @@ export interface SessionContextUsage {
   maxContextTokens: number;
   /** Porcentaje del agente con la ventana más llena (0..100). */
   percent: number;
+  /** Contexto real del coordinador: es el que se compacta. */
+  coordinatorUsedTokens: number;
+  coordinatorMaxContextTokens: number;
+  coordinatorPercent: number;
   compactAtTokens: number;
   compactThresholdRatio: number;
   agents: ContextUsageAgent[];

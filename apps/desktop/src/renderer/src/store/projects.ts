@@ -111,8 +111,8 @@ export async function refreshUsage(): Promise<void> {
   void refreshContextUsage();
   const { runs } = await invoke("sessions.get", { sessionId: state.activeSessionId });
   setState("runs", runs);
-  // Con varios runs activos, busy mientras alguno siga en planning/executing/integrating/promoting.
-  setState("busy", runs.some((r) => r.status === "planning" || r.status === "executing" || r.status === "integrating" || r.status === "promoting"));
+  // `integrating` es una decisión pendiente, no trabajo activo: no bloquea el chat.
+  setState("busy", runs.some((r) => r.status === "planning" || r.status === "executing" || r.status === "promoting"));
   const last = runs[runs.length - 1];
   if (last) {
     const { records } = await invoke("runs.usage", { runId: last.id });

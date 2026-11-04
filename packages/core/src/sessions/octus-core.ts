@@ -2195,12 +2195,19 @@ export class OctusCore {
     // El porcentaje refleja el agente con la ventana más llena: es el que puede
     // disparar la compactación. El total sí suma coordinador + subagentes.
     const fullestPercent = agents.reduce((max, agent) => Math.max(max, agent.percent), 0);
+    const coordinatorId = coordinator ? String(coordinator.id) : "";
+    const coordinatorUsedTokens = coordinatorId ? usedByInstance.get(coordinatorId) ?? 0 : 0;
+    const coordinatorPercent =
+      maxContextTokens > 0 ? Math.min(100, (coordinatorUsedTokens / maxContextTokens) * 100) : 0;
     return {
       sessionId,
       runId,
       usedTokens,
       maxContextTokens,
       percent: Math.min(100, fullestPercent),
+      coordinatorUsedTokens,
+      coordinatorMaxContextTokens: maxContextTokens,
+      coordinatorPercent,
       compactAtTokens: Math.floor(maxContextTokens * compactThresholdRatio),
       compactThresholdRatio,
       agents,

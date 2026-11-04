@@ -60,6 +60,8 @@ export function TopBar(props: { disabled?: boolean } = {}) {
   const session = () => state.sessions.find((s) => s.id === state.activeSessionId);
   const title = () => (props.disabled ? "Octus" : (session()?.title ?? "Octus"));
   const gated = () => props.disabled || !state.activeProjectId;
+  const integrationPending = () =>
+    state.runs.some((run) => run.status === "integrating" || run.status === "awaiting_approval");
   return (
     <header id="topbar" aria-label="Barra superior">
       <div class="topbar-group" role="group" aria-label="Ventanas">
@@ -103,7 +105,9 @@ export function TopBar(props: { disabled?: boolean } = {}) {
       <span class="topbar-center">
         <span class="topbar-title">{title()}</span>
         <Show when={!props.disabled && session()}>
-          <span class="muted">{state.busy ? "working…" : "idle"}</span>
+          <span class="muted">
+            {state.busy ? "working…" : integrationPending() ? "integración pendiente" : "idle"}
+          </span>
         </Show>
       </span>
       <span class="topbar-group topbar-right">

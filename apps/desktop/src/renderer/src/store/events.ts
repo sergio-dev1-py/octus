@@ -98,7 +98,8 @@ export function applyEvent(event: CoreEvent): void {
       setState("compactionNotice", undefined);
       break;
     case "run.status_changed":
-      setState("busy", true);
+      // `integrating`/`awaiting_approval` no son trabajo activo. refreshUsage
+      // recalcula `busy` solo con planning/executing/promoting.
       void refreshUsage();
       void refreshRunDetail();
       void refreshIntegrations();

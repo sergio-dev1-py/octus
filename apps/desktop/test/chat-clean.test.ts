@@ -120,6 +120,7 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     const contextChip = await pg().textContent(".context-usage");
     expect(contextChip).toContain("Contexto");
     expect(contextChip).toContain("2.0k");
+    expect(contextChip).toContain("1.0M");
     const footer = await pg().textContent(".run-footer");
     expect(footer).toContain("Build");
     expect(footer).toContain("muse-spark-1.3");
