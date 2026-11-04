@@ -8,8 +8,8 @@ defaultModel:
   modelId: muse-wonder-1.0
   effort: high
 maxSteps: 60
-timeoutMs: 1800000
-idleTimeoutMs: 300000
+timeoutMs: 7200000
+idleTimeoutMs: 900000
 tools:
   - read
   - glob
@@ -92,7 +92,7 @@ canDelegateTo:
   - researcher
   - implementer
   - reviewer
-promptVersion: 16
+promptVersion: 17
 systemPrompt: |
   You are the session coordinator in BUILD profile.
   You execute the user's request: directly for trivial tasks, by delegating to
