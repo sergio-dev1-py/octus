@@ -4,7 +4,7 @@
  * `?state=failed` siembra el run fallido con tool_result en error.
  */
 import { render } from "solid-js/web";
-import { ChatView } from "../../src/renderer/src/views/chat.jsx";
+import { ChatView, QuestionDialogs } from "../../src/renderer/src/views/chat.jsx";
 import "../../src/renderer/src/styles.css";
 import { setState, state } from "../../src/renderer/src/store.js";
 
@@ -191,4 +191,45 @@ if (variant === "working" || variant === "failed" || variant === "completed") {
   }
 }
 
-render(() => <ChatView />, document.getElementById("root")!);
+if (variant === "question") {
+  setState("questions", [
+    {
+      id: "que_t3",
+      sessionId: "ses_t3",
+      runId: "run_t3",
+      instanceId: "ins_root",
+      toolCallId: "tc_question",
+      createdAt: Date.now(),
+      questions: [
+        {
+          question: "¿Qué estilo visual prefieres para la tienda?",
+          header: "Diseño",
+          options: [
+            { label: "Oscuro premium", description: "Fondo oscuro, acentos metálicos y tipografía grande." },
+            { label: "Claro minimalista", description: "Fondo claro, mucho espacio en blanco y bordes suaves." },
+          ],
+        },
+        {
+          question: "¿Qué módulos incluyo en esta iteración?",
+          header: "Alcance",
+          multiple: true,
+          options: [
+            { label: "Catálogo", description: "Listado, búsqueda y detalle de producto." },
+            { label: "Carrito", description: "Añadir, actualizar cantidades y totales." },
+            { label: "Checkout", description: "Dirección, pago simulado y confirmación." },
+          ],
+        },
+      ],
+    },
+  ] as never);
+}
+
+render(
+  () => (
+    <>
+      <ChatView />
+      <QuestionDialogs />
+    </>
+  ),
+  document.getElementById("root")!,
+);

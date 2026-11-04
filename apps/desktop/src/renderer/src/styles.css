@@ -317,6 +317,22 @@ select {
   width: 100%;
 }
 
+/* El reset anterior no debe convertir radios/checkboxes en cajas de texto. */
+input[type="radio"],
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  padding: 0;
+  margin: 1px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  accent-color: var(--oc-accent);
+  flex: 0 0 16px;
+  cursor: pointer;
+}
+
 .row {
   display: flex;
   gap: var(--oc-gap);
@@ -617,7 +633,8 @@ pre.detail {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10;
+  padding: 16px;
+  z-index: 100;
 }
 
 .dialog {
@@ -628,10 +645,12 @@ pre.detail {
   border-radius: var(--oc-radius-lg);
   box-shadow: var(--oc-shadow-dialog);
   padding: var(--oc-space-5);
-  min-width: 420px;
-  max-width: 640px;
-  max-height: 80vh;
+  width: min(680px, calc(100vw - 32px));
+  min-width: 0;
+  max-width: 680px;
+  max-height: 85vh;
   overflow-y: auto;
+  z-index: 101;
 }
 
 .dialog h3 {
@@ -752,9 +771,76 @@ code.muted {
   font-size: var(--oc-text-xs);
 }
 
-.question label {
-  display: block;
-  margin: var(--oc-space-2) 0;
+.question {
+  margin: var(--oc-space-3) 0;
+  padding: var(--oc-space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--oc-radius-md);
+  background: color-mix(in srgb, var(--panel) 92%, var(--oc-bg-subtle, transparent));
+}
+
+.q-prompt {
+  margin: 0 0 var(--oc-space-2);
+  line-height: 1.45;
+}
+
+.q-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.q-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--oc-radius-md);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.q-option:hover {
+  background: color-mix(in srgb, var(--oc-accent) 6%, transparent);
+}
+
+.q-option:has(input:checked) {
+  border-color: var(--oc-accent);
+  background: color-mix(in srgb, var(--oc-accent) 9%, transparent);
+}
+
+.q-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.q-option-label {
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.q-option-desc {
+  color: var(--muted);
+  font-size: var(--oc-text-xs);
+  line-height: 1.35;
+}
+
+.q-custom {
+  margin-top: var(--oc-space-2);
+}
+
+.question-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--oc-gap);
+  margin-top: var(--oc-space-4);
+  padding-top: var(--oc-space-3);
+  border-top: 1px solid var(--border);
 }
 
 /* Bienvenida Octus (plan octus-welcome-settings-theme, todo 1): identidad azul

@@ -106,16 +106,27 @@ export class ToolGateway {
       throw new OctusError("invalid_tool_args", `Invalid arguments for '${request.name}': ${parsed.error.issues.map((i) => i.message).slice(0, 3).join("; ")}`);
     }
 
-    // Build anclado a un plan: la implementación va por plan_tasks y sus
-    // workers. Bloqueamos escrituras directas del coordinador para que no se
-    // salte la delegación (el modelo ignora la instrucción bajo inercia del chat).
+    // Build anclado a un plan: con workers activos o tareas listas, la
+    // implementación va por plan_tasks para no pisar worktrees. Cuando el DAG
+    // está bloqueado o inactivo, el coordinador puede leer/editar/ejecutar
+    // directamente para desbloquear el run sin pedir permiso al usuario.
     if (request.definitionId === "coordinator-build" && ["write", "edit", "shell", "git_stage", "git_commit"].includes(request.name)) {
       const run = await this.db.queryOne<{ plan_revision_id: string | null }>("SELECT plan_revision_id FROM runs WHERE id = ?", [request.runId]).catch(() => undefined);
       if (run?.plan_revision_id) {
-        throw new OctusError(
-          "permission_denied",
-          "This build run is anchored to a plan: call plan_tasks and let the workers implement. Direct write/edit/shell by the coordinator is blocked.",
+        const activeWorkers = await this.db.queryOne<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM agent_instances WHERE run_id = ? AND parent_instance_id IS NOT NULL AND status IN ('created','running','waiting_permission','waiting_input')",
+          [request.runId],
         );
+        const openWork = await this.db.queryOne<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM tasks WHERE run_id = ? AND status IN ('pending','ready','assigned','running')",
+          [request.runId],
+        );
+        if ((activeWorkers?.n ?? 0) > 0 || (openWork?.n ?? 0) > 0) {
+          throw new OctusError(
+            "permission_denied",
+            "Workers are active for this plan. Wait for their deliveries or replan; direct write/edit/shell by the coordinator is allowed only when the DAG is idle or blocked.",
+          );
+        }
       }
     }
 

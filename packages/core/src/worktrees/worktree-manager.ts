@@ -8,10 +8,10 @@
  * - Un worktree por task (UNIQUE(task_id)); reintentos reutilizan, nunca duplican.
  * - Ramas `harness/run-<runId>/task-<taskId>` (+ sufijo -rN ante colisión ajena).
  * - Paths planos bajo worktrees_root: `<root>/<taskId>/` (seguro en Windows).
- * - Cero auto-borrado fuera de promoción: solo se retiran worktrees ya fusionados.
- * - Las ramas con trabajo producido se conservan para auditoría.
+ * - Los worktrees viven en `<proyecto>/.octus/worktrees` (excluido de Git).
+ * - Limpieza automática de worktrees terminales; las ramas se conservan.
  */
-import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
 import { createId, type Task, type Worktree, type WorktreeOperation, type WorktreeStatus } from "@octus/shared";
 import { OctusError } from "../errors.js";
@@ -34,6 +34,13 @@ export interface EnsureInput {
 export type EnsureResult =
   | { ok: true; worktreeId: string; path: string; branch: string; baseCommit: string; reused: boolean }
   | { ok: false; blockedReason: "no-repository" | "repo-blocked" | "deps-unavailable" | "no-capacity"; details: Record<string, unknown> };
+
+export interface CleanupUnusedResult {
+  removed: number;
+  kept: number;
+  freedBytes: number;
+  keptReasons: Array<{ path: string; reason: string }>;
+}
 
 const ACTIVE_STATES: WorktreeStatus[] = ["provisioning", "available", "assigned", "running", "suspended", "cleanup_pending"];
 const TERMINAL_KEPT: WorktreeStatus[] = ["finished", "retained", "removed", "orphaned"];
@@ -90,13 +97,23 @@ export class WorktreeManager implements WorktreePort {
   }
 
   // ------------------------------------------------------- raíz administrada
-  defaultWorktreesRoot(projectId: string): string {
+  /** Raíz heredada (antes de mover los worktrees al proyecto). Solo para migrar/limpiar. */
+  legacyWorktreesRoot(projectId: string): string {
     return path.join(this.dataDir, "..", "octus-worktrees", projectId);
   }
 
+  /** Raíz por defecto: dentro del proyecto, fuera de Git vía `.git/info/exclude`. */
+  async defaultWorktreesRoot(projectId: string): Promise<string> {
+    const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]);
+    if (!project) throw new OctusError("not_found", `Project not found: ${projectId}`);
+    const root = this.safeReal(String(project.root_path)) ?? String(project.root_path);
+    return path.join(root, ".octus", "worktrees", projectId);
+  }
+
   /**
-   * Fija la raíz administrada del proyecto (P3). Validada por ruta canónica:
-   * absoluta, no UNC, fuera del repo, fuera de dataDir. Solo sin worktrees activos.
+   * Fija la raíz administrada del proyecto (P3). Absoluta, no UNC, fuera de
+   * dataDir. Dentro del repositorio solo se admite el árbol administrado
+   * `<proyecto>/.octus`; el resto del repo sigue prohibido. Solo sin activos.
    */
   async setWorktreesRoot(projectId: string, rawPath: string): Promise<string> {
     if (!path.isAbsolute(rawPath)) throw new OctusError("invalid_tool_args", "Worktrees root must be an absolute path");
@@ -104,6 +121,7 @@ export class WorktreeManager implements WorktreePort {
     if (isUncPath(rawPath)) throw new OctusError("scope_violation", "UNC paths are not allowed for worktrees root");
     const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]);
     if (!project) throw new OctusError("not_found", `Project not found: ${projectId}`);
+    const projectRoot = this.safeReal(String(project.root_path)) ?? String(project.root_path);
     mkdirSync(rawPath, { recursive: true });
     const canon = realpathSync(rawPath);
     const dataReal = realpathSync(this.dataDir);
@@ -112,13 +130,14 @@ export class WorktreeManager implements WorktreePort {
     }
     let repoRoot: string | undefined;
     try {
-      repoRoot = await this.repoRootOf(String(project.root_path));
+      repoRoot = await this.repoRootOf(projectRoot);
     } catch {
       // Proyecto no-git: sin restricción de repo.
       repoRoot = undefined;
     }
-    if (repoRoot && sameOrInside(repoRoot, canon)) {
-      throw new OctusError("scope_violation", "Worktrees root must stay outside the repository");
+    const managedBase = path.join(projectRoot, ".octus");
+    if (repoRoot && sameOrInside(repoRoot, canon) && !sameOrInside(managedBase, canon)) {
+      throw new OctusError("scope_violation", "Worktrees root must stay outside the repository or inside <project>/.octus");
     }
     const active = await this.db.queryOne<{ n: number }>(
       "SELECT COUNT(*) AS n FROM worktrees WHERE project_id = ? AND status IN ('provisioning','available','assigned','running','suspended','cleanup_pending')",
@@ -127,18 +146,64 @@ export class WorktreeManager implements WorktreePort {
     if ((active?.n ?? 0) > 0) {
       throw new OctusError("invalid_state", "Cannot change worktrees root while the project has active worktrees");
     }
-    const projectRoot = this.safeReal(String(project.root_path));
-    await this.repos.ensureRepositoryRow(projectId, projectRoot ?? String(project.root_path), canon);
+    await this.repos.ensureRepositoryRow(projectId, projectRoot, canon);
+    if (repoRoot) await this.ensureGitExclude(repoRoot, projectRoot).catch(() => undefined);
     return canon;
   }
 
-  /** Raíz efectiva: la configurada o el default hermano de dataDir (P3). */
+  /** Raíz efectiva: la configurada o `<proyecto>/.octus/worktrees/<projectId>`. */
   async effectiveWorktreesRoot(projectId: string): Promise<string> {
+    const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]);
+    if (!project) throw new OctusError("not_found", `Project not found: ${projectId}`);
+    const projectRoot = this.safeReal(String(project.root_path)) ?? String(project.root_path);
+    const def = await this.defaultWorktreesRoot(projectId);
     const row = await this.db.queryOne<{ worktrees_root: string }>("SELECT worktrees_root FROM repositories WHERE project_id = ?", [projectId]);
-    if (row?.worktrees_root) return String(row.worktrees_root);
-    const def = this.defaultWorktreesRoot(projectId);
+    if (row?.worktrees_root) {
+      const stored = String(row.worktrees_root);
+      // Migración transparente: la raíz vieja del harness pasa al proyecto.
+      if (!this.samePath(stored, def) && this.samePath(stored, this.legacyWorktreesRoot(projectId))) {
+        mkdirSync(def, { recursive: true });
+        const real = realpathSync(def);
+        let repoRoot: string | undefined;
+        try {
+          repoRoot = await this.repoRootOf(projectRoot);
+        } catch {
+          repoRoot = undefined;
+        }
+        if (repoRoot) await this.ensureGitExclude(repoRoot, projectRoot).catch(() => undefined);
+        await this.repos.ensureRepositoryRow(projectId, repoRoot ?? projectRoot, real);
+        return real;
+      }
+      if (!this.samePath(stored, def)) return stored;
+    }
     mkdirSync(def, { recursive: true });
-    return realpathSync(def);
+    const real = realpathSync(def);
+    let repoRoot: string | undefined;
+    try {
+      repoRoot = await this.repoRootOf(projectRoot);
+    } catch {
+      repoRoot = undefined;
+    }
+    if (repoRoot) await this.ensureGitExclude(repoRoot, projectRoot).catch(() => undefined);
+    await this.repos.ensureRepositoryRow(projectId, repoRoot ?? projectRoot, real);
+    return real;
+  }
+
+  /**
+   * Raíces que el manager considera propias (nueva + heredada + configurada).
+   * No crea directorios: la limpieza no debe ensuciar proyectos sin worktrees.
+   */
+  async managedRoots(projectId: string): Promise<string[]> {
+    const project = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]);
+    const projectRoot = project ? (this.safeReal(String(project.root_path)) ?? String(project.root_path)) : "";
+    const roots = new Set<string>();
+    if (projectRoot) roots.add(path.join(projectRoot, ".octus", "worktrees", projectId));
+    roots.add(this.legacyWorktreesRoot(projectId));
+    const row = await this.db
+      .queryOne<{ worktrees_root: string }>("SELECT worktrees_root FROM repositories WHERE project_id = ?", [projectId])
+      .catch(() => undefined);
+    if (row?.worktrees_root) roots.add(String(row.worktrees_root));
+    return [...roots].map((root) => this.safeReal(root) ?? path.resolve(root));
   }
 
   // ------------------------------------------------------- aprovisionamiento
@@ -419,9 +484,9 @@ export class WorktreeManager implements WorktreePort {
   }
 
   /**
-   * Limpieza segura post-promoción: borra solo worktrees de tareas cuyo
-   * produced_commit ya está fusionado en targetBranch y cuyo árbol está limpio.
-   * La rama se conserva (auditoría); nunca toca worktrees ajenos o sucios.
+   * Limpieza post-promoción: retira los worktrees del run ya fusionados y,
+   * después, cualquier worktree terminal limpio del mismo run. Las ramas se
+   * conservan (auditoría); nunca toca worktrees ajenos, sucios o en curso.
    */
   async cleanupMergedForRun(runId: string, targetBranch: string): Promise<{ removed: number; kept: number }> {
     const run = await this.db.queryOne<{ project_id: string }>(
@@ -506,7 +571,161 @@ export class WorktreeManager implements WorktreePort {
         kept++;
       }
     }
+    // Tras la promoción el run ya no vuelve a usar sus worktrees: se retiran
+    // también los no fusionados (la rama conserva los commits).
+    try {
+      await this.cleanupUnused(String(run.project_id), { runId });
+    } catch {
+      // Best-effort: nunca revierte una promoción correcta.
+    }
     return { removed, kept };
+  }
+
+  /**
+   * Limpieza automática de worktrees ya no utilizables. Nunca borra ramas:
+   * solo el directorio físico; los commits siguen en `harness/...`.
+   * Conserva: agentes activos, tareas no terminales, árboles sucios,
+   * integraciones en curso y cualquier ruta fuera de las raíces administradas.
+   */
+  async cleanupUnused(projectId: string, opts?: { runId?: string }): Promise<CleanupUnusedResult> {
+    const result: CleanupUnusedResult = { removed: 0, kept: 0, freedBytes: 0, keptReasons: [] };
+    const keep = (p: string, reason: string): void => {
+      result.kept++;
+      result.keptReasons.push({ path: p, reason });
+    };
+    const rows = await this.db.query<Record<string, string | number | null>>(
+      opts?.runId
+        ? "SELECT * FROM worktrees WHERE project_id = ? AND run_id = ? ORDER BY created_at ASC"
+        : "SELECT * FROM worktrees WHERE project_id = ? ORDER BY created_at ASC",
+      opts?.runId ? [projectId, opts.runId] : [projectId],
+    );
+    const managed = await this.managedRoots(projectId).catch(() => [] as string[]);
+    for (const row of rows) {
+      const wt = deserializeWorktree(row);
+      if (wt.status === "removed") continue;
+      const active = await this.db.queryOne<{ id: string }>(
+        "SELECT id FROM agent_instances WHERE worktree_id = ? AND status IN ('created','running','waiting_permission','waiting_input') LIMIT 1",
+        [wt.id],
+      );
+      if (active) {
+        keep(wt.canonicalPath, "active-agent");
+        continue;
+      }
+      if (wt.status === "provisioning" || wt.status === "cleanup_pending") {
+        keep(wt.canonicalPath, `status-${wt.status}`);
+        continue;
+      }
+      // `finished` ya implica que el scheduler cerró el intento y conservó el
+      // commit; el estado de la tarea puede seguir siendo reviewed/integrated.
+      if (wt.taskId && wt.status !== "finished") {
+        const task = await this.db.queryOne<{ status: string; run_id: string }>("SELECT status, run_id FROM tasks WHERE id = ?", [wt.taskId]);
+        const taskStatus = String(task?.status ?? "");
+        if (["pending", "ready", "assigned", "running"].includes(taskStatus)) {
+          keep(wt.canonicalPath, `task-${taskStatus}`);
+          continue;
+        }
+        if (task) {
+          const run = await this.db.queryOne<{ status: string }>("SELECT status FROM runs WHERE id = ?", [String(task.run_id)]);
+          const runStatus = String(run?.status ?? "");
+          if (["planning", "executing", "integrating", "awaiting_approval", "promoting"].includes(runStatus) && !["completed", "reviewed", "integrated", "failed", "cancelled"].includes(taskStatus)) {
+            keep(wt.canonicalPath, `run-${runStatus}`);
+            continue;
+          }
+        }
+      }
+      // Solo se toca lo que está bajo una raíz administrada.
+      let real = wt.canonicalPath;
+      try {
+        real = realpathSync(wt.canonicalPath);
+      } catch {
+        // Físico ausente: la fila queda cerrada sin tocar nada más.
+        await this.db.exec("UPDATE worktrees SET status = 'removed', instance_id = NULL, updated_at = ? WHERE id = ?", [now(), wt.id]);
+        result.removed++;
+        continue;
+      }
+      if (!managed.some((root) => sameOrInside(root, real))) {
+        keep(real, "outside-managed-roots");
+        continue;
+      }
+      const before = this.dirSize(real);
+      try {
+        await this.cleanupWorktree(wt.id);
+        result.removed++;
+        result.freedBytes += before;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/pending changes/i.test(msg)) keep(real, "dirty");
+        else if (/active agent/i.test(msg)) keep(real, "active-agent");
+        else keep(real, `remove-failed: ${msg.slice(0, 160)}`);
+      }
+    }
+    // Integraciones: conservar las que aún se construyen/validan.
+    const integrations = await this.db.query<{ id: string; canonical_path: string | null; status: string }>(
+      opts?.runId
+        ? "SELECT id, canonical_path, status FROM integrations WHERE project_id = ? AND run_id = ?"
+        : "SELECT id, canonical_path, status FROM integrations WHERE project_id = ?",
+      opts?.runId ? [projectId, opts.runId] : [projectId],
+    );
+    const activeIntegration = new Set(["building", "conflicted", "validating", "preview_ready", "approved"]);
+    for (const integration of integrations) {
+      const p = integration.canonical_path ? String(integration.canonical_path) : "";
+      if (!p) continue;
+      if (activeIntegration.has(String(integration.status))) {
+        keep(p, `integration-${integration.status}`);
+        continue;
+      }
+      if (!existsSync(p)) continue;
+      const before = this.dirSize(p);
+      try {
+        const porcelain = (await runGit(p, ["status", "--porcelain=v1"])).stdout.trim();
+        if (porcelain) {
+          keep(p, "dirty");
+          continue;
+        }
+        const repoRoot = await this.repoRootOfProject(projectId);
+        await runGit(repoRoot, ["worktree", "remove", "--force", p]);
+        result.removed++;
+        result.freedBytes += before;
+      } catch {
+        keep(p, "integration-remove-failed");
+      }
+    }
+    const repoRoot = await this.repoRootOfProject(projectId).catch(() => undefined);
+    if (repoRoot) await runGit(repoRoot, ["worktree", "prune"]).catch(() => undefined);
+    // La raíz heredada se retira cuando ya no queda nada dentro.
+    this.pruneEmptyDirs(this.legacyWorktreesRoot(projectId));
+    try {
+      const legacyParent = path.dirname(this.legacyWorktreesRoot(projectId));
+      if (readdirSync(legacyParent).length === 0) rmSync(legacyParent, { recursive: true, force: true });
+    } catch {
+      // best effort
+    }
+    return result;
+  }
+
+  /** Limpieza acotada al terminar un run (éxito, fallo o cancelación). */
+  async cleanupRun(runId: string): Promise<CleanupUnusedResult> {
+    const row = await this.db.queryOne<{ project_id: string }>(
+      "SELECT s.project_id AS project_id FROM runs r JOIN sessions s ON s.id = r.session_id WHERE r.id = ?",
+      [runId],
+    );
+    if (!row) return { removed: 0, kept: 0, freedBytes: 0, keptReasons: [] };
+    return this.cleanupUnused(String(row.project_id), { runId });
+  }
+
+  /** Barrido de todos los proyectos (arranque/reconciliación). */
+  async cleanupAll(): Promise<CleanupUnusedResult> {
+    const total: CleanupUnusedResult = { removed: 0, kept: 0, freedBytes: 0, keptReasons: [] };
+    const projects = await this.db.query<{ id: string }>("SELECT id FROM projects");
+    for (const project of projects) {
+      const partial = await this.cleanupUnused(String(project.id)).catch(() => undefined);
+      if (!partial) continue;
+      total.removed += partial.removed;
+      total.kept += partial.kept;
+      total.freedBytes += partial.freedBytes;
+      total.keptReasons.push(...partial.keptReasons);
+    }
+    return total;
   }
 
   // ---------------------------------------------------------------- inspección
@@ -558,7 +777,9 @@ export class WorktreeManager implements WorktreePort {
     if (!sameOrInside(realpathSync(workRoot), real)) {
       throw new OctusError("scope_violation", `Worktree ${worktreeId} is outside the managed worktrees root`);
     }
-    if (root && sameOrInside(realpathSync(root), real)) {
+    // Los worktrees viven en `<proyecto>/.octus/worktrees`; se permite ese
+    // árbol administrado dentro del repo, pero nunca el resto del workspace.
+    if (root && sameOrInside(realpathSync(root), real) && !sameOrInside(realpathSync(workRoot), real)) {
       throw new OctusError("scope_violation", `Worktree ${worktreeId} is inside the main workspace`);
     }
     if (isUncPath(real)) throw new OctusError("scope_violation", "UNC paths are not allowed for worktrees");
@@ -591,7 +812,8 @@ export class WorktreeManager implements WorktreePort {
     await this.db.exec("INSERT INTO worktree_ops (id, worktree_id, task_id, op, status, step, created_at, updated_at) VALUES (?, ?, ?, 'cleanup', 'started', 'begin', ?, ?)", [
       opId,
       worktreeId,
-      wt.taskId,
+      // Los huérfanos físicos no tienen task: NULL, nunca cadena vacía (FK).
+      wt.taskId || null,
       timestamp,
       timestamp,
     ]);
@@ -702,16 +924,21 @@ export class WorktreeManager implements WorktreePort {
       } catch {
         continue;
       }
-      const workRoot = String(repo.worktrees_root);
-      let workRootReal = workRoot;
-      try {
-        workRootReal = realpathSync(workRoot);
-      } catch {
-        continue;
+      // Raíces administradas: nueva (proyecto), heredada y configurada.
+      const managedRoots: string[] = [];
+      for (const candidate of [
+        String(repo.worktrees_root),
+        this.legacyWorktreesRoot(projectId),
+        path.join(root, ".octus", "worktrees", projectId),
+      ]) {
+        try {
+          managedRoots.push(realpathSync(candidate));
+        } catch {
+          managedRoots.push(path.resolve(candidate));
+        }
       }
-      // Físico sin fila: solo ramas harness/* bajo worktrees_root, EXCEPTO las
-      // gestionadas por IntegrationManager/ConflictManager (harness/integration/,
-      // harness/workbase/, harness/resolution/).
+      // Físico sin fila: solo ramas harness/* bajo una raíz administrada, EXCEPTO
+      // las gestionadas por IntegrationManager/ConflictManager.
       for (const e of entries) {
         let real = e.path;
         try {
@@ -719,7 +946,7 @@ export class WorktreeManager implements WorktreePort {
         } catch {
           continue;
         }
-        if (!sameOrInside(workRootReal, real)) continue;
+        if (!managedRoots.some((workRoot) => sameOrInside(workRoot, real))) continue;
         if (!e.branch || !e.branch.startsWith("harness/")) continue;
         if (e.branch.startsWith("harness/integration/") || e.branch.startsWith("harness/workbase/") || e.branch.startsWith("harness/resolution/")) continue;
         const known = await this.db.queryOne<{ id: string }>("SELECT id FROM worktrees WHERE canonical_path = ?", [real]);
@@ -768,6 +995,31 @@ export class WorktreeManager implements WorktreePort {
   }
 
   // ------------------------------------------------------------------ internas
+  /**
+   * Excluye `.octus/` de Git sin tocar `.gitignore`: `.git/info/exclude` es
+   * local y evita que los worktrees anidados contaminen `git status`.
+   */
+  private async ensureGitExclude(repoRoot: string, projectRoot: string): Promise<void> {
+    const rel = path.relative(repoRoot, projectRoot).replaceAll("\\", "/").replace(/^\.\/?/, "");
+    const pattern = rel ? `/${rel}/.octus/` : "/.octus/";
+    let excludePath: string;
+    try {
+      const out = (await runGit(repoRoot, ["rev-parse", "--git-path", "info/exclude"])).stdout.trim();
+      excludePath = path.isAbsolute(out) ? out : path.resolve(repoRoot, out);
+    } catch {
+      return;
+    }
+    mkdirSync(path.dirname(excludePath), { recursive: true });
+    let current = "";
+    try {
+      current = readFileSync(excludePath, "utf8");
+    } catch {
+      current = "";
+    }
+    if (current.split(/\r?\n/).some((line) => line.trim() === pattern)) return;
+    appendFileSync(excludePath, `${current.length > 0 && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
+  }
+
   private normPath(p: string): string {
     let out = p.replaceAll("\\", "/");
     if (process.platform === "win32") out = out.toLowerCase();
@@ -812,6 +1064,57 @@ export class WorktreeManager implements WorktreePort {
     const row = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM repositories WHERE id = ?", [wt.repositoryId]);
     if (!row) throw new OctusError("not_found", `Repository not found: ${wt.repositoryId}`);
     return String(row.root_path);
+  }
+
+  private async repoRootOfProject(projectId: string): Promise<string> {
+    const row = await this.db.queryOne<{ root_path: string }>("SELECT root_path FROM projects WHERE id = ?", [projectId]);
+    if (!row) throw new OctusError("not_found", `Project not found: ${projectId}`);
+    return this.repoRootOf(String(row.root_path));
+  }
+
+  /** Borra directorios vacíos de una raíz heredada, de hoja a raíz. */
+  private pruneEmptyDirs(dir: string): void {
+    try {
+      for (const name of readdirSync(dir)) {
+        const full = path.join(dir, name);
+        try {
+          const st = lstatSync(full);
+          if (!st.isSymbolicLink() && st.isDirectory()) this.pruneEmptyDirs(full);
+        } catch {
+          // best effort
+        }
+      }
+      if (readdirSync(dir).length === 0) rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // No existe o está bloqueado: se deja para la próxima limpieza.
+    }
+  }
+
+  /** Tamaño aproximado para reportar el espacio liberado; best-effort. */
+  private dirSize(dir: string): number {
+    let total = 0;
+    const stack = [dir];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      let names: string[];
+      try {
+        names = readdirSync(current);
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        const full = path.join(current, name);
+        try {
+          const st = lstatSync(full);
+          if (st.isSymbolicLink()) continue;
+          if (st.isDirectory()) stack.push(full);
+          else if (st.isFile()) total += st.size;
+        } catch {
+          // Archivo bloqueado o enlace roto: se ignora.
+        }
+      }
+    }
+    return total;
   }
 
   private async opStep(opId: string, step: string, detail?: string): Promise<void> {

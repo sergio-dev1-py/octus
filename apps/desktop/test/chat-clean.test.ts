@@ -140,4 +140,45 @@ describe("ChatView real: sesion nueva limpia + subagentes colapsables (todo 3)",
     // La banda de errores aparece (hay actividad) sin romper el timeline.
     expect(await pg().evaluate(() => document.querySelectorAll(".message").length)).toBe(2);
   }, STEP_TIMEOUT_MS);
+
+  test("question dialog: selectores alineados, ancho acotado y sin overflow", async () => {
+    await pg().goto(`${baseUrl}?state=question`, { waitUntil: "load" });
+    await pg().waitForSelector("[data-question-request]", { timeout: 15000 });
+    expect(await pg().locator("[data-question-request]").count()).toBe(1);
+    const metrics = await pg().evaluate(() => {
+      const dialog = document.querySelector("[data-question-request]") as HTMLElement;
+      const radio = dialog.querySelector('input[type="radio"]') as HTMLInputElement;
+      const checkbox = dialog.querySelector('input[type="checkbox"]') as HTMLInputElement;
+      const label = radio.closest("label") as HTMLElement;
+      const d = dialog.getBoundingClientRect();
+      const r = radio.getBoundingClientRect();
+      const l = label.getBoundingClientRect();
+      return {
+        dialogWidth: d.width,
+        viewport: window.innerWidth,
+        radioW: getComputedStyle(radio).width,
+        radioH: getComputedStyle(radio).height,
+        radioType: radio.type,
+        checkboxType: checkbox.type,
+        labelDisplay: getComputedStyle(label).display,
+        alignItems: getComputedStyle(label).alignItems,
+        radioTop: r.top,
+        labelTop: l.top,
+        labelHeight: l.height,
+        overflow: dialog.scrollWidth - dialog.clientWidth,
+      };
+    });
+    expect(metrics.dialogWidth).toBeLessThanOrEqual(680);
+    expect(metrics.dialogWidth).toBeLessThanOrEqual(metrics.viewport - 16);
+    expect(metrics.radioW).toBe("16px");
+    expect(metrics.radioH).toBe("16px");
+    expect(metrics.radioType).toBe("radio");
+    expect(metrics.checkboxType).toBe("checkbox");
+    expect(metrics.labelDisplay).toBe("flex");
+    expect(metrics.alignItems).toBe("flex-start");
+    expect(metrics.radioTop).toBeGreaterThanOrEqual(metrics.labelTop);
+    expect(metrics.radioTop + 16).toBeLessThanOrEqual(metrics.labelTop + metrics.labelHeight + 1);
+    expect(metrics.overflow).toBeLessThanOrEqual(1);
+    await pg().screenshot({ path: join(EVIDENCE_DIR, "question-dialog.png") });
+  }, STEP_TIMEOUT_MS);
 });

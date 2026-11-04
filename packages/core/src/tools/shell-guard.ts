@@ -4,7 +4,11 @@
  * no existen como herramientas y también se bloquean aquí para que el shell no
  * sirva de vía de escape. Denegación, nunca autoaprobación.
  */
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import { OctusError } from "../errors.js";
+import { sameOrInside } from "./path-scope.js";
 
 const DENIED_SUBCOMMANDS = new Set([
   "branch",
@@ -156,6 +160,92 @@ export function assertShellSelfPreservation(command: string): void {
         if (candidate && isSystemRoot(candidate)) {
           throw new OctusError("scope_violation", `Deleting a protected system location ('${token.text}') is forbidden: denied, never ask`);
         }
+      }
+    }
+  }
+}
+
+/** Expande variables de shell/Windows para comparar rutas reales. */
+function expandShellVars(value: string, cwd: string): string {
+  const lookup = (name: string): string | undefined => {
+    const key = name.toUpperCase();
+    if (key === "CD" || key === "PWD") return cwd;
+    if (key === "HOME") return process.env.HOME ?? process.env.USERPROFILE;
+    return process.env[name] ?? process.env[key];
+  };
+  let out = value
+    .replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, (match, name: string) => lookup(name) ?? match)
+    .replace(/\$env:([A-Za-z_][A-Za-z0-9_]*)/gi, (match, name: string) => lookup(name) ?? match)
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => lookup(name) ?? match)
+    .replace(/\$(HOME|USERPROFILE|APPDATA|LOCALAPPDATA|TMPDIR|TEMP|TMP|PWD|CD)\b/gi, (match, name: string) => lookup(name) ?? match);
+  if (out === "~" || /^~[\\/]/.test(out)) out = path.join(homedir(), out.slice(1));
+  return out;
+}
+
+/** Extrae rutas absolutas, variables y relativas con `..` de un token. */
+function pathCandidates(text: string): string[] {
+  const out: string[] = [];
+  const push = (value: string | undefined): void => {
+    if (value && value.trim()) out.push(value.trim());
+  };
+  const trimmed = text.trim();
+  const absoluteLike =
+    /^(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|%[A-Za-z_][A-Za-z0-9_]*%|\$env:|\$\{|\$(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|TMPDIR|TEMP|TMP|PWD|CD)\b)/i;
+  if (absoluteLike.test(trimmed) && !trimmed.includes("://")) {
+    push(trimmed);
+  } else {
+    for (const match of text.matchAll(/(?:^|[\s"'`(=,;|&])([A-Za-z]:[\\/][^"'\s`),;|&]*)/g)) push(match[1]);
+    for (const match of text.matchAll(/(\\\\[^\\/\s"']+[\\/][^"'\s`),;|&]*)/g)) push(match[1]);
+    for (const match of text.matchAll(/(?:^|[\s"'`(=,;|&])(~[\\/][^"'\s`),;|&]*)/g)) push(match[1]);
+    for (const match of text.matchAll(/(?:^|[\s"'`(=,;|&])(\/(?:Users|home|tmp|etc|var|mnt|opt|root|usr|private|Volumes)\/[^"'\s`),;|&]*)/g)) push(match[1]);
+  }
+  for (const match of text.matchAll(/(%[A-Za-z_][A-Za-z0-9_]*%|\$env:[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|TMPDIR|TEMP|TMP|PWD|CD)\b)/gi)) {
+    push(match[1]);
+  }
+  if (/(^|[\\/])\.\.([\\/]|$)/.test(trimmed) && !trimmed.includes("://")) push(trimmed);
+  return out;
+}
+
+/**
+ * Guarda de ámbito del shell: solo rutas dentro del workspace asignado.
+ * Las rutas absolutas, variables (`%APPDATA%`, `$env:...`, `~`), UNC y `..`
+ * se resuelven antes de comparar. El árbol del harness (`@octus`) y los
+ * `protectedRoots` se deniegan en duro, sin abrir un diálogo de permiso.
+ */
+export function assertShellScope(command: string, cwd: string, protectedRoots: string[] = []): void {
+  const real = (value: string): string => {
+    try {
+      return realpathSync(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  const cwdReal = real(cwd);
+  const protectedReal = protectedRoots.map(real);
+  const nestedWorktrees = path.join(cwdReal, ".octus", "worktrees");
+  for (const token of tokenize(command)) {
+    for (const candidate of pathCandidates(token.text)) {
+      const expanded = expandShellVars(candidate, cwdReal).trim().replace(/^["'`]|["'`]$/g, "");
+      if (!expanded || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(expanded)) continue;
+      let resolved: string;
+      if (/^[A-Za-z]:$/.test(expanded)) resolved = path.resolve(`${expanded}${path.sep}`);
+      else if (path.isAbsolute(expanded)) resolved = path.resolve(expanded);
+      else if (expanded === "~" || expanded.startsWith("~")) resolved = path.resolve(expandShellVars(expanded, cwdReal));
+      else if (expanded === ".." || /(^|[\\/])\.\.([\\/]|$)/.test(expanded)) resolved = path.resolve(cwdReal, expanded);
+      else if (/[\\/]/.test(expanded)) resolved = path.resolve(cwdReal, expanded);
+      else continue;
+      const normalized = resolved.replaceAll("\\", "/");
+      if (/\/@octus(\/|$)/i.test(normalized)) {
+        throw new OctusError("scope_violation", `Path targets Octus harness data and is denied: ${candidate.slice(0, 200)}`);
+      }
+      if (protectedReal.some((root) => sameOrInside(root, resolved))) {
+        throw new OctusError("scope_violation", `Path targets protected harness data and is denied: ${candidate.slice(0, 200)}`);
+      }
+      if (sameOrInside(nestedWorktrees, resolved)) {
+        throw new OctusError("scope_violation", `Path targets another worker's worktree and is denied: ${candidate.slice(0, 200)}`);
+      }
+      if (!sameOrInside(cwdReal, resolved)) {
+        throw new OctusError("scope_violation", `Shell path escapes the assigned workspace: ${candidate.slice(0, 200)}`);
       }
     }
   }

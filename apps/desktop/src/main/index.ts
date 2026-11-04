@@ -1729,6 +1729,20 @@ async function main(): Promise<void> {
   core = await createCore();
   registerIpc();
   createWindow();
+  // Limpieza de worktrees terminales al arrancar, sin bloquear la ventana.
+  const worktreeCleanupTimer = setTimeout(() => {
+    void core?.worktrees
+      .cleanupAll()
+      .then((result) => {
+        if (result.removed > 0) {
+          console.log(`[worktrees] cleanup removed=${result.removed} kept=${result.kept} freed=${Math.round(result.freedBytes / 1024 / 1024)}MB`);
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn(`[worktrees] cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+  }, 3000);
+  worktreeCleanupTimer.unref?.();
   // Todo workbench-chat-terminal/7: timer de programadas (30s + disparo al arrancar).
   // El tick es idempotente y avanza next_run_at: un apagón no provoca espiral.
   const tickSchedules = (): void => {

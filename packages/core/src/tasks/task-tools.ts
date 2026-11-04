@@ -15,8 +15,8 @@ const planTasksSchema = z.object({
   planId: z.string().min(1).optional().describe("Plan id. Omit it: resolved from the run anchor."),
   revisionId: z.string().min(1).optional().describe("Exact plan revision (id, 'vN' or number). Omit it: resolved from the run anchor."),
   nonce: z.string().min(1).max(64).optional().describe("Explicit re-plan after a rejected planning"),
-  replan: z.boolean().optional().describe("Force a new DAG and cancel open tasks of this run (requires explicit user approval)"),
-  replanApprovedByUser: z.boolean().optional().describe("Set true only after the user explicitly approved the replan"),
+  replan: z.boolean().optional().describe("Force a new DAG and cancel open tasks of this run. Automatic; bounded to 2 replans per run."),
+  replanApprovedByUser: z.boolean().optional().describe("Deprecated: replan is automatic and bounded; kept for compatibility."),
 });
 
 const reviewSchema = z.object({

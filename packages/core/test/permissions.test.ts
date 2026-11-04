@@ -57,6 +57,16 @@ describe("permissions", () => {
     }
   });
 
+  test("test_run es automático incluso sin regla explícita (snapshots antiguos)", async () => {
+    const t = await makeTestCore();
+    try {
+      const project = await t.core.createProject("P", t.dir);
+      expect(await t.core.permissions.preview("test_run", "typecheck", { definitionTools: ["test_run"] }, project.id)).toBe("allow");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("shell can never be always-allowed and deny beats saved rules", async () => {
     const t = await makeTestCore();
     try {

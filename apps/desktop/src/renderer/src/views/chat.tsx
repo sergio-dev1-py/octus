@@ -872,29 +872,36 @@ export function QuestionDialogs() {
             </p>
             <For each={request.questions}>
               {(question, qi) => (
-                <div class="question">
-                  <p>
+                <div class="question" data-question-block={question.question}>
+                  <p class="q-prompt">
                     <strong>{question.header}</strong>: {question.question}
                   </p>
-                  <For each={question.options}>
-                    {(option, oi) => (
-                      <label>
-                        <input
-                          type={question.multiple ? "checkbox" : "radio"}
-                          name={request.id + qi()}
-                          value={option.label}
-                          data-question={question.question}
-                          data-multiple={question.multiple ? "1" : ""}
-                        />
-                        {option.label} <span class="muted">{option.description ?? ""}</span>
-                      </label>
-                    )}
-                  </For>
-                  <input type="text" placeholder="Or type your own answer" data-custom={question.question} />
+                  <div class="q-options" role={question.multiple ? "group" : "radiogroup"} aria-label={question.question}>
+                    <For each={question.options}>
+                      {(option) => (
+                        <label class="q-option">
+                          <input
+                            type={question.multiple ? "checkbox" : "radio"}
+                            name={request.id + qi()}
+                            value={option.label}
+                            data-question={question.question}
+                            data-multiple={question.multiple ? "1" : ""}
+                          />
+                          <span class="q-option-body">
+                            <span class="q-option-label">{option.label}</span>
+                            <Show when={option.description}>
+                              <span class="q-option-desc">{option.description}</span>
+                            </Show>
+                          </span>
+                        </label>
+                      )}
+                    </For>
+                  </div>
+                  <input class="q-custom" type="text" placeholder="Or type your own answer" data-custom={question.question} />
                 </div>
               )}
             </For>
-            <div class="row">
+            <div class="question-actions">
               <button
                 class="primary"
                 onClick={(event) => {

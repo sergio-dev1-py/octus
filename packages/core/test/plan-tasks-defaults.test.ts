@@ -149,6 +149,29 @@ describe("plan_tasks sin argumentos (run anclado)", () => {
     }
   });
 
+  test("replan automático sin aprobación explícita del usuario", async () => {
+    const first = { tasks: [{ ...PROPOSAL.tasks[0]!, tempId: "a1", title: "First pass" }] };
+    const second = { tasks: [{ ...PROPOSAL.tasks[0]!, tempId: "b1", title: "Second pass" }] };
+    const t = await makeTestCore({ metaTurns: [{ text: JSON.stringify(first) }, { text: JSON.stringify(second) }] });
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      const { plan } = await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "Build auth", structured: STRUCTURED, runId, createdBy: "t" });
+      const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
+      await t.core.plans.presentRevision(rev.id, "msg_auto_replan");
+      const v1 = await t.core.planner.planTasks(instanceId, { runId, objective: "Build auth", planId: plan.id, revisionId: rev.id });
+      const v2 = await t.core.planner.planTasks(instanceId, { runId, objective: "Build auth", planId: plan.id, revisionId: rev.id, replan: true, nonce: "auto-1" });
+      expect(v2.created).toBe(true);
+      const tasks = await t.core.tasks.listTasks({ runId });
+      expect(tasks.find((task) => task.id === v1.taskIds[0]!)!.status).toBe("cancelled");
+      expect(tasks.find((task) => task.id === v2.taskIds[0]!)!.status).not.toBe("cancelled");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("si el planner devuelve JSON inválido usa un DAG de fallback", async () => {
     const t = await makeTestCore({ metaTurns: [{ text: "not json" }, { text: "still not json" }] });
     try {

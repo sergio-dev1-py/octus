@@ -24,11 +24,21 @@ export const CHILD_ENV_ALLOW = new Set([
   "PROCESSOR_ARCHITECTURE",
 ]);
 
-/** Entorno hijo: solo la allowlist mínima. Jamás hereda el entorno completo ni secretos. */
-export function scrubbedEnv(): Record<string, string> {
+/**
+ * Entorno hijo: solo la allowlist mínima. Jamás hereda el entorno completo ni
+ * secretos. `home` reapunta HOME al workspace para que el shell no pueda
+ * reconstruir `%APPDATA%`/`~` y llegar a los datos del harness.
+ */
+export function scrubbedEnv(opts?: { home?: string }): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && CHILD_ENV_ALLOW.has(key)) out[key] = value;
+  }
+  if (opts?.home) {
+    out.HOME = opts.home;
+    // os.homedir() en Windows consulta USERPROFILE; apuntarlo al workspace
+    // evita que un script reconstruya la ruta real del perfil.
+    out.USERPROFILE = opts.home;
   }
   return out;
 }

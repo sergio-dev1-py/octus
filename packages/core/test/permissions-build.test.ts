@@ -14,7 +14,7 @@ async function layersFor(t: TestCore, definitionId: string): Promise<PermissionL
 }
 
 describe("permisos por perfil (build todo / plan solo lectura)", () => {
-  test("build: escribir y shell normal van sin preguntar; lo destructivo pregunta; lo propio se niega", async () => {
+  test("build: escribir y shell normal van sin preguntar; lo crítico se deniega; lo propio se niega", async () => {
     const t = await makeTestCore();
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
@@ -22,10 +22,10 @@ describe("permisos por perfil (build todo / plan solo lectura)", () => {
       expect(await t.core.permissions.preview("write", "x.txt", build, project.id)).toBe("allow");
       expect(await t.core.permissions.preview("edit", "x.txt", build, project.id)).toBe("allow");
       expect(await t.core.permissions.preview("shell", "node -v", build, project.id)).toBe("allow");
-      expect(await t.core.permissions.preview("shell", "del C:\\temp\\a.txt", build, project.id)).toBe("ask");
-      expect(await t.core.permissions.preview("shell", "del ..\\secrets.txt", build, project.id)).toBe("ask");
+      expect(await t.core.permissions.preview("shell", "del C:\\temp\\a.txt", build, project.id)).toBe("deny");
+      expect(await t.core.permissions.preview("shell", "del ..\\secrets.txt", build, project.id)).toBe("allow");
       expect(await t.core.permissions.preview("shell", "del archivo.txt", build, project.id)).toBe("allow");
-      expect(await t.core.permissions.preview("shell", "Remove-Item .\\a.txt", build, project.id)).toBe("ask");
+      expect(await t.core.permissions.preview("shell", "Remove-Item .\\a.txt", build, project.id)).toBe("allow");
       expect(await t.core.permissions.preview("shell", "taskkill /F /IM node.exe", build, project.id)).toBe("deny");
     } finally {
       await t.cleanup();
@@ -52,7 +52,7 @@ describe("permisos por perfil (build todo / plan solo lectura)", () => {
       const impl = await layersFor(t, "implementer");
       expect(await t.core.permissions.preview("write", "x.txt", impl, project.id)).toBe("allow");
       expect(await t.core.permissions.preview("shell", "del work\\a.txt", impl, project.id)).toBe("allow");
-      expect(await t.core.permissions.preview("shell", "del C:\\temp\\a.txt", impl, project.id)).toBe("ask");
+      expect(await t.core.permissions.preview("shell", "del C:\\temp\\a.txt", impl, project.id)).toBe("deny");
       // Sin asignación, las instanceRules del manager deniegan por encima.
       const unassigned: PermissionLayers = { ...impl, instanceRules: [{ action: "write", resource: "*", effect: "deny" }] };
       expect(await t.core.permissions.preview("write", "x.txt", unassigned, project.id)).toBe("deny");
@@ -68,7 +68,7 @@ describe("permisos por perfil (build todo / plan solo lectura)", () => {
       const rules = build!.permissionRules ?? [];
       expect(rules.some((r) => r.action === "write" && r.resource === "*" && r.effect === "allow")).toBe(true);
       expect(rules.some((r) => r.action === "shell" && r.resource === "*taskkill*node*" && r.effect === "deny")).toBe(true);
-      expect(rules.some((r) => r.action === "shell" && r.resource === "*del C:*" && r.effect === "ask")).toBe(true);
+      expect(rules.some((r) => r.action === "shell" && r.resource === "*del C:*" && r.effect === "deny")).toBe(true);
       const impl = await t.core.registry.get("implementer");
       expect((impl!.permissionRules ?? []).some((r) => r.action === "edit" && r.effect === "allow")).toBe(true);
     } finally {

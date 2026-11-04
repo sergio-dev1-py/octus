@@ -168,11 +168,17 @@ export class TaskPlanner {
       `SELECT COUNT(*) AS n FROM agent_instances WHERE run_id = ? AND parent_instance_id IS NOT NULL AND status IN ('created','running','waiting_permission','waiting_input')`,
       [input.runId],
     );
-    if (input.replan && !input.replanApprovedByUser) {
-      throw new OctusError(
-        "invalid_tool_args",
-        "Replan requires explicit user approval. Report the blocked tasks and ask the user before calling plan_tasks with replan:true and replanApprovedByUser:true.",
-      );
+    // Replan automático y acotado: el coordinador no pide permiso al usuario
+    // para reintentar, pero no puede entrar en un bucle infinito de DAGs.
+    const MAX_REPLANS_PER_RUN = 2;
+    if (input.replan) {
+      const plannings = await this.db.queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM plannings WHERE run_id = ?", [input.runId]);
+      if ((plannings?.n ?? 0) > MAX_REPLANS_PER_RUN) {
+        throw new OctusError(
+          "invalid_state",
+          `Automatic replan limit reached (${MAX_REPLANS_PER_RUN} replans). Report the exact blocker and start a new run with a narrower scope.`,
+        );
+      }
     }
     if (input.replan && Number(activeChildren?.n ?? 0) > 0) {
       throw new OctusError("invalid_state", "Cannot replan while worker subagents are active; cancel them first");

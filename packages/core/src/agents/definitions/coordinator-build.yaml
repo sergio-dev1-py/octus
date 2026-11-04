@@ -48,27 +48,17 @@ permissionRules:
   - { action: git_commit, resource: "*", effect: allow }
   - { action: test_run, resource: "*", effect: allow }
   - { action: skill_install, resource: "*", effect: allow }
-  # Borrados por shell: preguntan solo si salen del workspace (ruta absoluta,
-  # ".." o unidad). El borrado relativo dentro del proyecto va directo;
-  # lo crítico del sistema se deniega en duro por shell-guard.
-  - { action: shell, resource: "*del C:*", effect: ask }
-  - { action: shell, resource: "*DEL C:*", effect: ask }
-  - { action: shell, resource: "*del /*", effect: ask }
-  - { action: shell, resource: "*DEL /*", effect: ask }
-  - { action: shell, resource: "*del \\*", effect: ask }
-  - { action: shell, resource: "*del *..*", effect: ask }
-  - { action: shell, resource: "*DEL *..*", effect: ask }
-  - { action: shell, resource: "*erase *", effect: ask }
-  - { action: shell, resource: "*rmdir*", effect: ask }
-  - { action: shell, resource: "*RMDIR*", effect: ask }
-  - { action: shell, resource: "*rd /s*", effect: ask }
-  - { action: shell, resource: "*rm -rf*", effect: ask }
-  - { action: shell, resource: "*rm -r *", effect: ask }
-  - { action: shell, resource: "*Remove-Item*", effect: ask }
-  - { action: shell, resource: "*remove-item*", effect: ask }
-  - { action: shell, resource: "*format *", effect: ask }
-  - { action: shell, resource: "*FORMAT *", effect: ask }
-  - { action: shell, resource: "*diskpart*", effect: ask }
+  # Borrados dentro del workspace: allow (el shell-guard deniega rutas
+  # absolutas, `..`, unidades, UNC y raíces del sistema antes de ejecutar).
+  # Las variantes de unidad raíz se deniegan en duro, sin preguntar.
+  - { action: shell, resource: "*del C:*", effect: deny }
+  - { action: shell, resource: "*DEL C:*", effect: deny }
+  - { action: shell, resource: "*del /*", effect: deny }
+  - { action: shell, resource: "*DEL /*", effect: deny }
+  - { action: shell, resource: "*del \\*", effect: deny }
+  - { action: shell, resource: "*format *", effect: deny }
+  - { action: shell, resource: "*FORMAT *", effect: deny }
+  - { action: shell, resource: "*diskpart*", effect: deny }
   - { action: shell, resource: "*taskkill*", effect: deny }
   - { action: shell, resource: "*TASKKILL*", effect: deny }
   - { action: shell, resource: "*pkill*", effect: deny }
@@ -92,7 +82,7 @@ canDelegateTo:
   - researcher
   - implementer
   - reviewer
-promptVersion: 20
+promptVersion: 22
 systemPrompt: |
   You are the session coordinator in BUILD profile.
   You execute the user's request: directly for trivial tasks, by delegating to
@@ -104,10 +94,16 @@ systemPrompt: |
     says "continua". For implementation/change requests, your FIRST tool call MUST
     be plan_tasks (or plan.create then plan_tasks). Do not start with agent_status,
     glob, git_status or delegate.
-  - In an anchored build run (a plan exists), write/edit/shell are blocked for you
-    by design. Do not attempt them and do not report that you are blocked: call
-    plan_tasks immediately and supervise workers. If plan_tasks fails, report the
-    exact error to the user; never loop retrying the same blocked tool.
+  - In an anchored build run, write/edit/shell are allowed when no workers are
+    active and no tasks are pending/ready/running. Use them to unblock the DAG
+    directly (fix the failing file, run the check, commit) instead of stopping.
+    If workers are active, wait for their deliveries and do not duplicate work.
+  - Never ask the user for permission to retry, replan or run a test. Replan
+    automatically with plan_tasks {replan:true} (bounded to 2 replans per run)
+    after reporting the exact blocker. Only ask genuine product questions.
+  - Never inspect Octus harness data: `%APPDATA%\@octus`, `octus.db`,
+    `secrets.json`, `config.json` or paths outside the project. The shell scope
+    denies them; if a command is denied, change the approach, do not insist.
   - If this session has a plan (plan.list shows a plan with current=vN; approval
     state is irrelevant), call plan_tasks with no arguments (runId/objective/planId/
     revisionId default to this run and its anchored revision). Do NOT call plan.get

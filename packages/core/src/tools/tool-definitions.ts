@@ -11,7 +11,7 @@ import type { ToolServices } from "./tool-services.js";
 import { OctusError } from "../errors.js";
 import { truncate } from "../util.js";
 import { resolveInScope, sameOrInside, scopeRelative } from "./path-scope.js";
-import { assertShellGitAllowed } from "./shell-guard.js";
+import { assertShellGitAllowed, assertShellScope } from "./shell-guard.js";
 import { killTree, scrubbedEnv } from "./process-tree.js";
 
 export interface ToolRunContext {
@@ -120,7 +120,7 @@ function walkFiles(dir: string, collected: string[], cap: { files: number }, sco
   }
   for (const entry of entries) {
     if (cap.files <= 0) return;
-    if (entry === "node_modules" || entry === ".git" || entry === ".hg") continue;
+    if (entry === "node_modules" || entry === ".git" || entry === ".hg" || entry === ".octus") continue;
     const full = path.join(dir, entry);
     let stat;
     try {
@@ -311,19 +311,20 @@ const shellSchema = z.object({
 export const shellTool: ToolDefinition = {
   manifest: {
     name: "shell",
-    description: "Run a shell command in the workspace directory. Requires approval every time; never inherited secrets.",
+    description: "Run a bounded shell command inside the assigned workspace. Paths outside it and harness data are denied; never inherited secrets.",
     inputJsonSchema: toJsonSchema(shellSchema, { type: "object" }),
     permissionAction: "shell",
   },
   schema: shellSchema,
   async run(args, ctx) {
     const command = args.command as string;
+    assertShellScope(command, ctx.directory, ctx.protectedRoots);
     assertShellGitAllowed(command);
     const timeoutMs = Math.min((args.timeoutMs as number | undefined) ?? ctx.shellTimeoutMs, 600_000);
     return new Promise((resolve, reject) => {
       const child = spawn(command, {
         cwd: ctx.directory,
-        env: scrubbedEnv(),
+        env: scrubbedEnv({ home: ctx.directory }),
         shell: true,
         windowsHide: true,
         detached: process.platform !== "win32",

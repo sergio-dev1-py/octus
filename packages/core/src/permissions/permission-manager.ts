@@ -65,7 +65,9 @@ const DEFAULT_POLICY: Record<string, PermissionEffect> = {
   shell: "ask",
   git_stage: "ask",
   git_commit: "ask",
-  test_run: "ask",
+  // test_run solo ejecuta entradas allowlist en una copia desechable: no hay
+  // razón para bloquear al reviewer pidiendo confirmación humana.
+  test_run: "allow",
 };
 
 export function evaluateRules(action: string, resource: string, rules: PermissionRule[]): PermissionRule | undefined {

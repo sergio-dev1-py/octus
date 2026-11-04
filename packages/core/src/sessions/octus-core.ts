@@ -263,11 +263,20 @@ export class OctusCore {
           const snapshot = row ? (JSON.parse(String(row.definition_snapshot ?? "{}")) as Partial<import("@octus/shared").AgentDefinitionSnapshot>) : undefined;
           // Herencia: reglas del/los ancestros primero; las propias mandan.
           const inherited = await this.inheritedRules(instanceId);
+          const live = await this.registry.get(definitionId);
           if (snapshot && Array.isArray(snapshot.tools)) {
-            return { definitionTools: snapshot.tools, deniedTools: snapshot.deniedTools ?? [], definitionRules: [...inherited, ...(snapshot.permissionRules ?? [])], instanceRules };
+            // Las reglas vivas se añaden después del snapshot: los permisos
+            // seguros nuevos (p. ej. test_run allow) alcanzan a runs antiguos
+            // sin recrear la instancia. Los deny explícitos se acumulan.
+            const deniedTools = [...new Set([...(snapshot.deniedTools ?? []), ...(live?.deniedTools ?? [])])];
+            return {
+              definitionTools: snapshot.tools,
+              deniedTools,
+              definitionRules: [...inherited, ...(snapshot.permissionRules ?? []), ...(live?.permissionRules ?? [])],
+              instanceRules,
+            };
           }
-          const def = await this.registry.get(definitionId);
-          return { definitionTools: def?.tools ?? [], deniedTools: def?.deniedTools ?? [], definitionRules: [...inherited, ...(def?.permissionRules ?? [])], instanceRules };
+          return { definitionTools: live?.tools ?? [], deniedTools: live?.deniedTools ?? [], definitionRules: [...inherited, ...(live?.permissionRules ?? [])], instanceRules };
         },
       },
       STAGE1_TOOLS.concat(WEB_TOOLS, GIT_TOOLS, TEST_TOOLS, PLAN_TOOLS, AGENT_TOOLS, TASK_TOOLS, MEMORY_TOOLS, SKILL_AGENT_TOOLS),

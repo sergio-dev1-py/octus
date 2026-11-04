@@ -270,6 +270,50 @@ describe("etapa 4 — worktree manager: creación e idempotencia", () => {
     }
   });
 
+  test("4b: los worktrees viven en <proyecto>/.octus y quedan excluidos de git", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "Local");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-wt-local", [READER("r"), IMPL("w")]);
+      const implId = dag.taskIds[1]!;
+      const workRoot = await t.core.worktrees.effectiveWorktreesRoot(project.id);
+      expect(workRoot.startsWith(path.join(root, ".octus", "worktrees"))).toBe(true);
+      const out = await t.core.worktrees.ensureForTask({ projectId: project.id, runId, taskId: implId, attempt: 1 });
+      expect(out.ok).toBe(true);
+      if (!out.ok) return;
+      expect(out.path.startsWith(workRoot)).toBe(true);
+      expect(git(root, ["status", "--porcelain"]).trim()).toBe("");
+      expect(readFileSync(path.join(root, ".git", "info", "exclude"), "utf8")).toContain("/.octus/");
+      await t.core.worktrees.cleanupWorktree(out.worktreeId);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("4c: cleanupUnused retira worktrees terminales y conserva la rama", async () => {
+    const t = await makeTestCore();
+    try {
+      await useFakeModels(t.core);
+      const { project, session, root } = await gitProject(t, "Cleanup");
+      const { runId } = await makeRun(t, session.id);
+      const dag = await approvedDag(t, session.id, project.id, runId, "h-wt-cleanup", [READER("r"), IMPL("w")]);
+      const implId = dag.taskIds[1]!;
+      const out = await t.core.worktrees.ensureForTask({ projectId: project.id, runId, taskId: implId, attempt: 1 });
+      expect(out.ok).toBe(true);
+      if (!out.ok) return;
+      await t.core.worktrees.markFinished(out.worktreeId);
+      const cleanup = await t.core.worktrees.cleanupUnused(project.id, { runId });
+      expect(cleanup.removed).toBeGreaterThanOrEqual(1);
+      expect(existsSync(out.path)).toBe(false);
+      expect(git(root, ["rev-parse", out.branch]).trim()).toHaveLength(40);
+      expect((await t.core.worktrees.getWorktree(out.worktreeId)).status).toBe("removed");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("5: idempotencia — re-solicitar devuelve el mismo sin duplicar ramas", async () => {
     const t = await makeTestCore();
     try {
@@ -745,6 +789,15 @@ describe("etapa 4 — ciclo de vida, limpieza y reconciliación", () => {
         stop();
       }
       const wt2 = (await t.core.worktrees.getByTask(taskId))!;
+      // El worktree queda finished antes de que la instancia termine su settle:
+      // esperar a que no quede ningún agente activo evita el falso bloqueo.
+      await until(async () => {
+        const active = await t.core.db.query<{ id: string }>(
+          "SELECT id FROM agent_instances WHERE worktree_id = ? AND status IN ('created','running','waiting_permission','waiting_input')",
+          [wt2.id],
+        );
+        return active.length === 0;
+      }, 10000);
       const done = await t.core.worktrees.cleanupWorktree(wt2.id);
       expect(done.removed).toBe(true);
     } finally {

@@ -14,6 +14,8 @@ tools:
   - read
   - glob
   - grep
+  - git_status
+  - git_diff
   - question
   - delegate
   - agent_status
@@ -31,8 +33,6 @@ deniedTools:
   - write
   - edit
   - shell
-  - git_status
-  - git_diff
   - git_stage
   - git_commit
   - test_run
@@ -45,7 +45,7 @@ deliveryFormat: |
 canDelegateTo:
   - explorer
   - researcher
-promptVersion: 5
+promptVersion: 6
 systemPrompt: |
   You are the session coordinator in PLAN profile.
   You analyze requests, explore the project and propose plans. You DO NOT modify anything.

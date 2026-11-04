@@ -99,13 +99,18 @@ describe("agent runtime (end to end with fakes)", () => {
   });
 
   test("declined permission ends the run as failed with a clear error", async () => {
-    // Build auto-permite escritura normal; lo destructivo fuera del workspace pregunta.
+    // Build ya no pregunta por shell normal; un guardado explícito del usuario
+    // que pida confirmación sigue siendo una decisión humana y debe respetarse.
     const t = await makeTestCore({
-      metaTurns: [{ toolCalls: [{ name: "shell", args: { command: "del C:\\x.txt" } }] }],
+      metaTurns: [{ toolCalls: [{ name: "shell", args: { command: "echo askme" } }] }],
     });
     try {
       const stop = autoAllow(t.core, "reject");
       const project = await t.core.createProject("P", workspaceOf(t));
+      await t.core.db.exec(
+        "INSERT INTO permission_rules (id, project_id, action, resource, effect, created_at) VALUES ('rule_ask', ?, 'shell', '*askme*', 'ask', 1)",
+        [project.id],
+      );
       const session = await t.core.createSession({ projectId: project.id });
       await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
       const { runId } = await t.core.prompt(session.id, "write x");

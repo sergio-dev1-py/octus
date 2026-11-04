@@ -33,8 +33,8 @@ deniedTools:
 permissionRules:
   # Implementer delegado por build: mismos permisos de escritura que su
   # coordinador dentro del espacio asignado (el scope lo impone path-scope).
-  # Borrados por shell: preguntan solo si salen del espacio asignado (ruta
-  # absoluta, ".." o unidad). El borrado relativo dentro del worktree va directo.
+  # Borrados dentro del worktree: allow; el shell-guard deniega rutas
+  # absolutas, `..`, unidades, UNC y raíces del sistema antes de ejecutar.
   - { action: write, resource: "*", effect: allow }
   - { action: edit, resource: "*", effect: allow }
   - { action: shell, resource: "*", effect: allow }
@@ -42,24 +42,14 @@ permissionRules:
   - { action: skill_install, resource: "*", effect: allow }
   - { action: git_stage, resource: "*", effect: allow }
   - { action: git_commit, resource: "*", effect: allow }
-  - { action: shell, resource: "*del C:*", effect: ask }
-  - { action: shell, resource: "*DEL C:*", effect: ask }
-  - { action: shell, resource: "*del /*", effect: ask }
-  - { action: shell, resource: "*DEL /*", effect: ask }
-  - { action: shell, resource: "*del \\*", effect: ask }
-  - { action: shell, resource: "*del *..*", effect: ask }
-  - { action: shell, resource: "*DEL *..*", effect: ask }
-  - { action: shell, resource: "*erase *", effect: ask }
-  - { action: shell, resource: "*rmdir*", effect: ask }
-  - { action: shell, resource: "*RMDIR*", effect: ask }
-  - { action: shell, resource: "*rd /s*", effect: ask }
-  - { action: shell, resource: "*rm -rf*", effect: ask }
-  - { action: shell, resource: "*rm -r *", effect: ask }
-  - { action: shell, resource: "*Remove-Item*", effect: ask }
-  - { action: shell, resource: "*remove-item*", effect: ask }
-  - { action: shell, resource: "*format *", effect: ask }
-  - { action: shell, resource: "*FORMAT *", effect: ask }
-  - { action: shell, resource: "*diskpart*", effect: ask }
+  - { action: shell, resource: "*del C:*", effect: deny }
+  - { action: shell, resource: "*DEL C:*", effect: deny }
+  - { action: shell, resource: "*del /*", effect: deny }
+  - { action: shell, resource: "*DEL /*", effect: deny }
+  - { action: shell, resource: "*del \\*", effect: deny }
+  - { action: shell, resource: "*format *", effect: deny }
+  - { action: shell, resource: "*FORMAT *", effect: deny }
+  - { action: shell, resource: "*diskpart*", effect: deny }
   - { action: shell, resource: "*taskkill*", effect: deny }
   - { action: shell, resource: "*TASKKILL*", effect: deny }
   - { action: shell, resource: "*pkill*", effect: deny }
@@ -82,12 +72,15 @@ deliveryFormat: |
   4. Checks executed with real output.
   5. Risks and follow-ups.
 canDelegateTo: []
-promptVersion: 6
+promptVersion: 8
 systemPrompt: |
   You are an Implementer subagent: you write code ONLY inside your assigned directory.
   Writes outside it are blocked by the harness; do not attempt to escape it.
 
   Behavior:
+  - Never inspect Octus harness data (`%APPDATA%\@octus`, `octus.db`,
+    `secrets.json`, `config.json`) or paths outside your assigned directory.
+    The shell scope denies them; if a command is denied, change the approach.
   - Follow the project conventions and the task brief exactly.
   - Prefer `edit` for existing files and `write` only for new files or full rewrites.
     A task that only writes docs, stubs or "we need to..." prose is NOT implemented.

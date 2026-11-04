@@ -66,13 +66,31 @@ describe("shell tool (ADR-018)", () => {
     const s = await setup();
     const stop = autoAllow(s.t.core, "once");
     const marker = path.join(workspaceOf(s.t), "grandchild-marker.txt");
-    const command = `node -e "const {spawn}=require('child_process');spawn(process.execPath,['-e','setTimeout(()=>{require(\\'fs\\').writeFileSync(${JSON.stringify(marker)},\\'x\\')},3000)'],{detached:true,stdio:'ignore'}).unref();setTimeout(()=>{},30000)"`;
+    // Ruta relativa: el guard de ámbito no permite absolutas fuera del workspace.
+    const command = `node -e "const {spawn}=require('child_process');spawn(process.execPath,['-e','setTimeout(()=>{require(\\'fs\\').writeFileSync(\\'grandchild-marker.txt\\',\\'x\\')},3000)'],{detached:true,stdio:'ignore'}).unref();setTimeout(()=>{},30000)"`;
     const error = await expectRejects(s.t.core.gateway.execute(sh(s, "tool_sh_tree", { command, timeoutMs: 1500 })), /timed out/);
     stop();
     expect(isOctusError(error, "timeout")).toBe(true);
     await Bun.sleep(3500);
     expect(existsSync(marker)).toBe(false);
   }, 20000);
+
+  test("shell scope denies escapes and harness data before executing", async () => {
+    const s = await setup();
+    const stop = autoAllow(s.t.core, "once");
+    const escape = await expectRejects(
+      s.t.core.gateway.execute(sh(s, "tool_sh_escape", { command: "cd .." })),
+      /escapes|denied/i,
+    );
+    expect(isOctusError(escape, "scope_violation")).toBe(true);
+    const harnessPath = path.join(process.env.APPDATA ?? "C:\\Users\\User\\AppData\\Roaming", "@octus", "desktop", "data", "octus.db");
+    const harness = await expectRejects(
+      s.t.core.gateway.execute(sh(s, "tool_sh_harness", { command: `type ${harnessPath}` })),
+      /harness|denied/i,
+    );
+    expect(isOctusError(harness, "scope_violation")).toBe(true);
+    stop();
+  });
 
   test("non-zero exit becomes a tool failure with the output", async () => {
     const s = await setup();

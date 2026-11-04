@@ -179,6 +179,8 @@ export class TestRunner {
 
   private execute(executable: string, args: string[], cwd: string, timeoutMs: number, signal: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
+      // En Windows los `.cmd` no son ejecutables directos: `shell` permite que
+      // cmd resuelva npm/npx. Los argumentos vienen de la allowlist del usuario.
       const child = execFile(executable, args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true, shell: process.platform === "win32" }, (error, stdout, stderr) => {
         if (error) {
           const out = `${stdout}${stderr}`.slice(0, MAX_OUTPUT_CHARS);

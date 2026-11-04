@@ -1,6 +1,6 @@
 /** Etapa 3 — TaskManager/Scheduler/Planner con proveedores falsos. */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isOctusError } from "../src/errors.js";
 import { canonicalizeScope } from "../src/tasks/task-scheduler.js";
@@ -273,7 +273,7 @@ describe("task planning (validation + idempotency + anchoring)", () => {
     }
   });
 
-  test("build anclado sin tasks no puede escribir directamente (debe plan_tasks)", async () => {
+  test("build anclado sin tasks puede escribir directamente para desbloquear", async () => {
     const t = await makeTestCore();
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
@@ -283,21 +283,20 @@ describe("task planning (validation + idempotency + anchoring)", () => {
       const rev = (await t.core.plans.listRevisions(plan.id))[0]!;
       await t.core.plans.presentRevision(rev.id, "msg_seed");
       await t.core.db.exec("UPDATE runs SET plan_revision_id = ? WHERE id = ?", [rev.id, runId]);
-      await expectRejects(
-        t.core.gateway.execute({
-          toolCallId: "tool_direct_write",
-          idempotencyKey: "idem-direct-write",
-          sessionId: session.id,
-          runId,
-          instanceId,
-          definitionId: "coordinator-build",
-          directory: workspaceOf(t),
-          name: "write",
-          args: { path: "direct.txt", content: "should not happen" },
-          signal: new AbortController().signal,
-        }),
-        /anchored to a plan/,
-      );
+      const result = await t.core.gateway.execute({
+        toolCallId: "tool_direct_write",
+        idempotencyKey: "idem-direct-write",
+        sessionId: session.id,
+        runId,
+        instanceId,
+        definitionId: "coordinator-build",
+        directory: workspaceOf(t),
+        name: "write",
+        args: { path: "direct.txt", content: "unblocked" },
+        signal: new AbortController().signal,
+      });
+      expect(result.ok).toBe(true);
+      expect(existsSync(path.join(workspaceOf(t), "direct.txt"))).toBe(true);
     } finally {
       await t.cleanup();
     }
