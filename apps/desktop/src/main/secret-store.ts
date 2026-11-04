@@ -60,11 +60,34 @@ export class ElectronSecretStore implements SecretStore {
   }
 
   async get(ref: string): Promise<string | undefined> {
-    const blob = this.load()[ref];
+    const store = this.load();
+    const blob = store[ref];
     if (!blob) return undefined;
     await this.ensureAvailable();
-    const { result } = await safeStorage.decryptStringAsync(Buffer.from(blob, "base64"));
-    return result;
+    try {
+      const decrypted = await safeStorage.decryptStringAsync(Buffer.from(blob, "base64"));
+      const value = typeof decrypted === "string" ? decrypted : decrypted.result;
+      if (typeof decrypted !== "string" && decrypted.shouldReEncrypt) {
+        const encrypted = await safeStorage.encryptStringAsync(value);
+        store[ref] = encrypted.toString("base64");
+        this.save();
+      }
+      return value;
+    } catch (error) {
+      // Blob cifrado con otra clave del SO / otro user-data-dir, o corrupto:
+      // nunca se propaga el error de safeStorage a la UI. Se descarta esa
+      // entrada ilegible y el usuario puede volver a guardar la clave.
+      delete store[ref];
+      this.save();
+      this.cache = undefined;
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        console.warn(`[secrets] no se pudo descifrar '${ref}': ${message.slice(0, 200)}; entrada eliminada`);
+      } catch {
+        // stdout/stderr pueden estar cerrados.
+      }
+      return undefined;
+    }
   }
 
   async set(ref: string, value: string): Promise<void> {

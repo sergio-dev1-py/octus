@@ -202,6 +202,18 @@ export function openSettings(section?: UIState["settingsSection"]): void {
   setState("view", "settings");
 }
 
+let errorDismissTimer: ReturnType<typeof setTimeout> | undefined;
+
 export function setError(message?: string): void {
+  if (errorDismissTimer !== undefined) {
+    clearTimeout(errorDismissTimer);
+    errorDismissTimer = undefined;
+  }
   setState("error", message);
+  if (!message) return;
+  // Los avisos de error no deben quedar pegados en la UI: se descartan solos.
+  errorDismissTimer = setTimeout(() => {
+    errorDismissTimer = undefined;
+    setState("error", undefined);
+  }, 15_000);
 }
