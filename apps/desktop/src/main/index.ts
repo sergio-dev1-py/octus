@@ -32,6 +32,16 @@ import { TerminalService, listShells } from "./terminal-service.js"; // Todo 32:
 import { checkDirectoryReadable, directoryErrorMessage } from "./validate-directory.js";
 import { resolveDefinitionsDir, resolveWorkerPath } from "./worker-path.js";
 
+// Electron main can be launched with stdout/stderr attached to a terminal that
+// already exited (or to a closed pipe). Console writes then raise EPIPE as an
+// unhandled stream error and Electron shows "A JavaScript error occurred in the
+// main process". Ignoring only EPIPE keeps real stream errors visible.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE") return;
+  });
+}
+
 const CHANNELS: IpcChannel[] = [
   "prefs.get",
   "prefs.set",
@@ -1473,9 +1483,17 @@ async function createCore(): Promise<OctusCore> {
   });
   try {
     const defs = await instance.definitionSummary();
-    console.log(`[definitions] ${defs.map((d) => `${d.id} v${d.promptVersion} (${d.tools} tools, ${d.rules} rules)`).join(" | ")}`);
+    try {
+      console.log(`[definitions] ${defs.map((d) => `${d.id} v${d.promptVersion} (${d.tools} tools, ${d.rules} rules)`).join(" | ")}`);
+    } catch {
+      // stdout may be a closed pipe; logging must never take down the app.
+    }
   } catch (error) {
-    console.error(`[definitions] no se pudo listar: ${error instanceof Error ? error.message : String(error)}`);
+    try {
+      console.error(`[definitions] no se pudo listar: ${error instanceof Error ? error.message : String(error)}`);
+    } catch {
+      // stderr may also be closed.
+    }
   }
   return instance;
 }
