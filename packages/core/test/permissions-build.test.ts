@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PermissionLayers } from "../src/permissions/permission-manager.js";
-import { makeTestCore, workspaceOf, type TestCore } from "./helpers.js";
+import { expectRejects, makeRun, makeTestCore, workspaceOf, type TestCore } from "./helpers.js";
 
 async function layersFor(t: TestCore, definitionId: string): Promise<PermissionLayers> {
   const def = await t.core.registry.get(definitionId);
@@ -56,6 +56,33 @@ describe("permisos por perfil (build todo / plan solo lectura)", () => {
       // Sin asignación, las instanceRules del manager deniegan por encima.
       const unassigned: PermissionLayers = { ...impl, instanceRules: [{ action: "write", resource: "*", effect: "deny" }] };
       expect(await t.core.permissions.preview("write", "x.txt", unassigned, project.id)).toBe("deny");
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  test("build no puede abrir preguntas ni desde un snapshot antiguo", async () => {
+    const t = await makeTestCore();
+    try {
+      const project = await t.core.createProject("P", workspaceOf(t));
+      const session = await t.core.createSession({ projectId: project.id });
+      const { runId, instanceId } = await makeRun(t, session.id);
+      await expectRejects(
+        t.core.gateway.execute({
+          toolCallId: "tool_q_build",
+          idempotencyKey: "idem-q-build",
+          sessionId: session.id,
+          runId,
+          instanceId,
+          definitionId: "coordinator-build",
+          directory: workspaceOf(t),
+          name: "question",
+          args: { questions: [{ header: "Replan", question: "¿Autorizas replan?", options: [{ label: "Sí" }] }] },
+          signal: new AbortController().signal,
+        }),
+        /only available in PLAN/i,
+      );
+      void project;
     } finally {
       await t.cleanup();
     }

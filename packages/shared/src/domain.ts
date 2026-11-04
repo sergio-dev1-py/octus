@@ -50,6 +50,8 @@ export interface AgentModelAssignment {
 export interface AgentModelSettings {
   /** Si está apagado, los subagentes heredan modelo y effort del padre. */
   enabled: boolean;
+  /** Modelo de imagen usado por la tool image_generate. */
+  imageModel: ModelSelection;
   assignments: AgentModelAssignment[];
 }
 

@@ -93,8 +93,8 @@ describe("permission matrix by profile (Etapa 2)", () => {
       const err2 = await expectRejects(s.exec("shell", { command: "echo hi" }, "s1"), /denied/i);
       expect(isOctusError(err2, "permission_denied")).toBe(true);
       // test_run sin entrada en allowlist: denegado por la herramienta, no por permiso.
-      const err3 = await expectRejects(s.exec("test_run", { entryId: "nope" }, "t1"), /allowlist/);
-      expect(String(err3)).toMatch(/allowlist/);
+      const err3 = await expectRejects(s.exec("test_run", { entryId: "nope" }, "t1"), /configured|allowlist/);
+      expect(String(err3)).toMatch(/configured|allowlist/);
       stop();
     } finally {
       await s.t.cleanup();

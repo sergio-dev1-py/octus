@@ -98,17 +98,17 @@ export function workspaceOf(t: TestCore): string {
   return path.join(t.dir, "workspace");
 }
 
-/** Crea un run + instancia coordinator-build reales (las tools exigen FK válidas). */
-export async function makeRun(t: TestCore, sessionId: string): Promise<{ runId: string; instanceId: string }> {
+/** Crea un run + instancia reales (las tools exigen FK válidas). */
+export async function makeRun(t: TestCore, sessionId: string, definitionId = "coordinator-build"): Promise<{ runId: string; instanceId: string }> {
   const runId = `run_${Math.random().toString(36).slice(2, 10)}`;
   const instanceId = `ins_${Math.random().toString(36).slice(2, 10)}`;
   const session = (await t.core.listSessions()).find((s) => s.id === sessionId)!;
-  const def = (await t.core.registry.get("coordinator-build"))!;
+  const def = (await t.core.registry.get(definitionId))!;
   const { promptHashOf, snapshotOf } = await import("../src/agents/definition-loader.js");
   await t.core.db.exec("INSERT INTO runs (id, session_id, prompt, status, mode, created_at, updated_at) VALUES (?, ?, 'test', 'executing', 'build', 1, 1)", [runId, sessionId]);
   await t.core.db.exec(
-    "INSERT INTO agent_instances (id, session_id, run_id, definition_id, status, model, directory, definition_version, prompt_hash, definition_snapshot, created_at, updated_at) VALUES (?, ?, ?, 'coordinator-build', 'running', ?, ?, ?, ?, ?, 1, 1)",
-    [instanceId, sessionId, runId, JSON.stringify({ providerId: "fake-meta", modelId: "muse-wonder-1.0" }), session.directory, def.promptVersion, promptHashOf(def), JSON.stringify(snapshotOf(def))],
+    "INSERT INTO agent_instances (id, session_id, run_id, definition_id, status, model, directory, definition_version, prompt_hash, definition_snapshot, created_at, updated_at) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, 1, 1)",
+    [instanceId, sessionId, runId, definitionId, JSON.stringify({ providerId: "fake-meta", modelId: "muse-wonder-1.0" }), session.directory, def.promptVersion, promptHashOf(def), JSON.stringify(snapshotOf(def))],
   );
   return { runId, instanceId };
 }

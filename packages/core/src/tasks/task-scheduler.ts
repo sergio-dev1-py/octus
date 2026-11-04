@@ -76,6 +76,8 @@ export class TaskScheduler {
     private readonly getGlobalLimits: () => { maxPerSession: number; maxPerProject: number; maxDepth: number },
     private readonly worktrees?: () => WorktreeManager,
     private readonly integrations?: () => IntegrationManager,
+    /** Replan automático acotado cuando el DAG queda sin workers y bloqueado. */
+    private readonly replanBlocked?: (runId: string, reason: string) => Promise<boolean>,
   ) {}
 
   async tick(filter?: { sessionId?: string }): Promise<Assignment[]> {
@@ -181,34 +183,45 @@ export class TaskScheduler {
       }
     }
     if (repaired) tasks = await this.tasks().listTasks({ runId });
+    // Punto fijo: una cadena draft→ready→dependiente debe avanzar en la misma
+    // pasada. Sin esto, un run sin más ticks deja tareas dependientes en draft
+    // para siempre aunque su predecesor ya terminó.
     const mine = new Set(tasks.map((t) => t.id));
     const deps = raw.filter((d) => mine.has(d.task_id)).map((d) => ({ taskId: d.task_id, dependsOn: d.depends_on }));
-    const byId = new Map(tasks.map((t) => [t.id, t]));
-    for (const task of tasks) {
-      if (task.status !== "draft") continue;
-      if (task.agentRole === "reviewer" && task.reviewTargetTaskId) {
-        const target = byId.get(task.reviewTargetTaskId);
-        if (target && target.status === "completed") {
-          await this.tasks().setStatus(task.id, "ready");
+    let changed = true;
+    while (changed) {
+      changed = false;
+      tasks = await this.tasks().listTasks({ runId });
+      const byId = new Map(tasks.map((t) => [t.id, t]));
+      for (const task of tasks) {
+        if (task.status !== "draft") continue;
+        if (task.agentRole === "reviewer" && task.reviewTargetTaskId) {
+          const target = byId.get(task.reviewTargetTaskId);
+          if (target && target.status === "completed") {
+            await this.tasks().setStatus(task.id, "ready");
+            changed = true;
+          }
+          continue;
         }
-        continue;
-      }
-      if (this.missingDeps(task, byId, deps).length === 0) {
-        await this.tasks().setStatus(task.id, "ready");
-        continue;
-      }
-      // Estructural Etapa 5 (§B): ≥2 predecesores escritores directos exigen
-      // una workbase integrada (los produce se combinan, sin merges a main).
-      // Sin predecesores revisados no hay base segura: bloqueo explícito en
-      // vez de draft eterno. Re-evaluable si el DAG o las revisiones cambian.
-      if (task.agentRole === "implementer") {
-        const depIds = deps.filter((d) => d.taskId === task.id).map((d) => d.dependsOn);
-        const writers = depIds.filter((id) => byId.get(id)?.agentRole === "implementer");
-        if (writers.length > 1) {
-          await this.tasks().setStatus(task.id, "blocked", {
-            reason: "deps-unavailable",
-            details: { reason: "multiple writer predecessors: task waits for reviewed predecessors to build an integrated work base", predecessors: writers },
-          });
+        if (this.missingDeps(task, byId, deps).length === 0) {
+          await this.tasks().setStatus(task.id, "ready");
+          changed = true;
+          continue;
+        }
+        // Estructural Etapa 5 (§B): ≥2 predecesores escritores directos exigen
+        // una workbase integrada (los produce se combinan, sin merges a main).
+        // Sin predecesores revisados no hay base segura: bloqueo explícito en
+        // vez de draft eterno. Re-evaluable si el DAG o las revisiones cambian.
+        if (task.agentRole === "implementer") {
+          const depIds = deps.filter((d) => d.taskId === task.id).map((d) => d.dependsOn);
+          const writers = depIds.filter((id) => byId.get(id)?.agentRole === "implementer");
+          if (writers.length > 1) {
+            await this.tasks().setStatus(task.id, "blocked", {
+              reason: "deps-unavailable",
+              details: { reason: "multiple writer predecessors: task waits for reviewed predecessors to build an integrated work base", predecessors: writers },
+            });
+            changed = true;
+          }
         }
       }
     }
@@ -661,8 +674,24 @@ export class TaskScheduler {
    * terminar una task y el runtime al cerrar el turno del coordinador.
    */
   async finalizeRun(runId: string): Promise<void> {
-    const tasks = await this.tasks().listTasks({ runId });
+    let tasks = await this.tasks().listTasks({ runId });
     if (tasks.length === 0) return;
+    // Las tareas nacen en draft. Si el coordinador/reviewer termina antes del
+    // siguiente tick, hay que promover toda la cadena aquí o el run quedaría
+    // "executing" sin workers para siempre.
+    if (tasks.some((task) => task.status === "draft")) {
+      await this.promoteDrafts(runId);
+      tasks = await this.tasks().listTasks({ runId });
+      if (tasks.some((task) => ["ready", "assigned", "running"].includes(task.status))) {
+        void this.tick().catch(() => undefined);
+        return;
+      }
+    }
+    const activeAgents = await this.db.queryOne<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM agent_instances WHERE run_id = ? AND status IN ('created','running','waiting_permission','waiting_input')",
+      [runId],
+    );
+    const noActive = Number(activeAgents?.n ?? 0) === 0;
     const maxAttempts = this.getSchedulerConfig().maxAttemptsPerTask;
     const settledBlocked = (task: Task): boolean =>
       task.status === "blocked" &&
@@ -675,7 +704,24 @@ export class TaskScheduler {
         !(t.status === "failed" && t.attempt >= maxAttempts) &&
         !settledBlocked(t),
     );
-    if (open.length > 0) return;
+    if (open.length > 0) {
+      if (noActive) {
+        const pending = open.slice(0, 8).map((task) => `${task.id}:${task.status}`).join(", ");
+        if (this.replanBlocked && (await this.replanBlocked(runId, `Run blocked with no active workers; pending: ${pending}`))) {
+          return;
+        }
+        await this.markRunFailed(runId, `Run blocked: ${open.length} task(s) pending and no active workers. ${pending}`);
+      }
+      return;
+    }
+    // Bloqueos ya asentados (rondas de review agotadas/veredicto perdido):
+    // antes de cerrar como fallo, un replan automático acotado puede rescatar
+    // el run sin interrumpir al usuario.
+    const blockedSettled = tasks.filter(settledBlocked);
+    if (blockedSettled.length > 0 && noActive && this.replanBlocked) {
+      const pending = blockedSettled.slice(0, 8).map((task) => `${task.id}:${task.blockedReason}`).join(", ");
+      if (await this.replanBlocked(runId, `Settled blocked tasks: ${pending}`)) return;
+    }
     // Un writer completado que exige review aún no está asentado: el
     // coordinador debe registrar el veredicto. Si el coordinador ya terminó y no
     // queda nadie activo, el run no puede avanzar: se cierra como fallo y las
@@ -684,10 +730,6 @@ export class TaskScheduler {
       (t) => t.agentRole === "implementer" && t.needsReview && t.status === "completed",
     );
     if (awaitingVerdict.length > 0) {
-      const activeAgents = await this.db.queryOne<{ n: number }>(
-        "SELECT COUNT(*) AS n FROM agent_instances WHERE run_id = ? AND status IN ('created','running','waiting_permission','waiting_input')",
-        [runId],
-      );
       const coordinator = await this.db.queryOne<{ status: string }>(
         "SELECT status FROM agent_instances WHERE run_id = ? AND parent_instance_id IS NULL ORDER BY created_at ASC LIMIT 1",
         [runId],
@@ -695,7 +737,11 @@ export class TaskScheduler {
       const coordinatorTerminal =
         !coordinator ||
         ["completed", "failed", "cancelled"].includes(String(coordinator.status));
-      if (Number(activeAgents?.n ?? 0) === 0 && coordinatorTerminal) {
+      if (noActive && coordinatorTerminal) {
+        const ids = awaitingVerdict.map((task) => task.id).join(", ");
+        if (this.replanBlocked && (await this.replanBlocked(runId, `Writers completed without review verdict: ${ids}`))) {
+          return;
+        }
         for (const task of awaitingVerdict) {
           await this.tasks()
             .setStatus(task.id, "blocked", {

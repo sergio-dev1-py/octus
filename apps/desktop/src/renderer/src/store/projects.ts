@@ -106,13 +106,26 @@ export async function refreshContextUsage(): Promise<void> {
   }
 }
 
+const ACTIVE_AGENT_STATUS = ["created", "running", "waiting_permission", "waiting_input"];
+
+/**
+ * Feed del composer: un run `executing` sin agentes activos está bloqueado,
+ * no trabajando. Nunca se debe deshabilitar el input por un run zombi.
+ */
+export function refreshBusy(): void {
+  const activeRun = state.runs.find((run) => ["planning", "executing", "promoting"].includes(run.status));
+  const activeAgent = activeRun
+    ? state.agentInstances.some((instance) => instance.runId === activeRun.id && ACTIVE_AGENT_STATUS.includes(instance.status))
+    : false;
+  setState("busy", Boolean(activeRun && activeAgent));
+}
+
 export async function refreshUsage(): Promise<void> {
   if (!state.activeSessionId) return;
   void refreshContextUsage();
   const { runs } = await invoke("sessions.get", { sessionId: state.activeSessionId });
   setState("runs", runs);
-  // `integrating` es una decisión pendiente, no trabajo activo: no bloquea el chat.
-  setState("busy", runs.some((r) => r.status === "planning" || r.status === "executing" || r.status === "promoting"));
+  refreshBusy();
   const last = runs[runs.length - 1];
   if (last) {
     const { records } = await invoke("runs.usage", { runId: last.id });

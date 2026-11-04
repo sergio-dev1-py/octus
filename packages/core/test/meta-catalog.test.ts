@@ -52,6 +52,7 @@ describe("meta catalog (modelos vivos con esfuerzos exactos)", () => {
     const adapter = new MetaAdapter({ baseURL: "http://127.0.0.1:1", getApiKey: async () => undefined });
     const res = await adapter.refreshCatalog();
     expect(res.ok).toBe(false);
-    expect(adapter.models().map((m) => m.modelId)).toEqual(["muse-wonder-1.0", "muse-spark-1.3"]);
+    expect(adapter.models().map((m) => m.modelId)).toEqual(["muse-wonder-1.0", "muse-spark-1.3", "muse-image-1.0"]);
+    expect(adapter.models().find((m) => m.modelId === "muse-image-1.0")?.capabilities.imageGeneration).toBe(true);
   });
 });

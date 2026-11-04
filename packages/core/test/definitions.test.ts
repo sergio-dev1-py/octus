@@ -121,6 +121,25 @@ describe("agent definitions (YAML)", () => {
     }
   });
 
+  test("question tool is PLAN-only; build does not ask and never requires replan approval", async () => {
+    const t = await makeTestCore();
+    try {
+      const plan = await t.core.registry.get("coordinator-plan");
+      const build = await t.core.registry.get("coordinator-build");
+      const impl = await t.core.registry.get("implementer");
+      const reviewer = await t.core.registry.get("reviewer");
+      expect(plan?.tools).toContain("question");
+      expect(build?.tools).not.toContain("question");
+      expect(build?.deniedTools).toContain("question");
+      expect(impl?.tools).not.toContain("question");
+      expect(reviewer?.tools).not.toContain("question");
+      expect(build?.systemPrompt).not.toMatch(/ask whether to replan|replanApprovedByUser/i);
+      expect(build?.systemPrompt).toMatch(/replan automatically/i);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   test("instance keeps the exact snapshot it was created with", async () => {
     const t = await makeTestCore();
     try {
@@ -135,7 +154,7 @@ describe("agent definitions (YAML)", () => {
       const instance = instances[0]!;
       // Versión vigente del coordinador-build (subir promptVersion en el YAML
       // la propaga aquí: el seed actualiza y el snapshot la congela).
-      expect(instance.definitionVersion).toBe(22);
+      expect(instance.definitionVersion).toBe(24);
       expect(instance.promptHash).toHaveLength(64);
       expect(instance.definitionSnapshot.definitionId).toBe("coordinator-build");
       expect(instance.definitionSnapshot.tools).toContain("read");

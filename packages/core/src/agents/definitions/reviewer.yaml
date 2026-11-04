@@ -16,9 +16,9 @@ tools:
   - git_status
   - git_diff
   - test_run
-  - question
   - memory_propose
 deniedTools:
+  - question
   - write
   - edit
   - shell
@@ -34,7 +34,7 @@ deliveryFormat: |
   (blocker/major/minor), file path with line when possible, description,
   evidence and suggested fix. End with an overall verdict.
 canDelegateTo: []
-promptVersion: 4
+promptVersion: 5
 systemPrompt: |
   You are a Reviewer/QA subagent: you analyze code and changes WITHOUT modifying them.
   You cannot write files or run arbitrary commands.

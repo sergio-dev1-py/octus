@@ -151,9 +151,20 @@ describe("tool gateway", () => {
   test("question tool round-trips answers", async () => {
     const t = await setup();
     try {
-      const pending = t.t.core.gateway.execute(
-        baseRequest(t, "question", { questions: [{ question: "Pick one", header: "Pick", options: [{ label: "A" }, { label: "B" }] }] }),
+      // El question tool es exclusivo de PLAN: creamos una instancia real de
+      // coordinator-plan para el snapshot/permission layers.
+      const def = (await t.t.core.registry.get("coordinator-plan"))!;
+      const { snapshotOf, promptHashOf } = await import("../src/agents/definition-loader.js");
+      const planInstanceId = "ins_plan_question";
+      await t.t.core.db.exec(
+        "INSERT INTO agent_instances (id, session_id, run_id, definition_id, status, model, directory, definition_version, prompt_hash, definition_snapshot, created_at, updated_at) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, 1, 1)",
+        [planInstanceId, t.session.id, t.runId, def.id, JSON.stringify(def.defaultModel), workspaceOf(t.t), def.promptVersion, promptHashOf(def), JSON.stringify(snapshotOf(def))],
       );
+      const pending = t.t.core.gateway.execute({
+        ...baseRequest(t, "question", { questions: [{ question: "Pick one", header: "Pick", options: [{ label: "A" }, { label: "B" }] }] }),
+        definitionId: "coordinator-plan",
+        instanceId: planInstanceId,
+      });
       await Bun.sleep(50);
       const open = t.t.core.questions.pendingFor(t.session.id);
       expect(open).toHaveLength(1);

@@ -106,6 +106,16 @@ export class ToolGateway {
       throw new OctusError("invalid_tool_args", `Invalid arguments for '${request.name}': ${parsed.error.issues.map((i) => i.message).slice(0, 3).join("; ")}`);
     }
 
+    // Las preguntas son exclusivas de PLAN. Build y sus workers no pueden
+    // abrir un modal ni siquiera desde un snapshot antiguo: eligen una
+    // interpretación segura o reportan el bloqueo.
+    if (request.name === "question" && request.definitionId !== "coordinator-plan") {
+      throw new OctusError(
+        "permission_denied",
+        "Permission denied: the question tool is only available in PLAN mode. In BUILD, choose the safest reasonable interpretation or report the blocker; do not ask the user.",
+      );
+    }
+
     // Build anclado a un plan: con workers activos o tareas listas, la
     // implementación va por plan_tasks para no pisar worktrees. Cuando el DAG
     // está bloqueado o inactivo, el coordinador puede leer/editar/ejecutar

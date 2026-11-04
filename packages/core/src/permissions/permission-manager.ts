@@ -68,6 +68,7 @@ const DEFAULT_POLICY: Record<string, PermissionEffect> = {
   // test_run solo ejecuta entradas allowlist en una copia desechable: no hay
   // razón para bloquear al reviewer pidiendo confirmación humana.
   test_run: "allow",
+  image_generate: "allow",
 };
 
 export function evaluateRules(action: string, resource: string, rules: PermissionRule[]): PermissionRule | undefined {

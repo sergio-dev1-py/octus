@@ -374,6 +374,46 @@ export const shellTool: ToolDefinition = {
 };
 
 // ---------------------------------------------------------------------------
+// image_generate
+// ---------------------------------------------------------------------------
+
+const imageGenerateSchema = z.object({
+  prompt: z.string().min(1).max(8000).describe("Detailed image prompt: subject, composition, style, colors, lighting and text"),
+  n: z.number().int().min(1).max(4).optional().describe("Number of images (1-4, default 1)"),
+  size: z.string().optional().describe("Image size, e.g. 1024x1024, 1536x1024 or 1024x1536"),
+  outputPath: z.string().optional().describe("Workspace-relative output path (default public/generated/<slug>.png)"),
+  model: z
+    .object({ providerId: z.string().min(1), modelId: z.string().min(1) })
+    .optional()
+    .describe("Optional image model override; by default uses the configured image model"),
+});
+
+export const imageGenerateTool: ToolDefinition = {
+  manifest: {
+    name: "image_generate",
+    description:
+      "Generate one or more images with the configured image model and save them inside the project. Use it for hero images, product shots, OG images and visual placeholders.",
+    inputJsonSchema: toJsonSchema(imageGenerateSchema, { type: "object" }),
+    permissionAction: "image_generate",
+  },
+  schema: imageGenerateSchema,
+  async run(args, ctx) {
+    const images = ctx.services?.images;
+    if (!images) throw new OctusError("tool_failed", "Image generation service is not available");
+    const parsed = args as { prompt: string; n?: number; size?: string; outputPath?: string; model?: { providerId: string; modelId: string } };
+    const files = await images.generate({ ...parsed, runId: ctx.runId }, ctx);
+    return {
+      text: files
+        .map((file) => {
+          const publicUrl = file.path.startsWith("public/") ? `/${file.path.slice("public/".length)}` : undefined;
+          return `Generated image: ${file.path}${publicUrl ? ` (public URL: ${publicUrl})` : ""} — ${file.providerId}/${file.modelId}`;
+        })
+        .join("\n"),
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
 // question
 // ---------------------------------------------------------------------------
 
@@ -405,4 +445,4 @@ export const questionTool: ToolDefinition = {
   },
 };
 
-export const STAGE1_TOOLS: ToolDefinition[] = [readTool, globTool, grepTool, writeTool, editTool, shellTool, questionTool];
+export const STAGE1_TOOLS: ToolDefinition[] = [readTool, globTool, grepTool, writeTool, editTool, shellTool, imageGenerateTool, questionTool];

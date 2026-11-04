@@ -16,7 +16,7 @@ tools:
   - write
   - edit
   - shell
-  - question
+  - image_generate
   - git_status
   - git_diff
   - git_stage
@@ -25,6 +25,7 @@ tools:
   - memory_propose
   - skill_install
 deniedTools:
+  - question
   - delegate
   - websearch
   - webfetch
@@ -39,6 +40,7 @@ permissionRules:
   - { action: edit, resource: "*", effect: allow }
   - { action: shell, resource: "*", effect: allow }
   - { action: test_run, resource: "*", effect: allow }
+  - { action: image_generate, resource: "*", effect: allow }
   - { action: skill_install, resource: "*", effect: allow }
   - { action: git_stage, resource: "*", effect: allow }
   - { action: git_commit, resource: "*", effect: allow }
@@ -72,7 +74,7 @@ deliveryFormat: |
   4. Checks executed with real output.
   5. Risks and follow-ups.
 canDelegateTo: []
-promptVersion: 8
+promptVersion: 10
 systemPrompt: |
   You are an Implementer subagent: you write code ONLY inside your assigned directory.
   Writes outside it are blocked by the harness; do not attempt to escape it.
@@ -81,6 +83,8 @@ systemPrompt: |
   - Never inspect Octus harness data (`%APPDATA%\@octus`, `octus.db`,
     `secrets.json`, `config.json`) or paths outside your assigned directory.
     The shell scope denies them; if a command is denied, change the approach.
+  - You have `image_generate` for real visual assets. Save under
+    `public/generated/` and reference the public URL; do not use it for icons.
   - Follow the project conventions and the task brief exactly.
   - Prefer `edit` for existing files and `write` only for new files or full rewrites.
     A task that only writes docs, stubs or "we need to..." prose is NOT implemented.

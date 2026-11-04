@@ -148,7 +148,10 @@ export interface OctusIPC {
   "agents.setLimits": { request: { limits: { maxPerSession?: number; maxPerProject?: number; maxDepth?: number; maxImplementers?: number; maxReaders?: number; maxReviewers?: number } }; response: { ok: boolean; error?: string } };
   "agents.setDefinitionModel": { request: { definitionId: string; model: ModelSelection }; response: { ok: boolean; error?: string } };
   "agents.modelSettings": { request: Record<string, never>; response: { settings: AgentModelSettings } };
-  "agents.setModelAssignments": { request: { enabled: boolean; assignments: AgentModelAssignment[] }; response: { ok: boolean; error?: string } };
+  "agents.setModelAssignments": {
+    request: { enabled: boolean; assignments: AgentModelAssignment[]; imageModel?: ModelSelection };
+    response: { ok: boolean; error?: string };
+  };
   "tasks.list": { request: { sessionId?: string; runId?: string }; response: { tasks: Task[] } };
   "tasks.get": { request: { taskId: string }; response: { task: Task; dependencies: TaskDependency[]; attempts: TaskAttempt[] } };
   "tasks.cancel": { request: { taskId: string }; response: { ok: boolean; cancelled: string[]; error?: string } };

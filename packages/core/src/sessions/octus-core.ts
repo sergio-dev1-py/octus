@@ -81,6 +81,7 @@ import { STAGE1_TOOLS } from "../tools/tool-definitions.js";
 import { GIT_TOOLS } from "../tools/git-tools.js";
 import { TEST_TOOLS } from "../tools/test-tools.js";
 import { TestRunner, type TestEntry } from "../tools/test-runner.js";
+import { ImageGenerationService } from "../images/image-service.js";
 import type { ToolServices } from "../tools/tool-services.js";
 import { WEB_TOOLS } from "../tools/web-tools.js";
 import { now } from "../util.js";
@@ -130,6 +131,7 @@ export class OctusCore {
   readonly agents: AgentManager;
   readonly directories: DirectoryRegistry;
   readonly tests: TestRunner;
+  readonly images: ImageGenerationService;
   readonly tasks: TaskManager;
   readonly planner: TaskPlanner;
   readonly scheduler: TaskScheduler;
@@ -178,6 +180,7 @@ export class OctusCore {
     this.permissions = new PermissionManager(db, this.events, this.bus);
     this.questions = new QuestionService(this.events, this.bus);
     this.router = new ModelRouter(db, this.events, this.bus);
+    this.images = new ImageGenerationService(this.router, this.config);
     this.context = new ContextBuilder(db);
     this.registry = new AgentRegistry(db, options.definitionsDir ? { definitionsDir: options.definitionsDir } : {});
     // Skills siempre activas en el core: global+managed del dataDir y
@@ -208,6 +211,9 @@ export class OctusCore {
     );
     const cfg = config.get();
     const toolServices: ToolServices = {};
+    toolServices.images = {
+      generate: (input, ctx) => this.images.generate(input, ctx),
+    };
     toolServices.skills = {
       install: async (input, context) => {
         const scope = input.scope ?? "project";
@@ -372,6 +378,7 @@ export class OctusCore {
       () => this.config.get().agentLimits,
       () => this.worktrees,
       () => this.integrations,
+      (runId, reason) => this.autoReplanBlockedRun(runId, reason),
     );
     this.runtime.setRunSettler((runId) => this.scheduler.finalizeRun(runId));
     this.conflicts = new ConflictManager(db, this.events, this.bus, this.repositories, this.worktrees, () => this.agents, options.dataDir);
@@ -1158,6 +1165,36 @@ export class OctusCore {
   }
 
   /**
+   * Replan automático y acotado cuando el DAG queda sin workers y bloqueado.
+   * No pregunta al usuario; el límite real vive en TaskPlanner (2 replans).
+   */
+  private async autoReplanBlockedRun(runId: string, reason: string): Promise<boolean> {
+    const coord = await this.db
+      .queryOne<{ id: string }>(
+        `SELECT i.id AS id FROM agent_instances i JOIN agent_definitions d ON d.id = i.definition_id
+         WHERE i.run_id = ? AND d.kind = 'coordinator' ORDER BY i.created_at DESC LIMIT 1`,
+        [runId],
+      )
+      .catch(() => undefined);
+    if (!coord) return false;
+    try {
+      const out = await this.planner.planTasks(String(coord.id), {
+        runId,
+        replan: true,
+        brief: `Automatic replan after a blocked DAG. Reason: ${reason}`.slice(0, 8000),
+      });
+      if (!out.created) return false;
+      const run = await this.db.queryOne<{ session_id: string }>("SELECT session_id FROM runs WHERE id = ?", [runId]);
+      if (run) await this.scheduler.tick({ sessionId: String(run.session_id) }).catch(() => undefined);
+      return true;
+    } catch {
+      // El planner deja el rechazo auditado; el scheduler cerrará el run como
+      // bloqueado con el motivo si ya no quedan reintentos.
+      return false;
+    }
+  }
+
+  /**
    * Estado autoritativo del run actual. Evita que un coordinador nuevo
    * "continúe" supervisando workers de un run anterior por inercia del chat.
    */
@@ -1903,13 +1940,14 @@ export class OctusCore {
     const defs = await this.registry.list();
     return {
       enabled: this.config.get().agentModels?.enabled ?? false,
+      imageModel: this.config.get().agentModels?.imageModel ?? { providerId: "meta", modelId: "muse-image-1.0" },
       assignments: defs
         .filter((definition) => definition.kind !== "coordinator")
         .map((definition) => ({ definitionId: definition.id, model: { ...definition.defaultModel } })),
     };
   }
 
-  async setAgentModelAssignments(enabled: boolean, assignments: AgentModelAssignment[]): Promise<void> {
+  async setAgentModelAssignments(enabled: boolean, assignments: AgentModelAssignment[], imageModel?: ModelSelection): Promise<void> {
     const defs = await this.registry.list();
     const allowed = new Set(defs.filter((definition) => definition.kind !== "coordinator").map((definition) => definition.id));
     const prepared: AgentModelAssignment[] = [];
@@ -1920,8 +1958,16 @@ export class OctusCore {
       this.router.resolve({ instance: assignment.model, globalDefault: assignment.model });
       prepared.push({ definitionId: assignment.definitionId, model: { ...assignment.model } });
     }
+    let preparedImage = this.config.get().agentModels?.imageModel ?? { providerId: "meta", modelId: "muse-image-1.0" };
+    if (imageModel) {
+      const resolved = this.router.resolve({ instance: imageModel, globalDefault: imageModel });
+      if (!resolved.model.capabilities.imageGeneration) {
+        throw new OctusError("model_not_supported", `Model ${imageModel.providerId}/${imageModel.modelId} is not an image model`);
+      }
+      preparedImage = { providerId: imageModel.providerId, modelId: imageModel.modelId };
+    }
     // Validación completa antes de tocar DB/config: sin estados a medias.
-    this.config.update({ agentModels: { enabled } });
+    this.config.update({ agentModels: { enabled, imageModel: preparedImage } });
     if (prepared.length > 0) {
       await this.db.batch(
         prepared.map((assignment) => ({

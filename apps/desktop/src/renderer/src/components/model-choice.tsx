@@ -8,14 +8,17 @@ export function ModelChoice(props: {
   onChange: (value: ModelSelection) => void;
   disabled?: boolean;
   label?: string;
+  kind?: "chat" | "image";
 }) {
   const [open, setOpen] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [coords, setCoords] = createSignal({ top: 8, left: 8, width: 420 });
   let anchor: HTMLButtonElement | undefined;
   let popoverEl: HTMLDivElement | undefined;
+  const accepts = (model: { capabilities: { toolCall: boolean; imageGeneration?: boolean } }): boolean =>
+    props.kind === "image" ? Boolean(model.capabilities.imageGeneration) : model.capabilities.toolCall && !model.capabilities.imageGeneration;
   const current = () =>
-    (state.modelsByProvider[props.value.providerId] ?? []).find((model) => model.modelId === props.value.modelId);
+    (state.modelsByProvider[props.value.providerId] ?? []).find((model) => model.modelId === props.value.modelId && accepts(model));
   const efforts = () => current()?.capabilities.reasoningEfforts ?? [];
   const place = () => {
     const rect = anchor?.getBoundingClientRect();
@@ -51,7 +54,7 @@ export function ModelChoice(props: {
         displayName: provider.displayName,
         configured: provider.configured,
         models: (state.modelsByProvider[provider.id] ?? []).filter((model) => {
-          if (!model.capabilities.toolCall) return false;
+          if (!accepts(model)) return false;
           if (!needle) return true;
           return (
             model.displayName.toLowerCase().includes(needle) ||

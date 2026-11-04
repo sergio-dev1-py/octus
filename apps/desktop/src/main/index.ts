@@ -577,7 +577,7 @@ function handlers(): { [C in IpcChannel]: Handler<C> } {
         throw new Error("invalid payload");
       }
       try {
-        await need().setAgentModelAssignments(payload.enabled, payload.assignments);
+        await need().setAgentModelAssignments(payload.enabled, payload.assignments, payload.imageModel);
         return { ok: true };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };

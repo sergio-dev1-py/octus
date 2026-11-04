@@ -9,7 +9,7 @@ import {
   cancelReasonOf,
   purgeRunFrames,
 } from "../timeline.js";
-import { refreshSessions, refreshMessages, refreshPending, refreshUsage, refreshCompactionSummary } from "./projects.js";
+import { refreshBusy, refreshSessions, refreshMessages, refreshPending, refreshUsage, refreshCompactionSummary } from "./projects.js";
 import { refreshPlans, refreshApprovals, refreshAgents } from "./plans.js";
 import { refreshRunDetail } from "./runs.js";
 import { refreshTasks } from "./tasks.js";
@@ -161,7 +161,7 @@ export function applyEvent(event: CoreEvent): void {
     case "agent_instance.failed":
     case "agent_instance.cancelled":
     case "agent.delivery_ready":
-      void refreshAgents();
+      void refreshAgents().then(() => refreshBusy());
       break;
     case "worktree.created":
     case "worktree.released":

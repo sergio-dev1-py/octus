@@ -62,6 +62,16 @@ export function TopBar(props: { disabled?: boolean } = {}) {
   const gated = () => props.disabled || !state.activeProjectId;
   const integrationPending = () =>
     state.runs.some((run) => run.status === "integrating" || run.status === "awaiting_approval");
+  const blocked = () => {
+    if (state.busy) return false;
+    const active = state.runs.find((run) => run.status === "planning" || run.status === "executing" || run.status === "promoting");
+    if (!active) return false;
+    return state.tasks.some(
+      (task) =>
+        task.runId === active.id &&
+        !["completed", "reviewed", "integrated", "failed", "cancelled", "interrupted"].includes(task.status),
+    );
+  };
   return (
     <header id="topbar" aria-label="Barra superior">
       <div class="topbar-group" role="group" aria-label="Ventanas">
@@ -106,7 +116,7 @@ export function TopBar(props: { disabled?: boolean } = {}) {
         <span class="topbar-title">{title()}</span>
         <Show when={!props.disabled && session()}>
           <span class="muted">
-            {state.busy ? "working…" : integrationPending() ? "integración pendiente" : "idle"}
+            {state.busy ? "working…" : blocked() ? "bloqueado" : integrationPending() ? "integración pendiente" : "idle"}
           </span>
         </Show>
       </span>

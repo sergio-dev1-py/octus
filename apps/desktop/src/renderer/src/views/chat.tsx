@@ -1,6 +1,6 @@
 /** Renderer/views — conversación: mensajes, composer, diálogos y vista de chat. */
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import type { Message, MessagePart, ModelDescriptor, PairedToolCall } from "@octus/shared";
+import type { Message, MessagePart, ModelDescriptor, PairedToolCall, QuestionRequest } from "@octus/shared";
 import { footerForMessage, formatDuration, indexToolResults, messageRenderItems, toolCallTargetLabel, toolDisplayName } from "@octus/shared";
 import { invoke } from "../api.js";
 import { DiffCard } from "../diff-view.jsx";
@@ -860,19 +860,41 @@ export function PermissionDialogs() {
   );
 }
 
-export function QuestionDialogs() {
+function QuestionDialog(props: { request: QuestionRequest }) {
+  const [active, setActive] = createSignal(0);
+  const count = () => props.request.questions.length;
   return (
-    <For each={state.questions}>
-      {(request) => (
-        <div class="modal">
-          <div class="dialog" data-question-request={request.id}>
-            <h3>Octus asks</h3>
-            <p class="muted q-timeout" data-question-timeout>
-              {questionTimeoutLabel(request)}
-            </p>
-            <For each={request.questions}>
+    <div class="modal">
+      <div class="dialog question-dialog" data-question-request={props.request.id}>
+        <div class="question-dialog-head">
+          <h3>Octus asks</h3>
+          <p class="muted q-timeout" data-question-timeout>
+            {questionTimeoutLabel(props.request)}
+          </p>
+        </div>
+        <div class="question-layout">
+          <Show when={count() > 1}>
+            <nav class="question-nav" aria-label="Preguntas pendientes">
+              <For each={props.request.questions}>
+                {(question, index) => (
+                  <button
+                    type="button"
+                    class="question-nav-item"
+                    classList={{ active: active() === index() }}
+                    aria-current={active() === index() ? "step" : undefined}
+                    onClick={() => setActive(index())}
+                  >
+                    <span class="question-nav-index">{index() + 1}</span>
+                    <span class="question-nav-label">{question.header}</span>
+                  </button>
+                )}
+              </For>
+            </nav>
+          </Show>
+          <div class="question-panels">
+            <For each={props.request.questions}>
               {(question, qi) => (
-                <div class="question" data-question-block={question.question}>
+                <div class="question" data-question-block={question.question} style={{ display: active() === qi() ? "block" : "none" }}>
                   <p class="q-prompt">
                     <strong>{question.header}</strong>: {question.question}
                   </p>
@@ -882,7 +904,7 @@ export function QuestionDialogs() {
                         <label class="q-option">
                           <input
                             type={question.multiple ? "checkbox" : "radio"}
-                            name={request.id + qi()}
+                            name={props.request.id + qi()}
                             value={option.label}
                             data-question={question.question}
                             data-multiple={question.multiple ? "1" : ""}
@@ -901,30 +923,45 @@ export function QuestionDialogs() {
                 </div>
               )}
             </For>
-            <div class="question-actions">
-              <button
-                class="primary"
-                onClick={(event) => {
-                  const dialog = (event.currentTarget as HTMLElement).closest(".dialog")!;
-                  const answers = request.questions.map((question) => {
-                    const checked = [...dialog.querySelectorAll<HTMLInputElement>(`input[data-question="${CSS.escape(question.question)}"]:checked`)].map(
-                      (el) => el.value,
-                    );
-                    const custom = dialog.querySelector<HTMLInputElement>(`input[data-custom="${CSS.escape(question.question)}"]`)?.value.trim();
-                    if (custom) checked.push(custom);
-                    return { question: question.question, answers: checked };
-                  });
-                  void replyToQuestion(request.id, answers);
-                }}
-              >
-                Answer
-              </button>
-            </div>
           </div>
         </div>
-      )}
-    </For>
+        <div class="question-actions">
+          <Show when={active() > 0}>
+            <button type="button" onClick={() => setActive((value) => value - 1)}>
+              Back
+            </button>
+          </Show>
+          <Show when={active() < count() - 1}>
+            <button type="button" onClick={() => setActive((value) => value + 1)}>
+              Next
+            </button>
+          </Show>
+          <span style="flex:1" />
+          <button
+            class="primary"
+            onClick={(event) => {
+              const dialog = (event.currentTarget as HTMLElement).closest(".dialog")!;
+              const answers = props.request.questions.map((question) => {
+                const checked = [...dialog.querySelectorAll<HTMLInputElement>(`input[data-question="${CSS.escape(question.question)}"]:checked`)].map(
+                  (el) => el.value,
+                );
+                const custom = dialog.querySelector<HTMLInputElement>(`input[data-custom="${CSS.escape(question.question)}"]`)?.value.trim();
+                if (custom) checked.push(custom);
+                return { question: question.question, answers: checked };
+              });
+              void replyToQuestion(props.request.id, answers);
+            }}
+          >
+            Answer all
+          </button>
+        </div>
+      </div>
+    </div>
   );
+}
+
+export function QuestionDialogs() {
+  return <For each={state.questions}>{(request) => <QuestionDialog request={request} />}</For>;
 }
 
 export function ChatView() {

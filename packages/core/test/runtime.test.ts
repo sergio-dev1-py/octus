@@ -131,6 +131,7 @@ describe("agent runtime (end to end with fakes)", () => {
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
       const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionProfile(session.id, "plan");
       await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
       const { runId } = await t.core.prompt(session.id, "ask me");
       await Bun.sleep(150);
@@ -153,6 +154,7 @@ describe("agent runtime (end to end with fakes)", () => {
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
       const session = await t.core.createSession({ projectId: project.id });
+      await t.core.setSessionProfile(session.id, "plan");
       await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
       const first = await t.core.prompt(session.id, "first message");
       await Bun.sleep(150);
@@ -196,11 +198,11 @@ describe("agent runtime (end to end with fakes)", () => {
       }
       const { AgentRuntime } = await import("../src/runtime/agent-runtime.js");
       const runtime = new AgentRuntime(t.core.db, t.core.events, t.core.bus, t.core.router, t.core.gateway, t.core.context, {
-        compactionThresholdRatio: 0.006, // techo ~6300 tokens: base (~5100) cabe, base+historial (~10700) no
+        compactionThresholdRatio: 0.008, // techo ~8.4k: base (~6.5k con image_generate) cabe, base+historial no
         compactionKeepTokens: 120,
       });
       const result = await runtime.runInstance(instanceId, { signal: new AbortController().signal, correlationId: "cor_compact", onStream: () => undefined });
-      expect(result.status).toBe("completed");
+      expect(result.status, JSON.stringify(result)).toBe("completed");
       // El coordinador compacta la conversación de sesión (clave de sesión, no de instancia).
       const cutoff = await t.core.context.sessionCompactionCutoff(session.id);
       expect(cutoff.checkpoint).toContain("CHECKPOINT");

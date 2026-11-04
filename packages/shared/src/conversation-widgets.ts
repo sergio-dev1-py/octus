@@ -279,6 +279,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   delegate: "Delegated",
   question: "Asked",
   memory_propose: "Memory",
+  image_generate: "Image",
 };
 
 /** Nombre corto de la herramienta para la lista de actividad. */
@@ -310,6 +311,8 @@ export function toolCallTargetLabel(name: string, argumentsJson: string): string
         return text("path", "range", "base", "head");
       case "question":
         return text("question");
+      case "image_generate":
+        return text("prompt", "outputPath");
       case "memory_propose":
         return text("title", "summary");
       default:

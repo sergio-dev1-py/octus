@@ -130,6 +130,20 @@ export interface SkillToolService {
   install(input: SkillInstallRequest, context: { projectId: string; enable?: boolean }): Promise<SkillInstallResult>;
 }
 
+export interface ImageToolService {
+  generate(
+    input: {
+      prompt: string;
+      n?: number;
+      size?: string;
+      outputPath?: string;
+      model?: ModelSelection;
+      runId: string;
+    },
+    ctx: { directory: string; protectedRoots: string[]; signal: AbortSignal },
+  ): Promise<Array<{ path: string; mimeType: string; providerId: string; modelId: string }>>;
+}
+
 export interface ToolServices {
   agents?: AgentToolService;
   plans?: PlanToolService;
@@ -137,6 +151,7 @@ export interface ToolServices {
   tasks?: TaskPlannerService;
   memory?: MemoryToolService;
   skills?: SkillToolService;
+  images?: ImageToolService;
 }
 
 export interface TestAllowlistEntry {

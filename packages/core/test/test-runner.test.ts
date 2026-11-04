@@ -19,10 +19,15 @@ describe("test_run in a disposable copy (ADR-029)", () => {
       git(dir, ["config", "user.name", "t"]);
       git(dir, ["config", "commit.gpgsign", "false"]);
       writeFileSync(path.join(dir, "check.txt"), "v1\n");
+      writeFileSync(path.join(dir, "probe.cjs"), "const fs=require('fs');\nconsole.log('probe-ok next=' + fs.existsSync('.next'));\n");
+      mkdirSync(path.join(dir, ".next"), { recursive: true });
+      writeFileSync(path.join(dir, ".next", "huge.bin"), "not-copied");
       git(dir, ["add", "."]);
       git(dir, ["commit", "-m", "init"]);
-      // Entrada allowlist: node disponible en PATH del entorno de test.
-      await t.core.saveTestAllowlist(project.id, [{ id: "probe", name: "probe", argv: [process.execPath, "-e", "console.log('probe-ok')"] }]);
+      // Entrada allowlist: script sin comillas ni espacios para no depender del shell de Windows.
+      await t.core.saveTestAllowlist(project.id, [
+        { id: "probe", name: "probe", argv: [process.execPath, "probe.cjs"] },
+      ]);
       const session = await t.core.createSession({ projectId: project.id });
       const before = git(dir, ["status", "--porcelain"]);
       const stop = autoAllow(t.core, "once");
@@ -48,6 +53,7 @@ describe("test_run in a disposable copy (ADR-029)", () => {
       stop();
       expect(result.ok).toBe(true);
       expect(result.text).toContain("probe-ok");
+      expect(result.text).toContain("next=false");
       expect(result.text).toContain("disposable copy");
       // El original no cambió.
       expect(git(dir, ["status", "--porcelain"])).toBe(before);
@@ -72,7 +78,7 @@ describe("test_run in a disposable copy (ADR-029)", () => {
       const stop = autoAllow(t.core, "once");
       await expectRejects(
         t.core.gateway.execute({ toolCallId: "tool_tr_2", idempotencyKey: "idem-tr-2", sessionId: session.id, runId: "run_t2", instanceId: "ins_t2", definitionId: "reviewer", directory: workspaceOf(t), name: "test_run", args: { entryId: "ghost" } }),
-        /allowlist/,
+        /configured|allowlist/,
       );
       await t.core.saveTestAllowlist(project.id, [{ id: "fails", name: "fails", argv: [process.execPath, "-e", "console.log('marker-fail');process.exit(2)"] }]);
       const err = await expectRejects(

@@ -15,6 +15,8 @@ export interface ModelCapabilities {
   maxContextTokens: number;
   maxOutputTokens: number;
   supportsImages: boolean;
+  /** Modelo de salida de imágenes (p. ej. muse-image-1.0). */
+  imageGeneration?: boolean;
   /** Precios de referencia por 1M de tokens (USD), con fuente y fecha. Nulos si no verificados. */
   priceInputPerM?: number;
   priceOutputPerM?: number;
@@ -140,6 +142,29 @@ export interface ModelProvider {
   models(): ModelDescriptor[];
   capabilitiesOf(modelId: string): ModelCapabilities | undefined;
   generateStream(input: GenerateInput, signal: AbortSignal): AsyncIterable<ProviderStreamEvent>;
+  /** Opcional: solo proveedores con modelos de imagen. */
+  generateImage?(input: ImageGenerateInput, signal: AbortSignal): Promise<ImageGenerateResult>;
+}
+
+export interface ImageGenerateInput {
+  modelId: string;
+  prompt: string;
+  n?: number;
+  size?: string;
+}
+
+export interface GeneratedImage {
+  /** base64 sin prefijo data: (si el proveedor devuelve bytes). */
+  base64?: string;
+  /** URL firmada (si el proveedor devuelve URL). */
+  url?: string;
+  mimeType?: string;
+}
+
+export interface ImageGenerateResult {
+  images: GeneratedImage[];
+  modelId: string;
+  providerId: string;
 }
 
 export interface ModelResolution {

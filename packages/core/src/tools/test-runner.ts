@@ -21,6 +21,26 @@ export const testEntrySchema = z.object({
 
 export type TestEntry = z.infer<typeof testEntrySchema>;
 
+/** Artefactos/cachés que no deben copiarse al sandbox de pruebas. */
+const COPY_EXCLUDES = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  ".nuxt",
+  ".output",
+  "dist",
+  "build",
+  "coverage",
+  ".cache",
+  ".npm",
+  "npm-cache",
+  ".turbo",
+  ".parcel-cache",
+  ".vercel",
+  ".pnpm-store",
+  ".yarn",
+]);
+
 export interface TestRunResult {
   entryId: string;
   exitCode: number;
@@ -106,7 +126,8 @@ export class TestRunner {
     const entries = configured.length > 0 ? configured : defaultTestEntries(sourceDir);
     const entry = entries.find((e) => e.id === entryId);
     if (!entry) {
-      throw new OctusError("tool_denied", `Test entry '${entryId}' is not in the project allowlist`);
+      const available = entries.map((candidate) => candidate.id).join(", ") || "(none)";
+      throw new OctusError("tool_failed", `Test entry '${entryId}' is not configured for this project. Available: ${available}`);
     }
     const started = now();
     const sandbox = mkdtempSync(path.join(this.tmpRoot, "octus-test-"));
@@ -144,7 +165,7 @@ export class TestRunner {
     let files = 0;
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name === ".git" || entry.name === "node_modules") continue;
+        if (COPY_EXCLUDES.has(entry.name)) continue;
         const full = path.join(dir, entry.name);
         if (entry.isSymbolicLink()) {
           try {
@@ -173,7 +194,7 @@ export class TestRunner {
     cpSync(sourceDir, sandbox, {
       recursive: true,
       dereference: true,
-      filter: (src) => path.basename(src) !== ".git" && path.basename(src) !== "node_modules",
+      filter: (src) => !COPY_EXCLUDES.has(path.basename(src)),
     });
   }
 

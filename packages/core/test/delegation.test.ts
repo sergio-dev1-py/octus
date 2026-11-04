@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { isOctusError } from "../src/errors.js";
-import { expectRejects, makeRun, makeTestCore, workspaceOf } from "./helpers.js";
+import { autoAllow, expectRejects, makeRun, makeTestCore, workspaceOf } from "./helpers.js";
 
 async function setup() {
   const t = await makeTestCore();
@@ -59,20 +59,23 @@ describe("agent manager (delegation)", () => {
 
   test("background survives the coordinator run and its delivery stays pending", async () => {
     const t = await makeTestCore({
-      metaTurns: [{ toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }] }, { text: "child done" }],
+      metaTurns: [
+        { toolCalls: [{ name: "test_run", args: { entryId: "sleep" } }] },
+        { text: "child done" },
+      ],
     });
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
+      await t.core.saveTestAllowlist(project.id, [{ id: "sleep", name: "sleep", argv: [process.execPath, "-e", "setTimeout(function(){},3000)"] }]);
       const session = await t.core.createSession({ projectId: project.id });
       const { instanceId: parentId } = await makeRun(t, session.id);
+      const stop = autoAllow(t.core, "once");
       const spawned = await t.core.agents.spawn({ parentInstanceId: parentId, definitionId: "implementer", brief: "Ask me.", mode: "background", model: { providerId: "fake-meta", modelId: "muse-wonder-1.0" } });
       await Bun.sleep(200);
-      // Hijo activo sin ningún run del coordinador en marcha.
+      // Hijo activo sin ningún run del coordinador en marcha (delegación manual
+      // sin task es read-only: usa test_run allowlisted, no shell).
       expect((await t.core.agents.status(spawned.instanceId)).status).toBe("running");
-      expect(t.core.questions.pendingFor(session.id)).toHaveLength(1);
-      // Responder completa al hijo; la entrega queda pendiente para el coordinador.
-      const open = t.core.questions.pendingFor(session.id)[0]!;
-      await t.core.questions.reply(open.id, [{ question: "Q?", answers: ["A"] }], "cor_test");
+      // El test_run termina y la entrega queda pendiente para el coordinador.
       const delivery = await t.core.agents.wait(spawned.instanceId, 10_000);
       expect(delivery.status).toBe("completed");
       const pending = await t.core.agents.pendingDeliveries(session.id);
@@ -80,6 +83,7 @@ describe("agent manager (delegation)", () => {
       // El consumo es de un solo uso.
       await t.core.agents.consumePendingDeliveries(session.id);
       expect(await t.core.agents.pendingDeliveries(session.id)).toHaveLength(0);
+      stop();
     } finally {
       await t.cleanup();
     }
@@ -101,12 +105,14 @@ describe("agent manager (delegation)", () => {
 
   test("cancel cascades to descendants; siblings survive", async () => {
     const t = await makeTestCore({
-      metaTurns: [{ toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }] }],
+      metaTurns: [{ toolCalls: [{ name: "test_run", args: { entryId: "sleep" } }] }],
     });
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
+      await t.core.saveTestAllowlist(project.id, [{ id: "sleep", name: "sleep", argv: [process.execPath, "-e", "setTimeout(function(){},5000)"] }]);
       const session = await t.core.createSession({ projectId: project.id });
       const { runId, instanceId: parentId } = await makeRun(t, session.id);
+      const stop = autoAllow(t.core, "once");
       const a = await t.core.agents.spawn({ parentInstanceId: parentId, definitionId: "implementer", brief: "A", mode: "background", model: { providerId: "fake-meta", modelId: "muse-wonder-1.0" } });
       const b = await t.core.agents.spawn({ parentInstanceId: parentId, definitionId: "implementer", brief: "B", mode: "background", model: { providerId: "fake-meta", modelId: "muse-wonder-1.0" } });
       await Bun.sleep(200);
@@ -120,6 +126,7 @@ describe("agent manager (delegation)", () => {
       expect(cancelled.cancelled).toContain("ins_grand");
       expect((await t.core.agents.status(b.instanceId)).status).toBe("running");
       await t.core.agents.cancel(b.instanceId);
+      stop();
     } finally {
       await t.cleanup();
     }
@@ -177,12 +184,14 @@ describe("agent manager (delegation)", () => {
 
   test("assigned directories are exclusive, including overlaps", async () => {
     const t = await makeTestCore({
-      metaTurns: [{ toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }] }],
+      metaTurns: [{ toolCalls: [{ name: "test_run", args: { entryId: "sleep" } }] }],
     });
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
+      await t.core.saveTestAllowlist(project.id, [{ id: "sleep", name: "sleep", argv: [process.execPath, "-e", "setTimeout(function(){},5000)"] }]);
       const session = await t.core.createSession({ projectId: project.id });
       const { instanceId: parentId } = await makeRun(t, session.id);
+      const stop = autoAllow(t.core, "once");
       const outer = path.join(workspaceOf(t), "wt-a");
       const inner = path.join(outer, "nested");
       mkdirSync(inner, { recursive: true });
@@ -197,6 +206,7 @@ describe("agent manager (delegation)", () => {
       );
       expect(isOctusError(err, "scope_conflict")).toBe(true);
       await t.core.agents.cancel(first.instanceId);
+      stop();
     } finally {
       await t.cleanup();
     }

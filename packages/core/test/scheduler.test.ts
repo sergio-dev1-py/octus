@@ -159,9 +159,11 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
   });
 
   test("H5: scopes solapados corren aislados en worktrees paralelos", async () => {
+    // Un shell largo mantiene a ambos implementers activos en paralelo (el
+    // question tool ya es exclusivo de PLAN y aquí sería denegado).
     const t = await makeTestCore({
       metaTurns: (() => ({
-        toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }],
+        toolCalls: [{ name: "shell", args: { command: "node -e \"setTimeout(()=>{},15000)\"" } }],
       })) as never,
     });
     try {
@@ -468,14 +470,14 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
   });
 
   test("fairness: rotación entre runs y cursor persistido", async () => {
-    const questionTurn = {
-      toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }],
+    const blockTurn = {
+      toolCalls: [{ name: "shell", args: { command: "node -e \"setTimeout(()=>{},3000)\"" } }],
     };
     const t = await makeTestCore({
       metaTurns: ((callIndex: number, input: { messages?: Array<{ blocks?: unknown[] }> }) => {
-        // Primera llamada (solo brief): bloquea con pregunta; continuaciones: terminan.
+        // Primera llamada (solo brief): bloquea con un shell largo; continuaciones: terminan.
         const blocks = (input?.messages ?? []).flatMap((m) => m.blocks ?? []);
-        return blocks.length <= 1 ? questionTurn : { text: `done-${callIndex}` };
+        return blocks.length <= 1 ? blockTurn : { text: `done-${callIndex}` };
       }) as never,
     });
     try {
@@ -504,17 +506,11 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
       const r2 = await mkDag("2");
       const r3 = await mkDag("3");
       t.core.setAgentLimits({ maxPerSession: 10, maxPerProject: 10, maxDepth: 2, maxImplementers: 1, maxReaders: 2, maxReviewers: 1 });
-      // Con implementers bloqueados en pregunta, solo cabe uno activo: rotación r1→r2→r3.
+      // Con implementers bloqueados en un shell largo, solo cabe uno activo: rotación r1→r2→r3.
       const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
       const drain = async (taskId: string): Promise<void> => {
-        const deadline = Date.now() + 12000;
+        const deadline = Date.now() + 20000;
         for (;;) {
-          const inst = (await t.core.tasks.getAttempts(taskId))[0]?.instanceId;
-          for (const q of t.core.questions.pendingFor(session.id)) {
-            if (!inst || q.instanceId === inst) {
-              await t.core.questions.reply(q.id, [{ question: q.questions[0]!.question, answers: [q.questions[0]!.options[0]!.label] }], "cor_fair");
-            }
-          }
           const st = (await t.core.tasks.getTask(taskId)).status;
           if (st === "completed" || st === "failed" || st === "cancelled") return;
           if (Date.now() > deadline) throw new Error(`drain timed out for ${taskId} (status ${st})`);
@@ -636,7 +632,8 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
   test("H7: steering, asNewRequest y ambigüedad con varios runs", async () => {
     const t = await makeTestCore({
       metaTurns: [
-        { toolCalls: [{ name: "question", args: { questions: [{ question: "Q?", header: "Q", options: [{ label: "A" }] }] } }] },
+        // Mantiene el primer run activo sin usar el question tool (solo PLAN).
+        { toolCalls: [{ name: "shell", args: { command: "node -e \"setTimeout(()=>{},3000)\"" } }] },
         { text: "answer one" },
         { text: "answer two" },
       ],
@@ -645,28 +642,29 @@ describe("scheduler (dag, fairness, limits, retries, recovery)", () => {
       const project = await t.core.createProject("P", workspaceOf(t));
       const session = await t.core.createSession({ projectId: project.id });
       await t.core.setSessionModel(session.id, { providerId: "fake-meta", modelId: "muse-wonder-1.0" });
-      const first = await t.core.prompt(session.id, "first request");
-      await Bun.sleep(500);
-      // Steering al run activo.
-      const steered = await t.core.prompt(session.id, "follow-up");
-      expect(steered.runId).toBe(first.runId);
-      // Segunda solicitud explícita crea otro run (encolado tras el primero).
-      const second = await t.core.prompt(session.id, "second request", undefined, { asNewRequest: true });
-      expect(second.runId).not.toBe(first.runId);
-      // Con dos runs activos, steering ambiguo exige runId.
-      await expectRejects(t.core.prompt(session.id, "ambiguous"), /Ambiguous/);
-      const explicit = await t.core.prompt(session.id, "to second", undefined, { runId: second.runId });
-      expect(explicit.runId).toBe(second.runId);
-      // Responde la pregunta del primero y deja que ambos terminen.
-      for (const q of t.core.questions.pendingFor(session.id)) {
-        await t.core.questions.reply(q.id, [{ question: "Q?", answers: ["A"] }], "cor_h7");
+      const stop = (await import("./helpers.js")).autoAllow(t.core, "once");
+      try {
+        const first = await t.core.prompt(session.id, "first request");
+        await Bun.sleep(500);
+        // Steering al run activo.
+        const steered = await t.core.prompt(session.id, "follow-up");
+        expect(steered.runId).toBe(first.runId);
+        // Segunda solicitud explícita crea otro run (encolado tras el primero).
+        const second = await t.core.prompt(session.id, "second request", undefined, { asNewRequest: true });
+        expect(second.runId).not.toBe(first.runId);
+        // Con dos runs activos, steering ambiguo exige runId.
+        await expectRejects(t.core.prompt(session.id, "ambiguous"), /Ambiguous/);
+        const explicit = await t.core.prompt(session.id, "to second", undefined, { runId: second.runId });
+        expect(explicit.runId).toBe(second.runId);
+        await t.core.waitForIdle(session.id);
+        const { runs } = await t.core.getSession(session.id);
+        expect(runs.filter((r) => r.id === first.runId)[0]!.status).toBe("done");
+        expect(runs.filter((r) => r.id === second.runId)[0]!.status).toBe("done");
+        const messages = await t.core.sessionMessages(session.id);
+        expect(messages.map((m) => `${m.role}@${m.runId === first.runId ? "r1" : "r2"}`).join(",")).toContain("r1");
+      } finally {
+        stop();
       }
-      await t.core.waitForIdle(session.id);
-      const { runs } = await t.core.getSession(session.id);
-      expect(runs.filter((r) => r.id === first.runId)[0]!.status).toBe("done");
-      expect(runs.filter((r) => r.id === second.runId)[0]!.status).toBe("done");
-      const messages = await t.core.sessionMessages(session.id);
-      expect(messages.map((m) => `${m.role}@${m.runId === first.runId ? "r1" : "r2"}`).join(",")).toContain("r1");
     } finally {
       await t.cleanup();
     }

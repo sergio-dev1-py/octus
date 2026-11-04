@@ -9,9 +9,8 @@ describe("plan: question libre, sin puerta de aprobación", () => {
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
       const session = await t.core.createSession({ projectId: project.id });
-      const { runId, instanceId } = await makeRun(t, session.id);
-      // makeRun crea coordinator-build; forzamos definitionId de PLAN: ya no
-      // existe guarda que convierta la duda en una falsa aprobación.
+      const { runId, instanceId } = await makeRun(t, session.id, "coordinator-plan");
+      // makeRun crea una instancia real de PLAN: la duda solo perfila el plan.
       const pending = t.core.gateway.execute({
         toolCallId: "tool_q1",
         idempotencyKey: "idem-q1",
@@ -41,7 +40,7 @@ describe("plan: question libre, sin puerta de aprobación", () => {
     try {
       const project = await t.core.createProject("P", workspaceOf(t));
       const session = await t.core.createSession({ projectId: project.id });
-      const { runId, instanceId } = await makeRun(t, session.id);
+      const { runId, instanceId } = await makeRun(t, session.id, "coordinator-plan");
       await t.core.plans.createPlan({ sessionId: session.id, projectId: project.id, objective: "O", structured: STRUCTURED, runId, createdBy: "t" });
       // La pregunta se crea y queda pendiente: no debe lanzar la guarda.
       const pending = t.core.gateway.execute({

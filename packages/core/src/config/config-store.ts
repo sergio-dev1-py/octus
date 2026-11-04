@@ -31,6 +31,8 @@ export interface SchedulerConfig {
 export interface AgentModelsConfig {
   /** Si está apagado, los subagentes heredan modelo y effort del padre. */
   enabled: boolean;
+  /** Modelo de imagen para la tool image_generate (default Meta). */
+  imageModel?: ModelSelection;
 }
 
 export interface OctusConfig {
@@ -55,7 +57,7 @@ export const DEFAULT_CONFIG: OctusConfig = {
   shellTimeoutMs: 120_000,
   maxOutputChars: 30_000,
   agentLimits: { maxPerSession: 4, maxPerProject: 6, maxDepth: 2, maxImplementers: 2, maxReaders: 2, maxReviewers: 1 },
-  agentModels: { enabled: false },
+  agentModels: { enabled: false, imageModel: { providerId: "meta", modelId: "muse-image-1.0" } },
   scheduler: { maxAttemptsPerTask: 3, backoffBaseMs: 1000 },
 };
 

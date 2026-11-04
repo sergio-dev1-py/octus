@@ -3,6 +3,8 @@
  */
 import type {
   GenerateInput,
+  ImageGenerateInput,
+  ImageGenerateResult,
   ModelCapabilities,
   ModelDescriptor,
   ModelProvider,
@@ -65,6 +67,23 @@ const KNOWN_META_LIMITS: Record<string, { context: number; output: number; effor
 /** Modelos que Meta publica pero no son de conversación/tool-calling. */
 const META_NON_CHAT = /^(muse-image|muse-voice-transcribe|sam-)/i;
 
+/** Modelo de imagen por defecto cuando el catálogo aún no está disponible. */
+const MUSE_IMAGE: ModelDescriptor = {
+  providerId: "meta",
+  modelId: "muse-image-1.0",
+  displayName: "Muse Image 1.0",
+  capabilities: {
+    toolCall: false,
+    reasoningEfforts: [],
+    maxContextTokens: 131_072,
+    maxOutputTokens: 8192,
+    supportsImages: true,
+    imageGeneration: true,
+    pricingSource: PRICING_SOURCE,
+    pricingDate: PRICING_DATE,
+  },
+};
+
 /** Niveles de razonamiento verificados por modelo (la API no siempre los declara).
  *  Sin entrada aquí y sin metadatos de la API se ofrece el set completo. */
 const KNOWN_MODEL_EFFORTS: Record<string, ReasoningEffort[]> = {
@@ -99,7 +118,36 @@ export class MetaAdapter implements ModelProvider {
   }
 
   models(): ModelDescriptor[] {
-    return this.table ?? [WONDER, SPARK];
+    return this.table ?? [WONDER, SPARK, MUSE_IMAGE];
+  }
+
+  /** Imagen de una sola pasada vía /images/generations (OpenAI Images API). */
+  async generateImage(input: ImageGenerateInput, signal: AbortSignal): Promise<ImageGenerateResult> {
+    const apiKey = await this.getApiKey();
+    if (!apiKey) throw new Error("Meta image generation requires an API key");
+    const response = await fetch(`${this.baseURL}/images/generations`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: input.modelId,
+        prompt: input.prompt,
+        n: input.n ?? 1,
+        ...(input.size ? { size: input.size } : {}),
+      }),
+      signal,
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`Meta image API HTTP ${response.status}: ${detail.slice(0, 500)}`);
+    }
+    const body = (await response.json()) as { data?: Array<{ b64_json?: string; url?: string }> };
+    const images: Array<{ base64?: string; url?: string; mimeType: string }> = [];
+    for (const item of body.data ?? []) {
+      if (item.b64_json) images.push({ base64: item.b64_json, mimeType: "image/png" });
+      else if (item.url) images.push({ url: item.url, mimeType: "image/png" });
+    }
+    if (images.length === 0) throw new Error("Meta image API returned no images");
+    return { images, modelId: input.modelId, providerId: "meta" };
   }
 
   /**
@@ -135,6 +183,7 @@ export class MetaAdapter implements ModelProvider {
               ? 8192
               : (known?.output ?? num(item.limit, item.max_output_tokens, item.output_length) ?? 8192),
             supportsImages: modalitiesIncludeImage(item.modalities),
+            imageGeneration: /^muse-image/i.test(item.id),
             pricingSource: `${this.baseURL}/models`,
             pricingDate: new Date().toISOString().slice(0, 10),
           },

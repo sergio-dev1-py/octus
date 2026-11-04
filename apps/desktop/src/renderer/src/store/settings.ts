@@ -32,8 +32,9 @@ export async function refreshAgentModelSettings(): Promise<void> {
 export async function saveAgentModelAssignments(
   enabled: boolean,
   assignments: NonNullable<typeof state.agentModelSettings>["assignments"],
+  imageModel?: NonNullable<typeof state.agentModelSettings>["imageModel"],
 ): Promise<boolean> {
-  const result = await invoke("agents.setModelAssignments", { enabled, assignments });
+  const result = await invoke("agents.setModelAssignments", { enabled, assignments, imageModel });
   if (!result.ok) return false;
   await Promise.all([refreshAgentModelSettings(), refreshDefinitions()]);
   return true;

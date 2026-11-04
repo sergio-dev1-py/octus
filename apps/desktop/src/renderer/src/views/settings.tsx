@@ -47,6 +47,7 @@ export function AgentSettings() {
   let maxReviewers: HTMLInputElement | undefined;
   const [enabled, setEnabled] = createSignal(state.agentModelSettings?.enabled ?? false);
   const [assignments, setAssignments] = createSignal<Record<string, ModelSelection>>({});
+  const [imageModel, setImageModel] = createSignal<ModelSelection>({ providerId: "meta", modelId: "muse-image-1.0" });
   const [saving, setSaving] = createSignal(false);
   const [saved, setSaved] = createSignal(false);
   const [limitsSaved, setLimitsSaved] = createSignal(false);
@@ -63,6 +64,7 @@ export function AgentSettings() {
     }
     setAssignments(next);
     setEnabled(state.agentModelSettings?.enabled ?? false);
+    setImageModel(state.agentModelSettings?.imageModel ?? { providerId: "meta", modelId: "muse-image-1.0" });
   };
 
   onMount(() => {
@@ -81,7 +83,7 @@ export function AgentSettings() {
       definitionId: definition.id,
       model: modelFor(definition.id, definition.defaultModel),
     }));
-    const ok = await saveAgentModelAssignments(enabled(), payload);
+    const ok = await saveAgentModelAssignments(enabled(), payload, imageModel());
     setSaving(false);
     if (!ok) {
       setError("No se pudieron guardar los modelos por agente");
@@ -182,6 +184,23 @@ export function AgentSettings() {
         <p class="muted">
           El coordinador usa el modelo elegido en la sesión. Los cambios se aplican a los próximos subagentes.
         </p>
+        <div class="agent-model-row" data-agent-model="image_generate">
+          <div class="agent-model-meta">
+            <strong>Imágenes</strong>
+            <code>image_generate</code>
+            <span class="muted">modelo para hero, producto y assets visuales</span>
+          </div>
+          <ModelChoice
+            kind="image"
+            value={imageModel()}
+            disabled={!enabled() || saving()}
+            label="image-model"
+            onChange={(model) => {
+              setImageModel(model);
+              setSaved(false);
+            }}
+          />
+        </div>
         <For each={workers()}>
           {(definition) => (
             <div class="agent-model-row" data-agent-model={definition.id}>
