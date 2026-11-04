@@ -49,7 +49,8 @@ export function defaultTestEntries(rootPath: string): TestEntry[] {
     const wanted: Array<[string, string]> = [
       ["typecheck", "typecheck"],
       ["build", "build"],
-      ["test", "test"],
+      // E2E suele levantar un servidor en un puerto fijo; se deja fuera del
+      // default para no chocar con la app en marcha. `test:unit` es seguro.
       ["test:unit", "test:unit"],
     ];
     return wanted
